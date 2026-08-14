@@ -1,0 +1,31 @@
+/*
+ * Minimal extract of adventure-alerts' globals.css: just the theme tokens the
+ * fixture components reference. Full file stays in the real app.
+ */
+:root {
+  /* Source-category colors (light) */
+  --source-community: #FF1414;
+  --source-marketplace: #0052FF;
+  --source-expert: #F5A800;
+  --source-handson: #1FB35A;
+  --source-community-muted: #C9A0A0;
+  --source-marketplace-muted: #9BB8D9;
+  --source-expert-muted: #D4C48E;
+  --source-handson-muted: #9BC4A9;
+
+  /* Core surface / text (light) */
+  --background: #F5EADD;
+  --foreground: #2C221E;
+  --muted: #F0E5D9;
+  --muted-foreground: rgba(44, 34, 30, 0.62);
+  --ring: #328EC1;
+}
+
+/* Map theme tokens to Tailwind v4 utility names (text-muted-foreground etc.) */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-ring: var(--ring);
+}
