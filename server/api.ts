@@ -10,6 +10,7 @@ import type { Plugin, ViteDevServer } from "vite";
 import { applyEdit, buildModel, tagTransform, type Edit } from "./ast.ts";
 import { parseTokens, writeToken } from "./tokens.ts";
 import { extractProps } from "./props.ts";
+import { listPages, loadPage, savePage, type PageDoc } from "./pages.ts";
 
 const FIXTURE_ROOT = "fixtures/demo-project";
 
@@ -122,6 +123,24 @@ export function uaiApi(repoRoot: string): Plugin {
             const css = fs.readFileSync(full, "utf8");
             const next = writeToken(css, decl, value);
             fs.writeFileSync(full, next, "utf8");
+            return json(200, { ok: true });
+          }
+
+          const fixtureRoot = path.join(repoRoot, FIXTURE_ROOT);
+
+          if (url.pathname === "/api/pages" && req.method === "GET") {
+            return json(200, { pages: listPages(fixtureRoot) });
+          }
+
+          if (url.pathname === "/api/page" && req.method === "GET") {
+            const name = url.searchParams.get("name")!;
+            if (!/^[\w-]+$/.test(name)) throw new Error("bad page name");
+            return json(200, { doc: loadPage(fixtureRoot, name) });
+          }
+
+          if (url.pathname === "/api/page" && req.method === "POST") {
+            const { doc } = (await readBody(req)) as { doc: PageDoc };
+            savePage(fixtureRoot, doc);
             return json(200, { ok: true });
           }
 

@@ -19,6 +19,9 @@ import type { EditorToHarness, HarnessToEditor } from "../shared/protocol";
 const modules = import.meta.glob(
   "../../../fixtures/demo-project/src/components/**/*.tsx",
 );
+const pageModules = import.meta.glob(
+  "../../../fixtures/demo-project/src/pages-gen/*.tsx",
+);
 
 /** Map a glob key (../../../fixtures/...) to a repo-root-relative path. */
 function relKey(globKey: string): string {
@@ -27,6 +30,12 @@ function relKey(globKey: string): string {
 
 const byRel: Record<string, () => Promise<unknown>> = {};
 for (const [key, loader] of Object.entries(modules)) byRel[relKey(key)] = loader;
+
+const pageByName: Record<string, () => Promise<unknown>> = {};
+for (const [key, loader] of Object.entries(pageModules)) {
+  const name = key.split("/").pop()!.replace(/\.tsx$/, "");
+  pageByName[name] = loader;
+}
 
 function post(msg: HarnessToEditor) {
   window.parent.postMessage(msg, "*");
@@ -56,12 +65,16 @@ function Stage() {
   // Component + props + file are one atom, set only after the module import
   // resolves — the stage can never pair a component with another file's props.
   const [stage, setStage] = useState<{
+    mode: "component" | "page";
     file: string;
     props: Record<string, unknown>;
     Component: ComponentType<Record<string, unknown>>;
   } | null>(null);
+  const stageRef = useRef<typeof stage>(null);
+  stageRef.current = stage;
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const loadSeq = useRef(0);
 
   async function load(file: string, props: Record<string, unknown>) {
@@ -82,9 +95,38 @@ function Stage() {
       }
       setError(null);
       setStage({
+        mode: "component",
         file,
         props,
         Component: comp as ComponentType<Record<string, unknown>>,
+      });
+    } catch (err) {
+      if (seq === loadSeq.current) setError(String(err));
+    }
+  }
+
+  async function loadPage(name: string) {
+    const seq = ++loadSeq.current;
+    const loader = pageByName[name];
+    if (!loader) {
+      // Newly generated page module: the glob updates via HMR; reload to pick
+      // it up on first creation.
+      location.reload();
+      return;
+    }
+    try {
+      const mod = (await loader()) as { default?: unknown };
+      if (seq !== loadSeq.current) return;
+      if (typeof mod.default !== "function") {
+        setError(`page ${name} has no default export`);
+        return;
+      }
+      setError(null);
+      setStage({
+        mode: "page",
+        file: name,
+        props: {},
+        Component: mod.default as ComponentType<Record<string, unknown>>,
       });
     } catch (err) {
       if (seq === loadSeq.current) setError(String(err));
@@ -98,8 +140,12 @@ function Stage() {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "render") {
         void load(msg.file, msg.props);
+      } else if (msg.type === "render-page") {
+        void loadPage(msg.name);
       } else if (msg.type === "select") {
         setSelectedId(msg.id);
+      } else if (msg.type === "select-block") {
+        setSelectedBlockId(msg.id);
       } else if (msg.type === "token-preview") {
         tokenOverrides.add(msg.name);
         document.documentElement.style.setProperty(msg.name, msg.value);
@@ -121,7 +167,9 @@ function Stage() {
   useEffect(() => {
     if (!import.meta.hot) return;
     const handler = () => {
-      if (stage) void load(stage.file, stage.props);
+      if (!stage) return;
+      if (stage.mode === "page") void loadPage(stage.file);
+      else void load(stage.file, stage.props);
     };
     import.meta.hot.on("vite:afterUpdate", handler);
     return () => import.meta.hot?.off("vite:afterUpdate", handler);
@@ -137,22 +185,35 @@ function Stage() {
         .querySelectorAll(`[data-uai="${CSS.escape(selectedId)}"]`)
         .forEach((el) => el.classList.add("uai-selected"));
     }
+    if (selectedBlockId) {
+      document
+        .querySelectorAll(`[data-uai-block="${CSS.escape(selectedBlockId)}"]`)
+        .forEach((el) => el.classList.add("uai-selected"));
+    }
+    document.body.classList.toggle("uai-page-mode", stage?.mode === "page");
   });
 
   // Hover + click → editor.
   useEffect(() => {
+    const selector = () =>
+      stageRef.current?.mode === "page" ? "[data-uai-block]" : "[data-uai]";
     const over = (e: Event) => {
-      const el = (e.target as Element).closest?.("[data-uai]");
+      const el = (e.target as Element).closest?.(selector());
       document
         .querySelectorAll(".uai-hover")
         .forEach((n) => n.classList.remove("uai-hover"));
       if (el) el.classList.add("uai-hover");
     };
     const click = (e: MouseEvent) => {
-      const el = (e.target as Element).closest?.("[data-uai]");
-      if (el) {
-        e.preventDefault();
-        e.stopPropagation();
+      const el = (e.target as Element).closest?.(selector());
+      if (!el) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (stageRef.current?.mode === "page") {
+        const id = el.getAttribute("data-uai-block")!;
+        setSelectedBlockId(id);
+        post({ type: "selected-block", id });
+      } else {
         const id = el.getAttribute("data-uai")!;
         setSelectedId(id);
         post({ type: "selected", id });

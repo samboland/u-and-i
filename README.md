@@ -49,6 +49,16 @@ Hard-won printer details: recast defaults `lineTerminator` to `os.EOL`
 (rewrites every line on Windows — pass it explicitly), and edits detect the
 file's dominant quote style so diffs blend in.
 
+## Pages (builder-owned layer)
+
+Pages are Google-Sites-style documents the builder owns: sections (with the
+design system's card/well materials) → columns → blocks (heading, text,
+button, image, spacer, or any real component with props). Documents live in
+`fixtures/demo-project/pages/*.json`; saving deterministically regenerates
+`src/pages-gen/<name>.tsx` — clean, readable JSX — and the canvas renders
+that generated file, so what you see is exactly the code that ships.
+Components placed on pages remain code-is-truth and fully round-trippable.
+
 ## Known limitations (spike scope)
 
 - Editing a JSXText child collapses its surrounding whitespace (semantically

@@ -7,6 +7,14 @@ import {
 } from "react";
 import { mocks } from "../../../fixtures/mocks";
 import type { EditorToHarness, HarnessToEditor } from "../shared/protocol";
+import {
+  PageInspector,
+  PageTree,
+  defaultDoc,
+  findKind,
+  type PageDoc,
+  type PageSel,
+} from "./PageEditor";
 
 // ---------------------------------------------------------------------------
 // Types mirrored from the server model
@@ -187,6 +195,11 @@ export function App() {
   } | null>(null);
   const [model, setModel] = useState<JsxNode[]>([]);
   const [propSpecs, setPropSpecs] = useState<PropSpec[]>([]);
+  const [pages, setPages] = useState<string[]>([]);
+  const [pageDoc, setPageDoc] = useState<PageDoc | null>(null);
+  const [pageSel, setPageSel] = useState<PageSel>(null);
+  const pageDocRef = useRef<PageDoc | null>(null);
+  pageDocRef.current = pageDoc;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<"style" | "props" | "tokens">("style");
   const [tokens, setTokens] = useState<TokenFile[]>([]);
@@ -205,10 +218,44 @@ export function App() {
       );
       setModel(data.model);
       setPropSpecs(data.props);
+      setPageDoc(null);
+      setPageSel(null);
       setView({ file, props: props ?? mocks[file]?.props ?? {} });
     },
     [],
   );
+
+  const openPage = useCallback(
+    async (name: string) => {
+      const data = await api<{ doc: PageDoc }>(
+        `/api/page?name=${encodeURIComponent(name)}`,
+      );
+      setView(null);
+      setSelectedId(null);
+      setPageSel(null);
+      setPageDoc(data.doc);
+      if (harnessReady.current) send({ type: "render-page", name });
+    },
+    [send],
+  );
+
+  async function saveDoc(doc: PageDoc) {
+    setPageDoc(doc);
+    await api("/api/page", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc }),
+    });
+    setLastSaved(new Date().toLocaleTimeString());
+  }
+
+  async function newPage() {
+    const name = window.prompt("Page name (letters, dashes):");
+    if (!name || !/^[\w-]+$/.test(name)) return;
+    await saveDoc(defaultDoc(name));
+    setPages((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    await openPage(name);
+  }
 
   // Boot: component list.
   useEffect(() => {
@@ -216,6 +263,7 @@ export function App() {
       setFiles(d.files);
       if (d.files.length) void loadComponent(d.files[0]);
     });
+    void api<{ pages: string[] }>("/api/pages").then((d) => setPages(d.pages));
   }, [loadComponent]);
 
   // Harness messages.
@@ -225,12 +273,16 @@ export function App() {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "ready") {
         harnessReady.current = true;
-        if (view) {
+        if (pageDocRef.current) {
+          send({ type: "render-page", name: pageDocRef.current.name });
+        } else if (view) {
           send({ type: "render", file: view.file, props: view.props });
           send({ type: "select", id: selectedId });
         }
       } else if (msg.type === "selected") {
         setSelectedId(msg.id);
+      } else if (msg.type === "selected-block") {
+        if (pageDocRef.current) setPageSel(findKind(pageDocRef.current, msg.id));
       }
     };
     window.addEventListener("message", onMessage);
@@ -248,6 +300,9 @@ export function App() {
   useEffect(() => {
     send({ type: "select", id: selectedId });
   }, [selectedId, send]);
+  useEffect(() => {
+    send({ type: "select-block", id: pageSel?.id ?? null });
+  }, [pageSel, send]);
 
   const selected = selectedId ? findNode(model, selectedId) : null;
 
@@ -300,8 +355,23 @@ export function App() {
 
   return (
     <div className="app">
-      {/* ------------------------------------------------ left: components + tree */}
+      {/* ------------------------------------------------ left: pages + components + tree */}
       <div className="panel">
+        <h2>Pages</h2>
+        <section>
+          {pages.map((p) => (
+            <button
+              key={p}
+              className={`comp-item${p === pageDoc?.name ? " active" : ""}`}
+              onClick={() => void openPage(p)}
+            >
+              {p}
+            </button>
+          ))}
+          <button className="comp-item dim" onClick={() => void newPage()}>
+            + new page
+          </button>
+        </section>
         <h2>Components</h2>
         <section>
           {files.map((f) => (
@@ -319,7 +389,11 @@ export function App() {
         </section>
         <h2>Layers</h2>
         <section>
-          <Tree nodes={model} depth={0} selectedId={selectedId} onSelect={setSelectedId} />
+          {pageDoc ? (
+            <PageTree doc={pageDoc} sel={pageSel} onSelect={setPageSel} />
+          ) : (
+            <Tree nodes={model} depth={0} selectedId={selectedId} onSelect={setSelectedId} />
+          )}
         </section>
         {lastSaved && <div className="save-note">saved to source at {lastSaved}</div>}
       </div>
@@ -346,11 +420,24 @@ export function App() {
           ))}
         </div>
 
-        {tab === "style" && !selected && (
+        {tab === "style" && pageDoc && (
+          <PageInspector
+            doc={pageDoc}
+            sel={pageSel}
+            componentFiles={files}
+            componentExports={Object.fromEntries(
+              Object.entries(mocks).map(([f, m]) => [f, m.exportName]),
+            )}
+            onChange={(doc) => void saveDoc(doc)}
+            onSelect={setPageSel}
+          />
+        )}
+
+        {tab === "style" && !pageDoc && !selected && (
           <div className="hint">Click an element on the canvas (or in Layers) to inspect it.</div>
         )}
 
-        {tab === "style" && selected && (
+        {tab === "style" && !pageDoc && selected && (
           <>
             <h2>
               Layout — &lt;{selected.tag}&gt;

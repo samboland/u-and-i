@@ -20,15 +20,26 @@ body {
   max-width: 480px;
   width: 100%;
 }
+body.uai-page-mode {
+  align-items: flex-start;
+  padding: 2rem;
+}
+body.uai-page-mode #root {
+  max-width: 1100px;
+  margin: 0 auto;
+}
 
-[data-uai] {
+[data-uai],
+[data-uai-block] {
   outline-offset: 2px;
 }
-[data-uai].uai-hover {
+[data-uai].uai-hover,
+[data-uai-block].uai-hover {
   outline: 2px dashed #328ec1;
   cursor: default;
 }
-[data-uai].uai-selected {
+[data-uai].uai-selected,
+[data-uai-block].uai-selected {
   outline: 2px solid #ff6b00;
 }
 

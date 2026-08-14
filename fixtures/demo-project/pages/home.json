@@ -1,0 +1,104 @@
+{
+  "name": "home",
+  "title": "Home",
+  "sections": [
+    {
+      "id": "hero1",
+      "background": "card",
+      "padding": "2rem",
+      "gap": "2rem",
+      "columns": [
+        {
+          "id": "heroCol",
+          "flex": "1",
+          "gap": "0.75rem",
+          "blocks": [
+            {
+              "id": "h1",
+              "type": "heading",
+              "level": 1,
+              "text": "Adventure Alerts"
+            },
+            {
+              "id": "t1",
+              "type": "text",
+              "text": "Gear intelligence from every source that matters."
+            },
+            {
+              "id": "b1",
+              "type": "button",
+              "label": "Explore gear"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "grid1",
+      "background": "none",
+      "padding": "0",
+      "gap": "1.5rem",
+      "columns": [
+        {
+          "id": "colA",
+          "flex": "1",
+          "gap": "1rem",
+          "blocks": [
+            {
+              "id": "cmp1",
+              "type": "component",
+              "file": "fixtures/demo-project/src/components/explore/result-card.tsx",
+              "exportName": "ExploreResultCard",
+              "props": {
+                "product": {
+                  "id": "demo-1",
+                  "slug": "demo-product",
+                  "name": "Osprey Talon 22 Daypack",
+                  "brand": "Osprey",
+                  "category": "daypacks",
+                  "imageUrl": null,
+                  "score": 6,
+                  "recallFlag": false
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "colB",
+          "flex": "2",
+          "gap": "1rem",
+          "blocks": [
+            {
+              "id": "h2",
+              "type": "heading",
+              "level": 2,
+              "text": "Source coverage"
+            },
+            {
+              "id": "cmp2",
+              "type": "component",
+              "file": "fixtures/demo-project/src/components/product-card/confidence-bar.tsx",
+              "exportName": "ConfidenceBar",
+              "props": {
+                "sourceCategoriesPresent": [
+                  "reddit",
+                  "amazon",
+                  "youtube"
+                ],
+                "confidenceLevel": "medium",
+                "state": "final",
+                "streamingStages": []
+              }
+            },
+            {
+              "id": "t2",
+              "type": "text",
+              "text": "Community, marketplace, expert, and hands-on signals in one view."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

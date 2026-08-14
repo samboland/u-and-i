@@ -127,6 +127,22 @@ body {
   background: none;
   flex: 0 0 auto;
 }
+button.mini {
+  background: #242935;
+  border: 1px solid #2a2e37;
+  border-radius: 4px;
+  color: #d7dae0;
+  padding: 3px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+button.mini:hover {
+  background: #2b3342;
+}
+button.mini.danger {
+  color: #e07a7a;
+}
 .badge {
   font-size: 10px;
   padding: 1px 5px;
