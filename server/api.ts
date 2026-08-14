@@ -135,7 +135,11 @@ export function uaiApi(repoRoot: string): Plugin {
           if (url.pathname === "/api/page" && req.method === "GET") {
             const name = url.searchParams.get("name")!;
             if (!/^[\w-]+$/.test(name)) throw new Error("bad page name");
-            return json(200, { doc: loadPage(fixtureRoot, name) });
+            const doc = loadPage(fixtureRoot, name);
+            // Refresh the generated module so it always matches the current
+            // codegen version, not the one that last saved it.
+            savePage(fixtureRoot, doc);
+            return json(200, { doc });
           }
 
           if (url.pathname === "/api/page" && req.method === "POST") {

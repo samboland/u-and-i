@@ -17,17 +17,12 @@
               "id": "h1",
               "type": "heading",
               "level": 1,
-              "text": "Adventure Alerts"
+              "text": "Adventure Alerts HQ"
             },
             {
               "id": "t1",
               "type": "text",
               "text": "Gear intelligence from every source that matters."
-            },
-            {
-              "id": "b1",
-              "type": "button",
-              "label": "Explore gear"
             }
           ]
         }
@@ -74,6 +69,11 @@
               "type": "heading",
               "level": 2,
               "text": "Source coverage"
+            },
+            {
+              "id": "b1",
+              "type": "button",
+              "label": "Explore gear"
             },
             {
               "id": "cmp2",

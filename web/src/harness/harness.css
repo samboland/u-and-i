@@ -1,5 +1,8 @@
 @import "tailwindcss";
-@source "../../../fixtures";
+/* Scan only real source for class names — the page-document JSONs under
+   the fixture pages dir must stay out of the watch scope, or every builder
+   save full-reloads both the editor and the canvas. */
+@source "../../../fixtures/demo-project/src";
 @import "../../../fixtures/demo-project/src/theme.css";
 @import "../../../fixtures/demo-project/src/components/ui/ui.css";
 
@@ -41,6 +44,29 @@ body.uai-page-mode #root {
 [data-uai].uai-selected,
 [data-uai-block].uai-selected {
   outline: 2px solid #ff6b00;
+}
+
+.uai-drop-indicator {
+  display: none;
+  position: absolute;
+  height: 3px;
+  border-radius: 2px;
+  background: #328ec1;
+  box-shadow: 0 0 0 1px rgba(50, 142, 193, 0.35);
+  pointer-events: none;
+  z-index: 1000;
+}
+.uai-margin-overlay {
+  display: none;
+  position: absolute;
+  border: 1px dashed rgba(246, 168, 0, 0.9);
+  background: rgba(246, 168, 0, 0.08);
+  pointer-events: none;
+  z-index: 999;
+}
+[data-uai-kind].uai-editing {
+  outline: 2px solid #328ec1;
+  cursor: text;
 }
 
 .uai-error {

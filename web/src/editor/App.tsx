@@ -12,6 +12,9 @@ import {
   PageTree,
   defaultDoc,
   findKind,
+  moveBlockTo,
+  moveSectionTo,
+  setBlockText,
   type PageDoc,
   type PageSel,
 } from "./PageEditor";
@@ -283,6 +286,20 @@ export function App() {
         setSelectedId(msg.id);
       } else if (msg.type === "selected-block") {
         if (pageDocRef.current) setPageSel(findKind(pageDocRef.current, msg.id));
+      } else if (msg.type === "move-block") {
+        if (pageDocRef.current) {
+          void saveDoc(
+            moveBlockTo(pageDocRef.current, msg.blockId, msg.targetColumnId, msg.index),
+          );
+        }
+      } else if (msg.type === "move-section") {
+        if (pageDocRef.current) {
+          void saveDoc(moveSectionTo(pageDocRef.current, msg.sectionId, msg.index));
+        }
+      } else if (msg.type === "edit-text") {
+        if (pageDocRef.current) {
+          void saveDoc(setBlockText(pageDocRef.current, msg.blockId, msg.text));
+        }
       }
     };
     window.addEventListener("message", onMessage);

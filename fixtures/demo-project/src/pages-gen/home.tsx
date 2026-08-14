@@ -6,19 +6,18 @@ import { ConfidenceBar } from "../components/product-card/confidence-bar";
 export default function Page() {
   return (
     <main style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-      <section data-uai-block="hero1" className="ui-card" style={{ padding: "2rem" }}>
+      <section data-uai-block="hero1" data-uai-kind="section" className="ui-card" style={{ padding: "2rem" }}>
         <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start" }}>
-          <div data-uai-block="heroCol" style={{ flex: "1", display: "flex", flexDirection: "column", gap: "0.75rem", minWidth: 0 }}>
-            <h1 data-uai-block="h1" style={{ margin: 0 }}>Adventure Alerts</h1>
-            <p data-uai-block="t1" style={{ margin: 0 }}>Gear intelligence from every source that matters.</p>
-            <button data-uai-block="b1" type="button" className="ui-card" style={{ padding: "0.5rem 1.25rem", cursor: "pointer", font: "inherit", border: "none" }}>Explore gear</button>
+          <div data-uai-block="heroCol" data-uai-kind="column" style={{ flex: "1", display: "flex", flexDirection: "column", gap: "0.75rem", alignItems: "stretch", minWidth: 0 }}>
+            <h1 data-uai-block="h1" data-uai-kind="block" style={{ margin: "0" }}>Adventure Alerts HQ</h1>
+            <p data-uai-block="t1" data-uai-kind="block" style={{ margin: "0" }}>Gear intelligence from every source that matters.</p>
           </div>
         </div>
       </section>
-      <section data-uai-block="grid1" style={{ padding: "0" }}>
+      <section data-uai-block="grid1" data-uai-kind="section" style={{ padding: "0" }}>
         <div style={{ display: "flex", gap: "1.5rem", alignItems: "flex-start" }}>
-          <div data-uai-block="colA" style={{ flex: "1", display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <div data-uai-block="cmp1">
+          <div data-uai-block="colA" data-uai-kind="column" style={{ flex: "1", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "stretch", minWidth: 0 }}>
+            <div data-uai-block="cmp1" data-uai-kind="block">
               <ExploreResultCard {...{
                 "product": {
                   "id": "demo-1",
@@ -33,9 +32,10 @@ export default function Page() {
               }} />
             </div>
           </div>
-          <div data-uai-block="colB" style={{ flex: "2", display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}>
-            <h2 data-uai-block="h2" style={{ margin: 0 }}>Source coverage</h2>
-            <div data-uai-block="cmp2">
+          <div data-uai-block="colB" data-uai-kind="column" style={{ flex: "2", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "stretch", minWidth: 0 }}>
+            <h2 data-uai-block="h2" data-uai-kind="block" style={{ margin: "0" }}>Source coverage</h2>
+            <button data-uai-block="b1" data-uai-kind="block" type="button" className="ui-card" style={{ padding: "0.5rem 1.25rem", cursor: "pointer", font: "inherit", border: "none" }}>Explore gear</button>
+            <div data-uai-block="cmp2" data-uai-kind="block">
               <ConfidenceBar {...{
                 "sourceCategoriesPresent": [
                   "reddit",
@@ -47,7 +47,7 @@ export default function Page() {
                 "streamingStages": []
               }} />
             </div>
-            <p data-uai-block="t2" style={{ margin: 0 }}>Community, marketplace, expert, and hands-on signals in one view.</p>
+            <p data-uai-block="t2" data-uai-kind="block" style={{ margin: "0" }}>Community, marketplace, expert, and hands-on signals in one view.</p>
           </div>
         </div>
       </section>

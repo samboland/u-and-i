@@ -191,7 +191,244 @@ function Stage() {
         .forEach((el) => el.classList.add("uai-selected"));
     }
     document.body.classList.toggle("uai-page-mode", stage?.mode === "page");
+    // Direct manipulation needs draggable targets; refresh after every render
+    // (HMR replaces the DOM under us).
+    if (stage?.mode === "page") {
+      document
+        .querySelectorAll<HTMLElement>(
+          '[data-uai-kind="block"], [data-uai-kind="section"]',
+        )
+        .forEach((el) => {
+          if (!el.classList.contains("uai-editing")) el.draggable = true;
+        });
+    }
   });
+
+  // Margin overlay for the selected block (devtools-style margin box).
+  useEffect(() => {
+    if (stage?.mode !== "page") return;
+    const overlay = document.createElement("div");
+    overlay.className = "uai-margin-overlay";
+    document.body.appendChild(overlay);
+    const update = () => {
+      const el = selectedBlockId
+        ? document.querySelector<HTMLElement>(
+            `[data-uai-block="${CSS.escape(selectedBlockId)}"]`,
+          )
+        : null;
+      if (!el) {
+        overlay.style.display = "none";
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      const m = {
+        t: parseFloat(cs.marginTop) || 0,
+        r: parseFloat(cs.marginRight) || 0,
+        b: parseFloat(cs.marginBottom) || 0,
+        l: parseFloat(cs.marginLeft) || 0,
+      };
+      Object.assign(overlay.style, {
+        display: "block",
+        left: `${r.left - m.l + window.scrollX}px`,
+        top: `${r.top - m.t + window.scrollY}px`,
+        width: `${r.width + m.l + m.r}px`,
+        height: `${r.height + m.t + m.b}px`,
+      });
+    };
+    update();
+    const raf = requestAnimationFrame(update);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+      overlay.remove();
+    };
+  }, [stage, selectedBlockId]);
+
+  // Page-mode drag & drop + inline text editing.
+  useEffect(() => {
+    if (stage?.mode !== "page") return;
+    const indicator = document.createElement("div");
+    indicator.className = "uai-drop-indicator";
+    document.body.appendChild(indicator);
+    let dragging: { id: string; kind: "block" | "section" } | null = null;
+    let dropTarget:
+      | { columnId: string; index: number }
+      | { sectionIndex: number }
+      | null = null;
+
+    const onDragStart = (e: DragEvent) => {
+      const el = (e.target as Element).closest?.(
+        '[data-uai-kind="block"], [data-uai-kind="section"]',
+      ) as HTMLElement | null;
+      if (!el || el.classList.contains("uai-editing")) return;
+      dragging = {
+        id: el.getAttribute("data-uai-block")!,
+        kind: el.getAttribute("data-uai-kind") as "block" | "section",
+      };
+      e.dataTransfer!.effectAllowed = "move";
+      e.dataTransfer!.setData("text/plain", dragging.id);
+    };
+
+    const onDragOver = (e: DragEvent) => {
+      if (!dragging) return;
+      e.preventDefault();
+      e.dataTransfer!.dropEffect = "move";
+      if (dragging.kind === "block") {
+        const col = (e.target as Element).closest?.(
+          '[data-uai-kind="column"]',
+        ) as HTMLElement | null;
+        if (!col) {
+          indicator.style.display = "none";
+          dropTarget = null;
+          return;
+        }
+        const blocks = Array.from(
+          col.querySelectorAll<HTMLElement>(':scope > [data-uai-kind="block"]'),
+        ).filter((b) => b.getAttribute("data-uai-block") !== dragging!.id);
+        let index = blocks.length;
+        for (let i = 0; i < blocks.length; i++) {
+          const r = blocks[i].getBoundingClientRect();
+          if (e.clientY < r.top + r.height / 2) {
+            index = i;
+            break;
+          }
+        }
+        dropTarget = { columnId: col.getAttribute("data-uai-block")!, index };
+        const colRect = col.getBoundingClientRect();
+        const y =
+          blocks.length === 0
+            ? colRect.top + 4
+            : index === blocks.length
+              ? blocks[blocks.length - 1].getBoundingClientRect().bottom + 2
+              : blocks[index].getBoundingClientRect().top - 4;
+        Object.assign(indicator.style, {
+          display: "block",
+          left: `${colRect.left + window.scrollX}px`,
+          width: `${colRect.width}px`,
+          top: `${y + window.scrollY}px`,
+        });
+      } else {
+        const main = document.querySelector("main");
+        if (!main) return;
+        const sections = Array.from(
+          main.querySelectorAll<HTMLElement>(
+            ':scope > [data-uai-kind="section"]',
+          ),
+        ).filter((s) => s.getAttribute("data-uai-block") !== dragging!.id);
+        let index = sections.length;
+        for (let i = 0; i < sections.length; i++) {
+          const r = sections[i].getBoundingClientRect();
+          if (e.clientY < r.top + r.height / 2) {
+            index = i;
+            break;
+          }
+        }
+        dropTarget = { sectionIndex: index };
+        const mainRect = main.getBoundingClientRect();
+        const y =
+          sections.length === 0
+            ? mainRect.top
+            : index === sections.length
+              ? sections[sections.length - 1].getBoundingClientRect().bottom + 4
+              : sections[index].getBoundingClientRect().top - 4;
+        Object.assign(indicator.style, {
+          display: "block",
+          left: `${mainRect.left + window.scrollX}px`,
+          width: `${mainRect.width}px`,
+          top: `${y + window.scrollY}px`,
+        });
+      }
+    };
+
+    const onDrop = (e: DragEvent) => {
+      if (!dragging || !dropTarget) return;
+      e.preventDefault();
+      if (dragging.kind === "block" && "columnId" in dropTarget) {
+        post({
+          type: "move-block",
+          blockId: dragging.id,
+          targetColumnId: dropTarget.columnId,
+          index: dropTarget.index,
+        });
+      } else if (dragging.kind === "section" && "sectionIndex" in dropTarget) {
+        post({
+          type: "move-section",
+          sectionId: dragging.id,
+          index: dropTarget.sectionIndex,
+        });
+      }
+    };
+
+    const onDragEnd = () => {
+      dragging = null;
+      dropTarget = null;
+      indicator.style.display = "none";
+    };
+
+    const onDblClick = (e: MouseEvent) => {
+      const el = (e.target as Element).closest?.(
+        '[data-uai-kind="block"]',
+      ) as HTMLElement | null;
+      if (!el) return;
+      const tag = el.tagName.toLowerCase();
+      if (!["h1", "h2", "h3", "p", "button"].includes(tag)) return;
+      e.preventDefault();
+      el.draggable = false;
+      el.contentEditable = "true";
+      el.classList.add("uai-editing");
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const selection = getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+
+      const finish = (commit: boolean) => {
+        const text = el.innerText.trim();
+        el.contentEditable = "false";
+        el.classList.remove("uai-editing");
+        el.draggable = true;
+        el.removeEventListener("keydown", onKey);
+        el.removeEventListener("blur", onBlur);
+        if (commit) {
+          post({
+            type: "edit-text",
+            blockId: el.getAttribute("data-uai-block")!,
+            text,
+          });
+        }
+      };
+      const onKey = (ke: KeyboardEvent) => {
+        if (ke.key === "Enter") {
+          ke.preventDefault();
+          el.blur();
+        } else if (ke.key === "Escape") {
+          finish(false);
+        }
+      };
+      const onBlur = () => finish(true);
+      el.addEventListener("keydown", onKey);
+      el.addEventListener("blur", onBlur);
+    };
+
+    document.addEventListener("dragstart", onDragStart);
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    document.addEventListener("dragend", onDragEnd);
+    document.addEventListener("dblclick", onDblClick);
+    return () => {
+      document.removeEventListener("dragstart", onDragStart);
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+      document.removeEventListener("dragend", onDragEnd);
+      document.removeEventListener("dblclick", onDblClick);
+      indicator.remove();
+    };
+  }, [stage?.mode]);
 
   // Hover + click → editor.
   useEffect(() => {
@@ -205,6 +442,7 @@ function Stage() {
       if (el) el.classList.add("uai-hover");
     };
     const click = (e: MouseEvent) => {
+      if ((e.target as Element).closest?.(".uai-editing")) return;
       const el = (e.target as Element).closest?.(selector());
       if (!el) return;
       e.preventDefault();

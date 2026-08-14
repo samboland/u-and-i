@@ -11,32 +11,48 @@ export interface PageDoc {
   title: string;
   sections: Section[];
 }
+export type Align = "start" | "center" | "end" | "stretch";
 export interface Section {
   id: string;
   background: "none" | "card" | "well";
   padding: string;
   gap: string;
+  alignColumns?: Align;
   columns: Column[];
 }
 export interface Column {
   id: string;
   flex: string;
   gap: string;
+  alignBlocks?: Align;
   blocks: Block[];
 }
+interface BlockCommon {
+  id: string;
+  margin?: string;
+  align?: Align;
+}
 export type Block =
-  | { id: string; type: "heading"; level: 1 | 2 | 3; text: string }
-  | { id: string; type: "text"; text: string }
-  | { id: string; type: "button"; label: string }
-  | { id: string; type: "image"; src: string; alt: string; width: string }
-  | { id: string; type: "spacer"; height: string }
-  | {
-      id: string;
+  | (BlockCommon & {
+      type: "heading";
+      level: 1 | 2 | 3;
+      text: string;
+      textAlign?: "left" | "center" | "right";
+    })
+  | (BlockCommon & {
+      type: "text";
+      text: string;
+      textAlign?: "left" | "center" | "right";
+    })
+  | (BlockCommon & { type: "button"; label: string })
+  | (BlockCommon & { type: "image"; src: string; alt: string; width: string })
+  | (BlockCommon & { type: "spacer"; height: string })
+  | (BlockCommon & {
       type: "component";
       file: string;
       exportName: string;
       props: Record<string, unknown>;
-    };
+    });
 
 export type PageSel = { kind: "section" | "column" | "block"; id: string } | null;
 
@@ -108,6 +124,60 @@ function move<T>(arr: T[], i: number, delta: number) {
   const j = i + delta;
   if (j < 0 || j >= arr.length) return;
   [arr[i], arr[j]] = [arr[j], arr[i]];
+}
+
+// ---------------------------------------------------------------------------
+// Semantic ops driven by canvas drag & drop / inline editing
+// ---------------------------------------------------------------------------
+
+export function moveBlockTo(
+  doc: PageDoc,
+  blockId: string,
+  targetColumnId: string,
+  index: number,
+): PageDoc {
+  return mutate(doc, (d) => {
+    let blk: Block | undefined;
+    for (const s of d.sections) {
+      for (const c of s.columns) {
+        const i = c.blocks.findIndex((b) => b.id === blockId);
+        if (i >= 0) {
+          blk = c.blocks[i];
+          c.blocks.splice(i, 1);
+        }
+      }
+    }
+    if (!blk) return;
+    for (const s of d.sections) {
+      for (const c of s.columns) {
+        if (c.id === targetColumnId) {
+          c.blocks.splice(Math.min(index, c.blocks.length), 0, blk);
+          return;
+        }
+      }
+    }
+  });
+}
+
+export function moveSectionTo(doc: PageDoc, sectionId: string, index: number): PageDoc {
+  return mutate(doc, (d) => {
+    const i = d.sections.findIndex((s) => s.id === sectionId);
+    if (i < 0) return;
+    const [s] = d.sections.splice(i, 1);
+    d.sections.splice(Math.min(index, d.sections.length), 0, s);
+  });
+}
+
+export function setBlockText(doc: PageDoc, blockId: string, text: string): PageDoc {
+  return mutate(doc, (d) => {
+    for (const s of d.sections)
+      for (const c of s.columns)
+        for (const b of c.blocks) {
+          if (b.id !== blockId) continue;
+          if (b.type === "heading" || b.type === "text") b.text = text;
+          else if (b.type === "button") b.label = text;
+        }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +277,109 @@ function Field({
           if (e.key === "Escape") setDraft(value);
         }}
       />
+    </div>
+  );
+}
+
+/** Parse a CSS margin/padding shorthand into [top, right, bottom, left]. */
+function parseBox(value: string): [string, string, string, string] {
+  const p = value.trim().split(/\s+/).filter(Boolean);
+  if (p.length === 0) return ["0", "0", "0", "0"];
+  if (p.length === 1) return [p[0], p[0], p[0], p[0]];
+  if (p.length === 2) return [p[0], p[1], p[0], p[1]];
+  if (p.length === 3) return [p[0], p[1], p[2], p[1]];
+  return [p[0], p[1], p[2], p[3]];
+}
+
+function joinBox(t: string, r: string, b: string, l: string): string {
+  if (t === r && r === b && b === l) return t;
+  if (t === b && r === l) return `${t} ${r}`;
+  return `${t} ${r} ${b} ${l}`;
+}
+
+/** Devtools-style 4-sided spacing control committing a CSS shorthand. */
+function BoxField({
+  label,
+  value,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  onCommit: (v: string) => void;
+}) {
+  const sides = parseBox(value || "0");
+  const [draft, setDraft] = useState(sides);
+  const [last, setLast] = useState(value);
+  if (value !== last) {
+    setLast(value);
+    setDraft(parseBox(value || "0"));
+  }
+  const commit = (next: [string, string, string, string]) => {
+    const v = joinBox(...(next.map((s) => s.trim() || "0") as [string, string, string, string]));
+    if (v !== (value || "0")) onCommit(v);
+  };
+  const input = (i: 0 | 1 | 2 | 3, cls: string) => (
+    <input
+      className={`box-input ${cls}`}
+      type="text"
+      value={draft[i]}
+      onChange={(e) => {
+        const next = [...draft] as typeof draft;
+        next[i] = e.target.value;
+        setDraft(next);
+      }}
+      onBlur={() => commit(draft)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+  return (
+    <div className="row">
+      <label>{label}</label>
+      <div className="boxmodel">
+        {input(0, "box-t")}
+        <div className="boxmodel-mid">
+          {input(3, "box-l")}
+          <div className="boxmodel-core" />
+          {input(1, "box-r")}
+        </div>
+        {input(2, "box-b")}
+      </div>
+    </div>
+  );
+}
+
+const ALIGN_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "—" },
+  { value: "start", label: "start" },
+  { value: "center", label: "center" },
+  { value: "end", label: "end" },
+  { value: "stretch", label: "stretch" },
+];
+
+function AlignSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: Align | undefined) => void;
+}) {
+  return (
+    <div className="row">
+      <label>{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange((e.target.value || undefined) as Align | undefined)}
+      >
+        {ALIGN_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -330,7 +503,7 @@ export function PageInspector({
               <option value="well">well (recessed)</option>
             </select>
           </div>
-          <Field
+          <BoxField
             label="padding"
             value={s.padding}
             onCommit={(v) => onChange(mutate(doc, (d) => (d.sections[si].padding = v)))}
@@ -339,6 +512,13 @@ export function PageInspector({
             label="column gap"
             value={s.gap}
             onCommit={(v) => onChange(mutate(doc, (d) => (d.sections[si].gap = v)))}
+          />
+          <AlignSelect
+            label="align columns"
+            value={s.alignColumns ?? ""}
+            onChange={(v) =>
+              onChange(mutate(doc, (d) => (d.sections[si].alignColumns = v)))
+            }
           />
           <div className="row">
             <button
@@ -393,6 +573,15 @@ export function PageInspector({
             value={column.gap}
             onCommit={(v) =>
               onChange(mutate(doc, (d) => (d.sections[si].columns[ci].gap = v)))
+            }
+          />
+          <AlignSelect
+            label="align blocks"
+            value={column.alignBlocks ?? ""}
+            onChange={(v) =>
+              onChange(
+                mutate(doc, (d) => (d.sections[si].columns[ci].alignBlocks = v)),
+              )
             }
           />
           <div className="row">
@@ -519,6 +708,36 @@ export function PageInspector({
               </div>
             </>
           )}
+          {(b.type === "heading" || b.type === "text") && (
+            <div className="row">
+              <label>text align</label>
+              <select
+                value={b.textAlign ?? ""}
+                onChange={(e) =>
+                  setBlock(
+                    (x) =>
+                      ((x as typeof b).textAlign = (e.target.value ||
+                        undefined) as "left" | "center" | "right" | undefined),
+                  )
+                }
+              >
+                <option value="">—</option>
+                <option value="left">left</option>
+                <option value="center">center</option>
+                <option value="right">right</option>
+              </select>
+            </div>
+          )}
+          <AlignSelect
+            label="align self"
+            value={b.align ?? ""}
+            onChange={(v) => setBlock((x) => (x.align = v))}
+          />
+          <BoxField
+            label="margin"
+            value={b.margin ?? "0"}
+            onCommit={(v) => setBlock((x) => (x.margin = v))}
+          />
           <div className="row">
             <button className="mini" onClick={() => onChange(mutate(doc, (d) => move(d.sections[si].columns[ci].blocks, bi, -1)))}>↑</button>
             <button className="mini" onClick={() => onChange(mutate(doc, (d) => move(d.sections[si].columns[ci].blocks, bi, 1)))}>↓</button>

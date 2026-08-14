@@ -127,6 +127,46 @@ body {
   background: none;
   flex: 0 0 auto;
 }
+.boxmodel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px dashed #3a3f4a;
+  border-radius: 4px;
+}
+.boxmodel-mid {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  justify-content: center;
+}
+.boxmodel-core {
+  width: 44px;
+  height: 18px;
+  background: #242935;
+  border: 1px solid #2a2e37;
+  border-radius: 3px;
+}
+input.box-input {
+  width: 52px;
+  background: #12141a;
+  border: 1px solid #2a2e37;
+  border-radius: 3px;
+  color: #e8eaee;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+  text-align: center;
+}
+input.box-input:focus {
+  outline: none;
+  border-color: #328ec1;
+}
+
 button.mini {
   background: #242935;
   border: 1px solid #2a2e37;
