@@ -89,7 +89,8 @@ function Stage() {
       if (seq !== loadSeq.current) return; // superseded by a newer request
       const exportName = mocks[file]?.exportName ?? "default";
       const comp = mod[exportName];
-      if (typeof comp !== "function") {
+      // forwardRef/memo components are objects, not functions.
+      if (comp == null || (typeof comp !== "function" && typeof comp !== "object")) {
         setError(`export ${exportName} not found in ${file}`);
         return;
       }

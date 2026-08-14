@@ -42,13 +42,13 @@
         },
         {
           "id": "colB",
-          "flex": "2",
+          "flex": "4",
           "gap": "1rem",
           "blocks": [
             {
               "id": "b1",
               "type": "button",
-              "label": "Explore gear"
+              "label": "ExploreG"
             },
             {
               "id": "h2",
@@ -81,26 +81,9 @@
               "id": "t2",
               "type": "text",
               "text": "Community, marketplace, expert, and hands-on signals in one view."
-            },
-            {
-              "id": "cmp1",
-              "type": "component",
-              "file": "fixtures/demo-project/src/components/explore/result-card.tsx",
-              "exportName": "ExploreResultCard",
-              "props": {
-                "product": {
-                  "id": "demo-1",
-                  "slug": "demo-product",
-                  "name": "Osprey Talon 22 Daypack",
-                  "brand": "Osprey",
-                  "category": "daypacks",
-                  "imageUrl": null,
-                  "score": 6,
-                  "recallFlag": false
-                }
-              }
             }
-          ]
+          ],
+          "alignBlocks": "stretch"
         }
       ]
     }

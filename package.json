@@ -11,6 +11,7 @@
   "dependencies": {
     "@babel/parser": "^7.26.0",
     "clsx": "^2.1.1",
+    "lucide-react": "^1.29.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "recast": "^0.23.9",
