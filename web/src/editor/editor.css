@@ -127,6 +127,41 @@ body {
   background: none;
   flex: 0 0 auto;
 }
+.toolbox {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px 12px;
+}
+.tool-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: #242935;
+  border: 1px solid #2a2e37;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tool-item:hover {
+  background: #2b3342;
+  border-color: #3a4356;
+}
+.tool-item:active {
+  cursor: grabbing;
+}
+.tool-icon {
+  color: #6fb8ea;
+  width: 14px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+
 .boxmodel {
   flex: 1;
   display: flex;

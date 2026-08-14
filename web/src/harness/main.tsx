@@ -273,22 +273,104 @@ function Stage() {
       e.dataTransfer!.setData("text/plain", dragging.id);
     };
 
+    // Toolbox items dragged in from the editor (parent frame). During
+    // dragover only the mime TYPE is readable, so the kind is encoded there.
+    const MIME_BLOCK = "application/x-uai-new-block";
+    const MIME_SECTION = "application/x-uai-new-section";
+    const MIME_COLUMN = "application/x-uai-new-column";
+    const externalKind = (e: DragEvent): "block" | "section" | "column" | null => {
+      const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
+      if (types.includes(MIME_BLOCK)) return "block";
+      if (types.includes(MIME_SECTION)) return "section";
+      if (types.includes(MIME_COLUMN)) return "column";
+      return null;
+    };
+    let columnTarget: { sectionId: string; index: number } | null = null;
+    let sectionOnlyTarget: string | null = null;
+
     const onDragOver = (e: DragEvent) => {
-      if (!dragging) return;
+      const external = externalKind(e);
+      const kind = dragging?.kind ?? external;
+      if (!kind) return;
       e.preventDefault();
-      e.dataTransfer!.dropEffect = "move";
-      if (dragging.kind === "block") {
+      e.dataTransfer!.dropEffect = dragging ? "move" : "copy";
+      columnTarget = null;
+      sectionOnlyTarget = null;
+
+      if (kind === "column") {
+        const section = (e.target as Element).closest?.(
+          '[data-uai-kind="section"]',
+        ) as HTMLElement | null;
+        if (!section) {
+          indicator.style.display = "none";
+          return;
+        }
+        const cols = Array.from(
+          section.querySelectorAll<HTMLElement>('[data-uai-kind="column"]'),
+        );
+        let index = cols.length;
+        for (let i = 0; i < cols.length; i++) {
+          const r = cols[i].getBoundingClientRect();
+          if (e.clientX < r.left + r.width / 2) {
+            index = i;
+            break;
+          }
+        }
+        columnTarget = {
+          sectionId: section.getAttribute("data-uai-block")!,
+          index,
+        };
+        const sr = section.getBoundingClientRect();
+        const x =
+          cols.length === 0
+            ? sr.left + 8
+            : index === cols.length
+              ? cols[cols.length - 1].getBoundingClientRect().right + 2
+              : cols[index].getBoundingClientRect().left - 4;
+        Object.assign(indicator.style, {
+          display: "block",
+          left: `${x + window.scrollX}px`,
+          width: "3px",
+          top: `${sr.top + window.scrollY}px`,
+          height: `${sr.height}px`,
+        });
+        return;
+      }
+      // Reset to horizontal-line geometry for block/section indicators.
+      indicator.style.height = "3px";
+
+      if (kind === "block") {
         const col = (e.target as Element).closest?.(
           '[data-uai-kind="column"]',
         ) as HTMLElement | null;
         if (!col) {
+          // Dropping onto a section with no columns yet: highlight the whole
+          // section; the editor creates a column to hold the block.
+          const section = (e.target as Element).closest?.(
+            '[data-uai-kind="section"]',
+          ) as HTMLElement | null;
+          if (
+            external &&
+            section &&
+            !section.querySelector('[data-uai-kind="column"]')
+          ) {
+            sectionOnlyTarget = section.getAttribute("data-uai-block")!;
+            const sr = section.getBoundingClientRect();
+            Object.assign(indicator.style, {
+              display: "block",
+              left: `${sr.left + window.scrollX}px`,
+              width: `${sr.width}px`,
+              top: `${sr.top + sr.height / 2 + window.scrollY}px`,
+            });
+            return;
+          }
           indicator.style.display = "none";
           dropTarget = null;
           return;
         }
         const blocks = Array.from(
           col.querySelectorAll<HTMLElement>(':scope > [data-uai-kind="block"]'),
-        ).filter((b) => b.getAttribute("data-uai-block") !== dragging!.id);
+        ).filter((b) => b.getAttribute("data-uai-block") !== dragging?.id);
         let index = blocks.length;
         for (let i = 0; i < blocks.length; i++) {
           const r = blocks[i].getBoundingClientRect();
@@ -318,7 +400,7 @@ function Stage() {
           main.querySelectorAll<HTMLElement>(
             ':scope > [data-uai-kind="section"]',
           ),
-        ).filter((s) => s.getAttribute("data-uai-block") !== dragging!.id);
+        ).filter((s) => s.getAttribute("data-uai-block") !== dragging?.id);
         let index = sections.length;
         for (let i = 0; i < sections.length; i++) {
           const r = sections[i].getBoundingClientRect();
@@ -345,6 +427,37 @@ function Stage() {
     };
 
     const onDrop = (e: DragEvent) => {
+      const external = externalKind(e);
+      if (external) {
+        e.preventDefault();
+        if (external === "block" && (dropTarget && "columnId" in dropTarget)) {
+          post({
+            type: "insert-block",
+            item: JSON.parse(e.dataTransfer!.getData(MIME_BLOCK) || "{}"),
+            targetColumnId: dropTarget.columnId,
+            targetSectionId: null,
+            index: dropTarget.index,
+          });
+        } else if (external === "block" && sectionOnlyTarget) {
+          post({
+            type: "insert-block",
+            item: JSON.parse(e.dataTransfer!.getData(MIME_BLOCK) || "{}"),
+            targetColumnId: null,
+            targetSectionId: sectionOnlyTarget,
+            index: 0,
+          });
+        } else if (external === "section" && dropTarget && "sectionIndex" in dropTarget) {
+          post({ type: "insert-section", index: dropTarget.sectionIndex });
+        } else if (external === "column" && columnTarget) {
+          post({
+            type: "insert-column",
+            sectionId: columnTarget.sectionId,
+            index: columnTarget.index,
+          });
+        }
+        onDragEnd();
+        return;
+      }
       if (!dragging || !dropTarget) return;
       e.preventDefault();
       if (dragging.kind === "block" && "columnId" in dropTarget) {
@@ -366,7 +479,10 @@ function Stage() {
     const onDragEnd = () => {
       dragging = null;
       dropTarget = null;
+      columnTarget = null;
+      sectionOnlyTarget = null;
       indicator.style.display = "none";
+      indicator.style.height = "3px";
     };
 
     const onDblClick = (e: MouseEvent) => {
@@ -415,16 +531,24 @@ function Stage() {
       el.addEventListener("blur", onBlur);
     };
 
+    // For toolbox drags the source element lives in the parent frame, so
+    // dragend never fires here — clear the indicator when the drag leaves.
+    const onDragLeave = (e: DragEvent) => {
+      if (!(e.relatedTarget instanceof Node)) indicator.style.display = "none";
+    };
+
     document.addEventListener("dragstart", onDragStart);
     document.addEventListener("dragover", onDragOver);
     document.addEventListener("drop", onDrop);
     document.addEventListener("dragend", onDragEnd);
+    document.addEventListener("dragleave", onDragLeave);
     document.addEventListener("dblclick", onDblClick);
     return () => {
       document.removeEventListener("dragstart", onDragStart);
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
       document.removeEventListener("dragend", onDragEnd);
+      document.removeEventListener("dragleave", onDragLeave);
       document.removeEventListener("dblclick", onDblClick);
       indicator.remove();
     };

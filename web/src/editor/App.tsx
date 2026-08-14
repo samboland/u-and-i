@@ -10,11 +10,16 @@ import type { EditorToHarness, HarnessToEditor } from "../shared/protocol";
 import {
   PageInspector,
   PageTree,
+  Toolbox,
   defaultDoc,
   findKind,
+  insertBlockAt,
+  insertColumnAt,
+  insertSectionAt,
   moveBlockTo,
   moveSectionTo,
   setBlockText,
+  type NewItem,
   type PageDoc,
   type PageSel,
 } from "./PageEditor";
@@ -300,6 +305,30 @@ export function App() {
         if (pageDocRef.current) {
           void saveDoc(setBlockText(pageDocRef.current, msg.blockId, msg.text));
         }
+      } else if (msg.type === "insert-block") {
+        if (pageDocRef.current) {
+          const { doc, id } = insertBlockAt(
+            pageDocRef.current,
+            msg.item as NewItem,
+            msg.targetColumnId,
+            msg.targetSectionId,
+            msg.index,
+          );
+          void saveDoc(doc);
+          setPageSel({ kind: "block", id });
+        }
+      } else if (msg.type === "insert-section") {
+        if (pageDocRef.current) {
+          const { doc, id } = insertSectionAt(pageDocRef.current, msg.index);
+          void saveDoc(doc);
+          setPageSel({ kind: "section", id });
+        }
+      } else if (msg.type === "insert-column") {
+        if (pageDocRef.current) {
+          const { doc, id } = insertColumnAt(pageDocRef.current, msg.sectionId, msg.index);
+          void saveDoc(doc);
+          setPageSel({ kind: "column", id });
+        }
       }
     };
     window.addEventListener("message", onMessage);
@@ -404,6 +433,22 @@ export function App() {
             </button>
           ))}
         </section>
+        {pageDoc && (
+          <>
+            <h2>Toolbox</h2>
+            <section>
+              <Toolbox
+                componentFiles={files}
+                componentExports={Object.fromEntries(
+                  Object.entries(mocks).map(([f, m]) => [f, m.exportName]),
+                )}
+                componentProps={Object.fromEntries(
+                  Object.entries(mocks).map(([f, m]) => [f, m.props]),
+                )}
+              />
+            </section>
+          </>
+        )}
         <h2>Layers</h2>
         <section>
           {pageDoc ? (

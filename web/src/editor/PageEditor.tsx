@@ -69,33 +69,35 @@ export function findKind(doc: PageDoc, id: string): PageSel {
   return null;
 }
 
-export function defaultDoc(name: string): PageDoc {
+export function defaultSection(): Section {
   return {
-    name,
-    title: name,
-    sections: [
+    id: uid(),
+    background: "card",
+    padding: "1.5rem",
+    gap: "1.5rem",
+    columns: [
       {
         id: uid(),
-        background: "card",
-        padding: "1.5rem",
-        gap: "1.5rem",
-        columns: [
-          {
-            id: uid(),
-            flex: "1",
-            gap: "0.75rem",
-            blocks: [
-              { id: uid(), type: "heading", level: 1, text: "New page" },
-              { id: uid(), type: "text", text: "Start arranging blocks." },
-            ],
-          },
+        flex: "1",
+        gap: "0.75rem",
+        blocks: [
+          { id: uid(), type: "heading", level: 2, text: "New section" },
         ],
       },
     ],
   };
 }
 
-function defaultBlock(type: Block["type"]): Block {
+export function defaultDoc(name: string): PageDoc {
+  const section = defaultSection();
+  section.columns[0].blocks = [
+    { id: uid(), type: "heading", level: 1, text: "New page" },
+    { id: uid(), type: "text", text: "Start arranging blocks." },
+  ];
+  return { name, title: name, sections: [section] };
+}
+
+export function defaultBlock(type: Block["type"]): Block {
   const id = uid();
   switch (type) {
     case "heading":
@@ -168,6 +170,82 @@ export function moveSectionTo(doc: PageDoc, sectionId: string, index: number): P
   });
 }
 
+/** A toolbox item being dragged onto the canvas. */
+export type NewItem =
+  | { kind: "block"; blockType: Exclude<Block["type"], "component"> }
+  | {
+      kind: "component";
+      file: string;
+      exportName: string;
+      props: Record<string, unknown>;
+    };
+
+export function makeBlock(item: NewItem): Block {
+  if (item.kind === "component") {
+    return {
+      id: uid(),
+      type: "component",
+      file: item.file,
+      exportName: item.exportName,
+      props: item.props,
+    };
+  }
+  return defaultBlock(item.blockType);
+}
+
+/** Insert a new block; when columnId is null, drop targets an empty section —
+ * create a column there to hold the block. Returns the new block's id. */
+export function insertBlockAt(
+  doc: PageDoc,
+  item: NewItem,
+  columnId: string | null,
+  sectionId: string | null,
+  index: number,
+): { doc: PageDoc; id: string } {
+  const block = makeBlock(item);
+  const next = mutate(doc, (d) => {
+    for (const s of d.sections) {
+      for (const c of s.columns) {
+        if (c.id === columnId) {
+          c.blocks.splice(Math.min(index, c.blocks.length), 0, block);
+          return;
+        }
+      }
+    }
+    for (const s of d.sections) {
+      if (s.id === sectionId) {
+        s.columns.push({ id: uid(), flex: "1", gap: "0.75rem", blocks: [block] });
+        return;
+      }
+    }
+  });
+  return { doc: next, id: block.id };
+}
+
+export function insertSectionAt(doc: PageDoc, index: number): { doc: PageDoc; id: string } {
+  const section = defaultSection();
+  const next = mutate(doc, (d) => {
+    d.sections.splice(Math.min(index, d.sections.length), 0, section);
+  });
+  return { doc: next, id: section.id };
+}
+
+export function insertColumnAt(
+  doc: PageDoc,
+  sectionId: string,
+  index: number,
+): { doc: PageDoc; id: string } {
+  const column: Column = { id: uid(), flex: "1", gap: "0.75rem", blocks: [] };
+  const next = mutate(doc, (d) => {
+    for (const s of d.sections) {
+      if (s.id === sectionId) {
+        s.columns.splice(Math.min(index, s.columns.length), 0, column);
+      }
+    }
+  });
+  return { doc: next, id: column.id };
+}
+
 export function setBlockText(doc: PageDoc, blockId: string, text: string): PageDoc {
   return mutate(doc, (d) => {
     for (const s of d.sections)
@@ -178,6 +256,88 @@ export function setBlockText(doc: PageDoc, blockId: string, text: string): PageD
           else if (b.type === "button") b.label = text;
         }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Toolbox — drag items out of here onto the canvas
+// ---------------------------------------------------------------------------
+
+export const MIME_BLOCK = "application/x-uai-new-block";
+export const MIME_SECTION = "application/x-uai-new-section";
+export const MIME_COLUMN = "application/x-uai-new-column";
+
+function ToolItem({
+  label,
+  icon,
+  mime,
+  payload,
+}: {
+  label: string;
+  icon: string;
+  mime: string;
+  payload?: NewItem;
+}) {
+  return (
+    <div
+      className="tool-item"
+      draggable
+      title={`Drag onto the page`}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData(mime, JSON.stringify(payload ?? {}));
+      }}
+    >
+      <span className="tool-icon">{icon}</span>
+      {label}
+    </div>
+  );
+}
+
+export function Toolbox({
+  componentFiles,
+  componentExports,
+  componentProps,
+}: {
+  componentFiles: string[];
+  componentExports: Record<string, string>;
+  componentProps: Record<string, Record<string, unknown>>;
+}) {
+  const blocks: { type: Exclude<Block["type"], "component">; label: string; icon: string }[] = [
+    { type: "heading", label: "Heading", icon: "H" },
+    { type: "text", label: "Text", icon: "¶" },
+    { type: "button", label: "Button", icon: "▭" },
+    { type: "image", label: "Image", icon: "🖼" },
+    { type: "spacer", label: "Spacer", icon: "↕" },
+  ];
+  return (
+    <div className="toolbox">
+      {blocks.map((b) => (
+        <ToolItem
+          key={b.type}
+          label={b.label}
+          icon={b.icon}
+          mime={MIME_BLOCK}
+          payload={{ kind: "block", blockType: b.type }}
+        />
+      ))}
+      <ToolItem label="Section" icon="▤" mime={MIME_SECTION} />
+      <ToolItem label="Column" icon="▯" mime={MIME_COLUMN} />
+      {componentFiles.map((f) => (
+        <ToolItem
+          key={f}
+          label={f.split("/").pop()!.replace(/\.tsx$/, "")}
+          icon="⧉"
+          mime={MIME_BLOCK}
+          payload={{
+            kind: "component",
+            file: f,
+            exportName: componentExports[f] ?? "default",
+            props: componentProps[f] ?? {},
+          }}
+        />
+      ))}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
