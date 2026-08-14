@@ -209,7 +209,7 @@ export function App() {
   const pageDocRef = useRef<PageDoc | null>(null);
   pageDocRef.current = pageDoc;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"style" | "props" | "tokens">("style");
+  const [tab, setTab] = useState<"insert" | "style" | "props" | "tokens">("style");
   const [tokens, setTokens] = useState<TokenFile[]>([]);
   const [tokenFilter, setTokenFilter] = useState("--ui-card");
   const [lastSaved, setLastSaved] = useState<string | null>(null);
@@ -228,6 +228,7 @@ export function App() {
       setPropSpecs(data.props);
       setPageDoc(null);
       setPageSel(null);
+      setTab((t) => (t === "insert" ? "style" : t));
       setView({ file, props: props ?? mocks[file]?.props ?? {} });
     },
     [],
@@ -242,6 +243,7 @@ export function App() {
       setSelectedId(null);
       setPageSel(null);
       setPageDoc(data.doc);
+      setTab("insert");
       if (harnessReady.current) send({ type: "render-page", name });
     },
     [send],
@@ -290,7 +292,10 @@ export function App() {
       } else if (msg.type === "selected") {
         setSelectedId(msg.id);
       } else if (msg.type === "selected-block") {
-        if (pageDocRef.current) setPageSel(findKind(pageDocRef.current, msg.id));
+        if (pageDocRef.current) {
+          setPageSel(findKind(pageDocRef.current, msg.id));
+          setTab((t) => (t === "insert" ? "style" : t));
+        }
       } else if (msg.type === "move-block") {
         if (pageDocRef.current) {
           void saveDoc(
@@ -433,26 +438,17 @@ export function App() {
             </button>
           ))}
         </section>
-        {pageDoc && (
-          <>
-            <h2>Toolbox</h2>
-            <section>
-              <Toolbox
-                componentFiles={files}
-                componentExports={Object.fromEntries(
-                  Object.entries(mocks).map(([f, m]) => [f, m.exportName]),
-                )}
-                componentProps={Object.fromEntries(
-                  Object.entries(mocks).map(([f, m]) => [f, m.props]),
-                )}
-              />
-            </section>
-          </>
-        )}
         <h2>Layers</h2>
         <section>
           {pageDoc ? (
-            <PageTree doc={pageDoc} sel={pageSel} onSelect={setPageSel} />
+            <PageTree
+              doc={pageDoc}
+              sel={pageSel}
+              onSelect={(sel) => {
+                setPageSel(sel);
+                setTab((t) => (t === "insert" ? "style" : t));
+              }}
+            />
           ) : (
             <Tree nodes={model} depth={0} selectedId={selectedId} onSelect={setSelectedId} />
           )}
@@ -468,7 +464,7 @@ export function App() {
       {/* ------------------------------------------------ right: inspector */}
       <div className="panel">
         <div className="tabs">
-          {(["style", "props", "tokens"] as const).map((t) => (
+          {([...(pageDoc ? (["insert"] as const) : []), "style", "props", "tokens"] as const).map((t) => (
             <button
               key={t}
               className={t === tab ? "active" : ""}
@@ -481,6 +477,23 @@ export function App() {
             </button>
           ))}
         </div>
+
+        {tab === "insert" && pageDoc && (
+          <>
+            <h2>Drag onto the page</h2>
+            <section>
+              <Toolbox
+                componentFiles={files}
+                componentExports={Object.fromEntries(
+                  Object.entries(mocks).map(([f, m]) => [f, m.exportName]),
+                )}
+                componentProps={Object.fromEntries(
+                  Object.entries(mocks).map(([f, m]) => [f, m.props]),
+                )}
+              />
+            </section>
+          </>
+        )}
 
         {tab === "style" && pageDoc && (
           <PageInspector
