@@ -1,9 +1,10 @@
 /**
- * Project registry: the targets u-and-i can read (and, when writable, write).
- * "demo" is the bundled fixture — the only write target this iteration.
- * "aa" is the real adventure-alerts Next.js repo, read-only; it is omitted
- * entirely when the sibling checkout doesn't exist so the editor degrades
- * gracefully on machines without it.
+ * Project registry: the targets u-and-i can read and edit.
+ * "demo" is the bundled fixture sandbox. "aa" is the real adventure-alerts
+ * Next.js repo — writable, but only through the AST edit/restore endpoints
+ * (u-and-i has no save format: it edits the real code, and git in the
+ * target repo is the safety net). It is omitted entirely when the sibling
+ * checkout doesn't exist so the editor degrades gracefully.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -37,7 +38,7 @@ export function getProjects(repoRoot: string): Record<string, UaiProject> {
       root: aaRoot,
       kind: "next",
       srcDir: "src",
-      writable: false,
+      writable: true,
     };
   }
   return projects;

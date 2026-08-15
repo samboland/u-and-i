@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Plugin, ViteDevServer } from "vite";
-import { applyEdit, buildModel, tagTransform, type Edit } from "./ast.ts";
+import { analyzeFile, applyEdit, buildModel, tagTransform, type Edit } from "./ast.ts";
 import { parseTokens, writeToken } from "./tokens.ts";
 import { extractProps } from "./props.ts";
 import { listPages, loadPage, savePage, type PageDoc } from "./pages.ts";
@@ -103,6 +103,28 @@ export function uaiApi(repoRoot: string): Plugin {
     }
   };
 
+  /** Resolve an import specifier to a request-key-compatible relative path,
+   * or null when it points outside the project / at a package. */
+  const importResolver = (project: UaiProject, fromRel: string) => (spec: string): string | null => {
+    let base: string;
+    if (spec.startsWith("@/")) {
+      base = path.join(project.root, project.srcDir, spec.slice(2));
+    } else if (spec.startsWith(".")) {
+      base = path.resolve(path.dirname(abs(project, fromRel)), spec);
+    } else {
+      return null;
+    }
+    for (const ext of ["", ".tsx", ".ts", "/index.tsx", "/index.ts"]) {
+      const candidate = base + ext;
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        const relBase = project.kind === "fixture" ? repoRoot : project.root;
+        const rel = toRel(relBase, candidate);
+        return rel.startsWith("..") ? null : rel;
+      }
+    }
+    return null;
+  };
+
   const MIME: Record<string, string> = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
@@ -182,25 +204,62 @@ export function uaiApi(repoRoot: string): Plugin {
             const rel = url.searchParams.get("file")!;
             const full = abs(project, rel);
             const code = fs.readFileSync(full, "utf8");
+            const analysis = analyzeFile(code);
             return json(200, {
-              model: buildModel(code, rel),
+              model: buildModel(code, rel, { resolveImport: importResolver(project, rel) }),
               props: extractProps(project.kind === "next" ? project.root : repoRoot, full, {
                 tsconfig: project.kind === "next",
               }),
+              // Async components (server pages) can't run in a browser canvas;
+              // they get assisted (no-live-preview) editing instead.
+              renderable: !isServerOnly(code) && !analysis.defaultAsync,
             });
           }
 
           if (url.pathname === "/api/edit" && req.method === "POST") {
             assertWritable(project);
-            const { file, edit } = (await readBody(req)) as {
+            const { file, edit, expectTag } = (await readBody(req)) as {
               file: string;
               edit: Edit;
+              expectTag?: string;
             };
             const full = abs(project, file);
-            const code = fs.readFileSync(full, "utf8");
-            const next = applyEdit(code, edit);
-            fs.writeFileSync(full, next, "utf8");
-            return json(200, { ok: true, model: buildModel(next, file) });
+            const before = fs.readFileSync(full, "utf8");
+            if (expectTag) {
+              // Cheap staleness check: the editor's model must still match disk.
+              const model = buildModel(before, file);
+              const idx =
+                "index" in edit ? edit.index : "parentIndex" in edit ? edit.parentIndex : -1;
+              const flat: { index: number; tag: string }[] = [];
+              const walk = (nodes: typeof model) =>
+                nodes.forEach((m) => {
+                  flat.push({ index: m.index, tag: m.tag });
+                  walk(m.children);
+                });
+              walk(model);
+              const hit = flat.find((f) => f.index === idx);
+              if (!hit || hit.tag !== expectTag) {
+                return json(409, { error: "stale model — the file changed; refetch" });
+              }
+            }
+            const result = applyEdit(before, edit);
+            fs.writeFileSync(full, result.code, "utf8");
+            return json(200, {
+              ok: true,
+              model: buildModel(result.code, file, { resolveImport: importResolver(project, file) }),
+              focusId: result.focusIndex != null ? `${file}::${result.focusIndex}` : null,
+              before,
+              after: result.code,
+            });
+          }
+
+          if (url.pathname === "/api/restore" && req.method === "POST") {
+            // Byte-verbatim write for undo/redo: `before`/`after` from edit
+            // responses restore exactly, no AST round-trip.
+            assertWritable(project);
+            const { file, text } = (await readBody(req)) as { file: string; text: string };
+            fs.writeFileSync(abs(project, file), text, "utf8");
+            return json(200, { ok: true });
           }
 
           if (url.pathname === "/api/tokens" && req.method === "GET") {
@@ -217,6 +276,7 @@ export function uaiApi(repoRoot: string): Plugin {
 
           if (url.pathname === "/api/material" && req.method === "POST") {
             assertWritable(project);
+            if (project.kind !== "fixture") throw new Error("materials are a fixture-project feature");
             // Workshop output: maintain a marked block at the end of theme.css
             // holding --material-* tokens. Lines for the same material name are
             // replaced; other materials are preserved.
@@ -249,6 +309,7 @@ export function uaiApi(repoRoot: string): Plugin {
 
           if (url.pathname === "/api/token" && req.method === "POST") {
             assertWritable(project);
+            if (project.kind !== "fixture") throw new Error("token writes are fixture-only for now");
             const { file, decl, value } = await readBody(req);
             const full = abs(project, file);
             const css = fs.readFileSync(full, "utf8");
