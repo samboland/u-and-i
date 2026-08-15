@@ -1,0 +1,20 @@
+/* Hover/focus behaviors for the v3 chrome — layout stays inline per the
+   design handoff; only interactive pseudo-states live here. */
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+button { font: inherit; }
+
+.hv-ctl:hover { background: #2b3342 !important; }
+.hv-ctl-border:hover { background: #2b3342 !important; border-color: #3a4356 !important; }
+.hv-menu:hover { background: #2b3342 !important; }
+.hv-danger:hover { background: #3a2424 !important; border-color: #5a3030 !important; }
+.hv-amber:hover { background: #4a3f24 !important; }
+.hv-primary:hover { background: #328ec1 !important; }
+.hv-row:hover { background: #242935 !important; }
+.hv-card:hover { border-color: #3a4356 !important; }
+.hv-close:hover { background: #c42b1c !important; color: #ffffff !important; }
+.fc:focus { border-color: #328ec1 !important; outline: none; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2a2e37; border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }

@@ -1,7 +1,9 @@
 /**
- * Harness: renders the user's real component (served through the uai-tagger
- * transform, so every JSX element carries a data-uai id) and relays
- * hover/click selection to the editor.
+ * Harness: renders the user's real generated page (or a component) and layers
+ * the editor's canvas affordances over it — per-kind selection outlines and
+ * badges, drop indicators, dev-note pins and callouts, empty-column wells,
+ * device/zoom stage framing, canvas states. The page itself is always the
+ * real code from pages-gen/ — affordances decorate, never re-draw.
  */
 import {
   Component as ReactComponent,
@@ -14,7 +16,7 @@ import {
 import { createRoot } from "react-dom/client";
 import "./harness.css";
 import { mocks } from "../../../fixtures/mocks";
-import type { EditorToHarness, HarnessToEditor } from "../shared/protocol";
+import type { CanvasState, EditorToHarness, HarnessToEditor } from "../shared/protocol";
 
 const modules = import.meta.glob(
   "../../../fixtures/demo-project/src/components/**/*.tsx",
@@ -23,7 +25,6 @@ const pageModules = import.meta.glob(
   "../../../fixtures/demo-project/src/pages-gen/*.tsx",
 );
 
-/** Map a glob key (../../../fixtures/...) to a repo-root-relative path. */
 function relKey(globKey: string): string {
   return globKey.replace(/^(\.\.\/)+/, "");
 }
@@ -41,7 +42,16 @@ function post(msg: HarnessToEditor) {
   window.parent.postMessage(msg, "*");
 }
 
-/** One bad render (e.g. props mid-switch) must not kill the whole stage. */
+const KIND_BADGE_BG = { block: "#ff6b00", column: "#5fae6f", section: "#6fb8ea" } as const;
+const KIND_BADGE_FG = { block: "#ffffff", column: "#0d1a12", section: "#0d1a22" } as const;
+
+const STATE_MESSAGE: Record<Exclude<CanvasState, "Default">, string> = {
+  Loading: "Loading…",
+  Empty: "No data yet",
+  Error: "Couldn't load",
+};
+
+/** One bad render must not kill the whole stage. */
 class Boundary extends ReactComponent<
   { resetKey: string; children: ReactNode },
   { error: string | null }
@@ -61,9 +71,13 @@ class Boundary extends ReactComponent<
   }
 }
 
+interface SelMeta {
+  id: string | null;
+  kind: "section" | "column" | "block" | null;
+  badge: string | null;
+}
+
 function Stage() {
-  // Component + props + file are one atom, set only after the module import
-  // resolves — the stage can never pair a component with another file's props.
   const [stage, setStage] = useState<{
     mode: "component" | "page";
     file: string;
@@ -72,11 +86,20 @@ function Stage() {
   } | null>(null);
   const stageRef = useRef<typeof stage>(null);
   stageRef.current = stage;
+
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [selMeta, setSelMeta] = useState<SelMeta>({ id: null, kind: null, badge: null });
+  const selMetaRef = useRef(selMeta);
+  selMetaRef.current = selMeta;
+  const [frame, setFrame] = useState({ width: 1100, zoom: 0.62 });
+  const [canvasState, setCanvasState] = useState<CanvasState>("Default");
+  const [showNotes, setShowNotes] = useState(true);
+  const [annotations, setAnnotations] = useState<{
+    notes: { id: string; n: number; text: string }[];
+    needsData: string[];
+  }>({ notes: [], needsData: [] });
   const loadSeq = useRef(0);
-  // Interact mode: clicks pass through to the component instead of selecting.
   const interact = useRef(false);
 
   async function load(file: string, props: Record<string, unknown>) {
@@ -88,10 +111,9 @@ function Stage() {
     }
     try {
       const mod = (await loader()) as Record<string, unknown>;
-      if (seq !== loadSeq.current) return; // superseded by a newer request
+      if (seq !== loadSeq.current) return;
       const exportName = mocks[file]?.exportName ?? "default";
       const comp = mod[exportName];
-      // forwardRef/memo components are objects, not functions.
       if (comp == null || (typeof comp !== "function" && typeof comp !== "object")) {
         setError(`export ${exportName} not found in ${file}`);
         return;
@@ -112,8 +134,6 @@ function Stage() {
     const seq = ++loadSeq.current;
     const loader = pageByName[name];
     if (!loader) {
-      // Newly generated page module: the glob updates via HMR; reload to pick
-      // it up on first creation.
       location.reload();
       return;
     }
@@ -136,6 +156,45 @@ function Stage() {
     }
   }
 
+  // ------------------------------------------------------------------ inline edit
+
+  function startEdit(el: HTMLElement) {
+    el.draggable = false;
+    el.contentEditable = "true";
+    el.classList.add("uai-editing");
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const finish = (commit: boolean) => {
+      const text = el.innerText.trim();
+      el.contentEditable = "false";
+      el.classList.remove("uai-editing");
+      el.draggable = true;
+      el.removeEventListener("keydown", onKey);
+      el.removeEventListener("blur", onBlur);
+      if (commit) {
+        post({ type: "edit-text", blockId: el.getAttribute("data-uai-block")!, text });
+      }
+    };
+    const onKey = (ke: KeyboardEvent) => {
+      if (ke.key === "Enter") {
+        ke.preventDefault();
+        el.blur();
+      } else if (ke.key === "Escape") {
+        finish(false);
+      }
+    };
+    const onBlur = () => finish(true);
+    el.addEventListener("keydown", onKey);
+    el.addEventListener("blur", onBlur);
+  }
+
+  // ------------------------------------------------------------------ messages
+
   useEffect(() => {
     const tokenOverrides = new Set<string>();
     const onMessage = (e: MessageEvent<EditorToHarness>) => {
@@ -148,10 +207,27 @@ function Stage() {
       } else if (msg.type === "select") {
         setSelectedId(msg.id);
       } else if (msg.type === "select-block") {
-        setSelectedBlockId(msg.id);
+        setSelMeta({ id: msg.id, kind: msg.kind ?? "block", badge: msg.badge ?? null });
       } else if (msg.type === "set-interact") {
         interact.current = msg.on;
         document.body.classList.toggle("uai-interact", msg.on);
+      } else if (msg.type === "set-device") {
+        setFrame((f) => ({ ...f, width: msg.width }));
+      } else if (msg.type === "set-zoom") {
+        setFrame((f) => ({ ...f, zoom: msg.zoom }));
+      } else if (msg.type === "set-canvas-state") {
+        setCanvasState(msg.state);
+      } else if (msg.type === "set-show-notes") {
+        setShowNotes(msg.on);
+      } else if (msg.type === "set-theme") {
+        document.documentElement.classList.toggle("dark", msg.dark);
+      } else if (msg.type === "set-annotations") {
+        setAnnotations({ notes: msg.notes, needsData: msg.needsData });
+      } else if (msg.type === "begin-edit") {
+        const el = document.querySelector<HTMLElement>(
+          `[data-uai-block="${CSS.escape(msg.id)}"]`,
+        );
+        if (el && ["H1", "H2", "H3", "P", "BUTTON"].includes(el.tagName)) startEdit(el);
       } else if (msg.type === "token-preview") {
         tokenOverrides.add(msg.name);
         document.documentElement.style.setProperty(msg.name, msg.value);
@@ -168,8 +244,7 @@ function Stage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // After a source edit lands, Vite HMR-updates the fixture module; re-import
-  // so the stage picks up the fresh component implementation.
+  // Re-import on HMR so the stage picks up fresh implementations.
   useEffect(() => {
     if (!import.meta.hot) return;
     const handler = () => {
@@ -181,80 +256,195 @@ function Stage() {
     return () => import.meta.hot?.off("vite:afterUpdate", handler);
   }, [stage]);
 
-  // Selection highlight: DOM classes on every instance of the selected node.
+  // ------------------------------------------------------------------ decoration
+
+  // Component-mode selection highlight (legacy inspector flow).
   useEffect(() => {
     document
       .querySelectorAll(".uai-selected")
       .forEach((el) => el.classList.remove("uai-selected"));
-    if (selectedId) {
+    if (stage?.mode === "component" && selectedId) {
       document
         .querySelectorAll(`[data-uai="${CSS.escape(selectedId)}"]`)
         .forEach((el) => el.classList.add("uai-selected"));
     }
-    if (selectedBlockId) {
-      document
-        .querySelectorAll(`[data-uai-block="${CSS.escape(selectedBlockId)}"]`)
-        .forEach((el) => el.classList.add("uai-selected"));
-    }
     document.body.classList.toggle("uai-page-mode", stage?.mode === "page");
-    // Direct manipulation needs draggable targets; refresh after every render
-    // (HMR replaces the DOM under us).
     if (stage?.mode === "page") {
       document
-        .querySelectorAll<HTMLElement>(
-          '[data-uai-kind="block"], [data-uai-kind="section"]',
-        )
+        .querySelectorAll<HTMLElement>('[data-uai-kind="block"], [data-uai-kind="section"]')
         .forEach((el) => {
           if (!el.classList.contains("uai-editing")) el.draggable = true;
         });
     }
   });
 
-  // Margin overlay for the selected block (devtools-style margin box).
+  // Page-mode decoration: selection outline + badge, note pins + callout,
+  // empty-column wells, state wells. Re-runs on every render (HMR replaces
+  // the DOM under us) plus scroll/resize for the positioned overlays.
   useEffect(() => {
     if (stage?.mode !== "page") return;
-    const overlay = document.createElement("div");
-    overlay.className = "uai-margin-overlay";
-    document.body.appendChild(overlay);
-    const update = () => {
-      const el = selectedBlockId
-        ? document.querySelector<HTMLElement>(
-            `[data-uai-block="${CSS.escape(selectedBlockId)}"]`,
-          )
-        : null;
-      if (!el) {
-        overlay.style.display = "none";
-        return;
+    const overlays: HTMLElement[] = [];
+    const injected: HTMLElement[] = [];
+    const hidden: HTMLElement[] = [];
+    const outlined: HTMLElement[] = [];
+
+    const decorate = () => {
+      overlays.forEach((o) => o.remove());
+      overlays.length = 0;
+      injected.forEach((o) => o.remove());
+      injected.length = 0;
+      hidden.forEach((el) => (el.style.visibility = ""));
+      hidden.length = 0;
+      outlined.forEach((el) =>
+        el.classList.remove("uai-sel-block", "uai-sel-column", "uai-sel-section"),
+      );
+      outlined.length = 0;
+
+      const byId = (id: string) =>
+        document.querySelector<HTMLElement>(`[data-uai-block="${CSS.escape(id)}"]`);
+
+      // Selection outline + badge
+      const sm = selMetaRef.current;
+      if (sm.id && sm.kind) {
+        const el = byId(sm.id);
+        if (el) {
+          el.classList.add(`uai-sel-${sm.kind}`);
+          outlined.push(el);
+          if (sm.badge) {
+            const r = el.getBoundingClientRect();
+            const b = document.createElement("div");
+            b.className = "uai-badge";
+            b.textContent = sm.badge;
+            b.style.background = KIND_BADGE_BG[sm.kind];
+            b.style.color = KIND_BADGE_FG[sm.kind];
+            b.style.fontWeight = sm.kind === "block" ? "400" : "600";
+            b.style.left = `${r.left + window.scrollX - 3}px`;
+            b.style.top = `${r.top + window.scrollY - (sm.kind === "column" ? 24 : sm.kind === "section" ? 20 : 19)}px`;
+            document.body.appendChild(b);
+            overlays.push(b);
+          }
+        }
       }
-      const r = el.getBoundingClientRect();
-      const cs = getComputedStyle(el);
-      const m = {
-        t: parseFloat(cs.marginTop) || 0,
-        r: parseFloat(cs.marginRight) || 0,
-        b: parseFloat(cs.marginBottom) || 0,
-        l: parseFloat(cs.marginLeft) || 0,
-      };
-      Object.assign(overlay.style, {
-        display: "block",
-        left: `${r.left - m.l + window.scrollX}px`,
-        top: `${r.top - m.t + window.scrollY}px`,
-        width: `${r.width + m.l + m.r}px`,
-        height: `${r.height + m.t + m.b}px`,
-      });
+
+      // Note pins (+ callout under the selected element)
+      if (showNotes) {
+        for (const note of annotations.notes) {
+          const el = byId(note.id);
+          if (!el) continue;
+          const r = el.getBoundingClientRect();
+          const pin = document.createElement("span");
+          pin.className = "uai-pin";
+          pin.textContent = String(note.n);
+          pin.style.left = `${r.right + window.scrollX - 5}px`;
+          pin.style.top = `${r.top + window.scrollY + 2}px`;
+          document.body.appendChild(pin);
+          overlays.push(pin);
+          if (sm.id === note.id) {
+            const callout = document.createElement("div");
+            callout.className = "uai-callout";
+            callout.innerHTML = `<span class="uai-callout-n">${note.n}</span><div>${note.text.replace(/</g, "&lt;")}</div>`;
+            el.insertAdjacentElement("afterend", callout);
+            injected.push(callout);
+          }
+        }
+      }
+
+      // Empty-column wells
+      document
+        .querySelectorAll<HTMLElement>('[data-uai-kind="column"]')
+        .forEach((col) => {
+          if (!col.querySelector('[data-uai-kind="block"]')) {
+            const well = document.createElement("div");
+            well.className = "uai-empty-well";
+            well.textContent = "empty column";
+            col.appendChild(well);
+            injected.push(well);
+          }
+        });
+
+      // Canvas-state wells over data-bound blocks
+      if (canvasState !== "Default") {
+        for (const id of annotations.needsData) {
+          const el = byId(id);
+          if (!el) continue;
+          el.style.visibility = "hidden";
+          hidden.push(el);
+          const well = document.createElement("div");
+          well.className = "uai-state-well";
+          well.textContent = STATE_MESSAGE[canvasState];
+          const r = el.getBoundingClientRect();
+          well.style.left = `${r.left + window.scrollX}px`;
+          well.style.top = `${r.top + window.scrollY}px`;
+          well.style.width = `${Math.max(180, r.width)}px`;
+          well.style.height = `${Math.max(40, r.height)}px`;
+          document.body.appendChild(well);
+          overlays.push(well);
+        }
+      }
     };
-    update();
-    const raf = requestAnimationFrame(update);
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
+
+    decorate();
+    const raf = requestAnimationFrame(decorate);
+    window.addEventListener("scroll", decorate, true);
+    window.addEventListener("resize", decorate);
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-      overlay.remove();
+      window.removeEventListener("scroll", decorate, true);
+      window.removeEventListener("resize", decorate);
+      overlays.forEach((o) => o.remove());
+      injected.forEach((o) => o.remove());
+      hidden.forEach((el) => (el.style.visibility = ""));
+      outlined.forEach((el) =>
+        el.classList.remove("uai-sel-block", "uai-sel-column", "uai-sel-section"),
+      );
     };
-  }, [stage, selectedBlockId]);
+  }, [stage, selMeta, annotations, canvasState, showNotes, frame]);
 
-  // Page-mode drag & drop + inline text editing.
+  // ------------------------------------------------------------------ hover + click selection
+
+  useEffect(() => {
+    const selector = () =>
+      stageRef.current?.mode === "page" ? "[data-uai-block]" : "[data-uai]";
+    const over = (e: Event) => {
+      if (interact.current) return;
+      const el = (e.target as Element).closest?.(selector());
+      document
+        .querySelectorAll(".uai-hover")
+        .forEach((n) => n.classList.remove("uai-hover"));
+      if (el) el.classList.add("uai-hover");
+    };
+    const click = (e: MouseEvent) => {
+      if (interact.current) return;
+      if ((e.target as Element).closest?.(".uai-editing")) return;
+      const el = (e.target as Element).closest?.(selector());
+      if (!el) {
+        if (stageRef.current?.mode === "page") {
+          setSelMeta({ id: null, kind: null, badge: null });
+          post({ type: "selected-block", id: "" });
+        }
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      if (stageRef.current?.mode === "page") {
+        const id = el.getAttribute("data-uai-block")!;
+        post({ type: "selected-block", id });
+      } else {
+        const id = el.getAttribute("data-uai")!;
+        setSelectedId(id);
+        post({ type: "selected", id });
+      }
+    };
+    document.addEventListener("mouseover", over);
+    document.addEventListener("click", click, true);
+    return () => {
+      document.removeEventListener("mouseover", over);
+      document.removeEventListener("click", click, true);
+    };
+  }, []);
+
+  // ------------------------------------------------------------------ drag & drop + dblclick
+
   useEffect(() => {
     if (stage?.mode !== "page") return;
     const indicator = document.createElement("div");
@@ -265,6 +455,19 @@ function Stage() {
       | { columnId: string; index: number }
       | { sectionIndex: number }
       | null = null;
+
+    const MIME_BLOCK = "application/x-uai-new-block";
+    const MIME_SECTION = "application/x-uai-new-section";
+    const MIME_COLUMN = "application/x-uai-new-column";
+    const externalKind = (e: DragEvent): "block" | "section" | "column" | null => {
+      const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
+      if (types.includes(MIME_BLOCK)) return "block";
+      if (types.includes(MIME_SECTION)) return "section";
+      if (types.includes(MIME_COLUMN)) return "column";
+      return null;
+    };
+    let columnTarget: { sectionId: string; index: number } | null = null;
+    let sectionOnlyTarget: string | null = null;
 
     const onDragStart = (e: DragEvent) => {
       if (interact.current) return;
@@ -279,21 +482,6 @@ function Stage() {
       e.dataTransfer!.effectAllowed = "move";
       e.dataTransfer!.setData("text/plain", dragging.id);
     };
-
-    // Toolbox items dragged in from the editor (parent frame). During
-    // dragover only the mime TYPE is readable, so the kind is encoded there.
-    const MIME_BLOCK = "application/x-uai-new-block";
-    const MIME_SECTION = "application/x-uai-new-section";
-    const MIME_COLUMN = "application/x-uai-new-column";
-    const externalKind = (e: DragEvent): "block" | "section" | "column" | null => {
-      const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
-      if (types.includes(MIME_BLOCK)) return "block";
-      if (types.includes(MIME_SECTION)) return "section";
-      if (types.includes(MIME_COLUMN)) return "column";
-      return null;
-    };
-    let columnTarget: { sectionId: string; index: number } | null = null;
-    let sectionOnlyTarget: string | null = null;
 
     const onDragOver = (e: DragEvent) => {
       const external = externalKind(e);
@@ -323,10 +511,7 @@ function Stage() {
             break;
           }
         }
-        columnTarget = {
-          sectionId: section.getAttribute("data-uai-block")!,
-          index,
-        };
+        columnTarget = { sectionId: section.getAttribute("data-uai-block")!, index };
         const sr = section.getBoundingClientRect();
         const x =
           cols.length === 0
@@ -343,7 +528,6 @@ function Stage() {
         });
         return;
       }
-      // Reset to horizontal-line geometry for block/section indicators.
       indicator.style.height = "3px";
 
       if (kind === "block") {
@@ -351,16 +535,10 @@ function Stage() {
           '[data-uai-kind="column"]',
         ) as HTMLElement | null;
         if (!col) {
-          // Dropping onto a section with no columns yet: highlight the whole
-          // section; the editor creates a column to hold the block.
           const section = (e.target as Element).closest?.(
             '[data-uai-kind="section"]',
           ) as HTMLElement | null;
-          if (
-            external &&
-            section &&
-            !section.querySelector('[data-uai-kind="column"]')
-          ) {
+          if (external && section && !section.querySelector('[data-uai-kind="column"]')) {
             sectionOnlyTarget = section.getAttribute("data-uai-block")!;
             const sr = section.getBoundingClientRect();
             Object.assign(indicator.style, {
@@ -393,7 +571,7 @@ function Stage() {
             ? colRect.top + 4
             : index === blocks.length
               ? blocks[blocks.length - 1].getBoundingClientRect().bottom + 2
-              : blocks[index].getBoundingClientRect().top - 4;
+              : blocks[index].getBoundingClientRect().top - 9;
         Object.assign(indicator.style, {
           display: "block",
           left: `${colRect.left + window.scrollX}px`,
@@ -404,9 +582,7 @@ function Stage() {
         const main = document.querySelector("main");
         if (!main) return;
         const sections = Array.from(
-          main.querySelectorAll<HTMLElement>(
-            ':scope > [data-uai-kind="section"]',
-          ),
+          main.querySelectorAll<HTMLElement>(':scope > [data-uai-kind="section"]'),
         ).filter((s) => s.getAttribute("data-uai-block") !== dragging?.id);
         let index = sections.length;
         for (let i = 0; i < sections.length; i++) {
@@ -437,7 +613,7 @@ function Stage() {
       const external = externalKind(e);
       if (external) {
         e.preventDefault();
-        if (external === "block" && (dropTarget && "columnId" in dropTarget)) {
+        if (external === "block" && dropTarget && "columnId" in dropTarget) {
           post({
             type: "insert-block",
             item: JSON.parse(e.dataTransfer!.getData(MIME_BLOCK) || "{}"),
@@ -501,46 +677,9 @@ function Stage() {
       const tag = el.tagName.toLowerCase();
       if (!["h1", "h2", "h3", "p", "button"].includes(tag)) return;
       e.preventDefault();
-      el.draggable = false;
-      el.contentEditable = "true";
-      el.classList.add("uai-editing");
-      el.focus();
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const selection = getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-
-      const finish = (commit: boolean) => {
-        const text = el.innerText.trim();
-        el.contentEditable = "false";
-        el.classList.remove("uai-editing");
-        el.draggable = true;
-        el.removeEventListener("keydown", onKey);
-        el.removeEventListener("blur", onBlur);
-        if (commit) {
-          post({
-            type: "edit-text",
-            blockId: el.getAttribute("data-uai-block")!,
-            text,
-          });
-        }
-      };
-      const onKey = (ke: KeyboardEvent) => {
-        if (ke.key === "Enter") {
-          ke.preventDefault();
-          el.blur();
-        } else if (ke.key === "Escape") {
-          finish(false);
-        }
-      };
-      const onBlur = () => finish(true);
-      el.addEventListener("keydown", onKey);
-      el.addEventListener("blur", onBlur);
+      startEdit(el);
     };
 
-    // For toolbox drags the source element lives in the parent frame, so
-    // dragend never fires here — clear the indicator when the drag leaves.
     const onDragLeave = (e: DragEvent) => {
       if (!(e.relatedTarget instanceof Node)) indicator.style.display = "none";
     };
@@ -562,45 +701,25 @@ function Stage() {
     };
   }, [stage?.mode]);
 
-  // Hover + click → editor.
-  useEffect(() => {
-    const selector = () =>
-      stageRef.current?.mode === "page" ? "[data-uai-block]" : "[data-uai]";
-    const over = (e: Event) => {
-      if (interact.current) return;
-      const el = (e.target as Element).closest?.(selector());
-      document
-        .querySelectorAll(".uai-hover")
-        .forEach((n) => n.classList.remove("uai-hover"));
-      if (el) el.classList.add("uai-hover");
-    };
-    const click = (e: MouseEvent) => {
-      if (interact.current) return;
-      if ((e.target as Element).closest?.(".uai-editing")) return;
-      const el = (e.target as Element).closest?.(selector());
-      if (!el) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (stageRef.current?.mode === "page") {
-        const id = el.getAttribute("data-uai-block")!;
-        setSelectedBlockId(id);
-        post({ type: "selected-block", id });
-      } else {
-        const id = el.getAttribute("data-uai")!;
-        setSelectedId(id);
-        post({ type: "selected", id });
-      }
-    };
-    document.addEventListener("mouseover", over);
-    document.addEventListener("click", click, true);
-    return () => {
-      document.removeEventListener("mouseover", over);
-      document.removeEventListener("click", click, true);
-    };
-  }, []);
+  // ------------------------------------------------------------------ render
 
   if (error) return <pre className="uai-error">{error}</pre>;
   if (!stage) return null;
+
+  if (stage.mode === "page") {
+    return (
+      <div style={{ width: stage ? frame.width * frame.zoom : "auto", margin: "0 auto" }}>
+        <div style={{ width: frame.width, transform: `scale(${frame.zoom})`, transformOrigin: "top left" }}>
+          <div className="uai-page-surface">
+            <Boundary resetKey={stage.file}>
+              <stage.Component />
+            </Boundary>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Boundary resetKey={stage.file + JSON.stringify(stage.props)}>
       <stage.Component {...stage.props} />

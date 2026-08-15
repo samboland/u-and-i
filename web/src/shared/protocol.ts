@@ -1,11 +1,29 @@
 /** postMessage protocol between editor (parent) and harness (iframe). */
 
+export type CanvasState = "Default" | "Loading" | "Empty" | "Error";
+
 export type EditorToHarness =
   | { type: "render"; file: string; props: Record<string, unknown> }
   | { type: "render-page"; name: string }
   | { type: "select"; id: string | null }
-  | { type: "select-block"; id: string | null }
+  | {
+      type: "select-block";
+      id: string | null;
+      kind?: "section" | "column" | "block";
+      badge?: string;
+    }
   | { type: "set-interact"; on: boolean }
+  | { type: "set-device"; width: number }
+  | { type: "set-zoom"; zoom: number }
+  | { type: "set-canvas-state"; state: CanvasState }
+  | { type: "set-show-notes"; on: boolean }
+  | { type: "set-theme"; dark: boolean }
+  | { type: "begin-edit"; id: string }
+  | {
+      type: "set-annotations";
+      notes: { id: string; n: number; text: string }[];
+      needsData: string[];
+    }
   | { type: "token-preview"; name: string; value: string }
   | { type: "token-clear" };
 

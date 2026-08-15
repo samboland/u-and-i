@@ -26,6 +26,8 @@ export type Align = "start" | "center" | "end" | "stretch";
 
 export interface Section {
   id: string;
+  /** Human label shown in badges/breadcrumbs (e.g. "Hero section"). */
+  label?: string;
   /** Visual treatment straight from the fixture design system. */
   background: "none" | "card" | "well";
   padding: string;
@@ -51,6 +53,16 @@ interface BlockCommon {
   margin?: string;
   /** align-self override within the column. */
   align?: Align;
+  /** Dev note: where drawable design ends and real coded behavior begins.
+   * Emitted as an @dev-note comment in generated source. */
+  note?: string | null;
+  /** This element renders mock content and expects a real data source. */
+  needsData?: boolean;
+  /** Sketch of the intended data binding, e.g. "ConfidenceBar ← ReviewSynthesisOutput". */
+  binding?: string;
+  /** Free-form CSS overrides (camelCase properties) merged into the element's
+   * style attribute — the generic style map that makes any layout expressible. */
+  styles?: Record<string, string>;
 }
 
 export type Block =
@@ -68,6 +80,12 @@ export type Block =
   | (BlockCommon & { type: "button"; label: string })
   | (BlockCommon & { type: "image"; src: string; alt: string; width: string })
   | (BlockCommon & { type: "spacer"; height: string })
+  | (BlockCommon & {
+      type: "repeater";
+      /** Named sample-data collection this repeats over (future feature). */
+      collection: string;
+      phHeight?: string;
+    })
   | (BlockCommon & {
       type: "component";
       file: string;
@@ -115,6 +133,9 @@ function commonStyle(b: Block): [string, string][] {
   const out: [string, string][] = [];
   if (b.margin) out.push(["margin", b.margin]);
   if (b.align) out.push(["alignSelf", ALIGN_CSS[b.align]]);
+  for (const [k, v] of Object.entries(b.styles ?? {})) {
+    if (v !== "" && v != null) out.push([k, v]);
+  }
   return out;
 }
 
@@ -150,6 +171,21 @@ function genBlock(block: Block, d: string): string {
       return `${d}<button ${tag} type="button" className="ui-card"${style}>${jsxText(block.label)}</button>`;
     }
     case "image": {
+      if (!block.src) {
+        const style = styleAttr([
+          ["display", "flex"],
+          ["alignItems", "center"],
+          ["justifyContent", "center"],
+          ["height", "120px"],
+          ["border", "1px dashed rgba(44,34,30,0.28)"],
+          ["borderRadius", "8px"],
+          ["background", "rgba(44,34,30,0.04)"],
+          ["fontSize", "11px"],
+          ["color", "var(--muted-foreground)"],
+          ...common,
+        ]);
+        return `${d}<div ${tag}${style}>Image placeholder</div>`;
+      }
       const style = styleAttr([
         ["width", block.width],
         ["maxWidth", "100%"],
@@ -160,6 +196,23 @@ function genBlock(block: Block, d: string): string {
     case "spacer": {
       const style = styleAttr([["height", block.height], ...common]);
       return `${d}<div ${tag}${style} />`;
+    }
+    case "repeater": {
+      // Placeholder until sample-data collections land — the dev-note comment
+      // above it (emitted by generatePage) marks the real data source.
+      const style = styleAttr([
+        ["display", "flex"],
+        ["alignItems", "center"],
+        ["justifyContent", "center"],
+        ["height", block.phHeight ?? "104px"],
+        ["border", "1px dashed rgba(44,34,30,0.28)"],
+        ["borderRadius", "8px"],
+        ["background", "rgba(44,34,30,0.04)"],
+        ["fontSize", "12px"],
+        ["color", "var(--muted-foreground)"],
+        ...common,
+      ]);
+      return `${d}<div ${tag}${style}>repeats over ${jsxText(block.collection)}</div>`;
     }
     case "component":
       throw new Error("component blocks are emitted inline by generatePage");
@@ -197,6 +250,7 @@ export function generatePage(doc: PageDoc): string {
     const cls = SECTION_BG[s.background];
     const clsAttr = cls ? ` className="${cls}"` : "";
     const d3 = IND.repeat(3);
+    if (s.label) lines.push(`${d3}{/* ${s.label} */}`);
     lines.push(
       `${d3}<section data-uai-block="${s.id}" data-uai-kind="section"${clsAttr}${styleAttr([["padding", s.padding]])}>`,
     );
@@ -220,6 +274,13 @@ export function generatePage(doc: PageDoc): string {
         ])}>`,
       );
       for (const blk of c.blocks) {
+        const d6note = IND.repeat(6);
+        if (blk.note) lines.push(`${d6note}{/* @dev-note: ${blk.note} */}`);
+        if (blk.needsData) {
+          lines.push(
+            `${d6note}{/* @dev-note(data): renders mock content — expects ${blk.binding ?? "a real data source"} */}`,
+          );
+        }
         if (blk.type === "component") {
           const d6 = IND.repeat(6);
           lines.push(

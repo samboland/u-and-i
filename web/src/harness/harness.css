@@ -24,15 +24,26 @@ body {
   max-width: 480px;
   width: 100%;
 }
+
+/* Page mode: dark void stage; the page renders as a framed parchment card. */
 body.uai-page-mode {
-  align-items: flex-start;
-  padding: 2rem;
+  display: block;
+  background: #101216;
+  padding: 22px 0 40px;
 }
 body.uai-page-mode #root {
-  max-width: 1100px;
-  margin: 0 auto;
+  max-width: none;
+  width: auto;
+}
+.uai-page-surface {
+  background: var(--background);
+  color: var(--foreground);
+  padding: 2rem;
+  border-radius: 4px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
 }
 
+/* Hover + selection (component mode keeps the single orange outline) */
 [data-uai],
 [data-uai-block] {
   outline-offset: 2px;
@@ -42,28 +53,121 @@ body.uai-page-mode #root {
   outline: 2px dashed #328ec1;
   cursor: default;
 }
-[data-uai].uai-selected,
-[data-uai-block].uai-selected {
+[data-uai].uai-selected {
   outline: 2px solid #ff6b00;
 }
 
+/* Page mode: semantic per-kind selection */
+.uai-sel-block {
+  outline: 2px solid #ff6b00 !important;
+  outline-offset: 3px !important;
+  border-radius: 2px;
+}
+.uai-sel-column {
+  outline: 2px solid #5fae6f !important;
+  outline-offset: 6px !important;
+  border-radius: 2px;
+}
+.uai-sel-section {
+  outline: 2px solid #6fb8ea !important;
+  outline-offset: 3px !important;
+}
+
+/* Selection badge (tab on the element's top-left edge) */
+.uai-badge {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 3px 3px 0 0;
+  font-family: system-ui, sans-serif;
+  font-size: 9.5px;
+  white-space: nowrap;
+  z-index: 1003;
+  pointer-events: none;
+}
+
+/* Dev-note pin + callout */
+.uai-pin {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  background: #d9b45b;
+  color: #2c221e;
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(44, 34, 30, 0.3);
+  z-index: 1002;
+  pointer-events: none;
+}
+.uai-callout {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px dashed #d9b45b;
+  border-radius: 6px;
+  background: rgba(217, 180, 91, 0.1);
+  max-width: 38rem;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.uai-callout-n {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 99px;
+  background: #d9b45b;
+  color: #2c221e;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+/* Empty-column + canvas-state wells */
+.uai-empty-well {
+  padding: 10px;
+  border: 1px dashed rgba(44, 34, 30, 0.2);
+  border-radius: 8px;
+  font-size: 11px;
+  color: rgba(44, 34, 30, 0.45);
+  text-align: center;
+}
+.uai-state-well {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(44, 34, 30, 0.28);
+  border-radius: 8px;
+  background: var(--background);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  z-index: 1001;
+  box-sizing: border-box;
+}
+
+/* Drag & drop */
 .uai-drop-indicator {
   display: none;
   position: absolute;
   height: 3px;
   border-radius: 2px;
-  background: #328ec1;
-  box-shadow: 0 0 0 1px rgba(50, 142, 193, 0.35);
+  background: #ff6b00;
+  box-shadow: 0 0 0 1px rgba(255, 107, 0, 0.35);
   pointer-events: none;
   z-index: 1000;
-}
-.uai-margin-overlay {
-  display: none;
-  position: absolute;
-  border: 1px dashed rgba(246, 168, 0, 0.9);
-  background: rgba(246, 168, 0, 0.08);
-  pointer-events: none;
-  z-index: 999;
 }
 [data-uai-kind].uai-editing {
   outline: 2px solid #328ec1;
