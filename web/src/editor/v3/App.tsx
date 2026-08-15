@@ -718,7 +718,7 @@ export function App() {
 
   type MenuItem =
     | { sep: true }
-    | { sep?: false; label: string; accel?: string; check?: string; disabled?: boolean; action?: () => void };
+    | { sep?: false; label: string; accel?: string; check?: string; icon?: string; disabled?: boolean; action?: () => void };
   const dot = (on: boolean) => (on ? "•" : "");
   const tick = (on: boolean) => (on ? "✓" : "");
   const menus: { label: string; width: number; items: MenuItem[] }[] = [
@@ -736,6 +736,8 @@ export function App() {
       label: "Edit",
       width: 216,
       items: [
+        { label: "Preferences…", icon: "settings", action: () => setPrefsOpen(true) },
+        { sep: true },
         { label: "Undo", accel: "Ctrl+Z", disabled: !history.length, action: undoAction },
         { label: "Redo", accel: "Ctrl+Shift+Z", disabled: !future.length, action: redoAction },
         { sep: true },
@@ -744,8 +746,6 @@ export function App() {
         { sep: true },
         { label: "Move up", accel: "Alt+Up", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: Math.max(0, fileNode.slot - 2) }, fileNode.tag) },
         { label: "Move down", accel: "Alt+Down", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: fileNode.slot + 2 }, fileNode.tag) },
-        { sep: true },
-        { label: "Preferences…", action: () => setPrefsOpen(true) },
       ],
     },
     {
@@ -836,7 +836,9 @@ export function App() {
                       style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: it.disabled ? C.faint : C.body, cursor: it.disabled ? "default" : "pointer", textAlign: "left" }}
                       onClick={(e) => { e.stopPropagation(); if (it.disabled) return; setOpenMenu(null); it.action?.(); }}
                     >
-                      <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.check ?? ""}</span>
+                      <span style={{ flex: "0 0 12px", display: "flex", alignItems: "center", color: C.blueLight, fontSize: 11 }}>
+                        {it.icon ? <Sym name={it.icon} size={13} /> : (it.check ?? "")}
+                      </span>
                       <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{it.label}</span>
                       <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{it.accel ?? ""}</span>
                     </button>
