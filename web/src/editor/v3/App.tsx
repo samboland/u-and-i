@@ -211,6 +211,15 @@ function Seg({
   );
 }
 
+/** Material Symbols glyph (rounded set, self-hosted font). */
+function Sym({ name, size = 15 }: { name: string; size?: number }) {
+  return (
+    <span aria-hidden className="material-symbols-rounded" style={{ fontSize: size, lineHeight: 1 }}>
+      {name}
+    </span>
+  );
+}
+
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -239,7 +248,6 @@ export function App() {
 
   const [history, setHistory] = useState<{ doc: PageDoc; sel: Sel }[]>([]);
   const [future, setFuture] = useState<{ doc: PageDoc; sel: Sel }[]>([]);
-  const [edits, setEdits] = useState(0);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   const [workspace, setWorkspace] = useState<Workspace>("Layout");
@@ -301,7 +309,6 @@ export function App() {
       const selPatch = mutator(next) ?? {};
       setHistory((h) => [...h.slice(-39), { doc: cur, sel: selRef.current }]);
       setFuture([]);
-      setEdits((e) => e + 1);
       setDoc(next);
       if (selPatch.kind !== undefined || selPatch.id !== undefined) {
         setSel({ kind: selPatch.kind ?? null, id: selPatch.id ?? null });
@@ -1151,13 +1158,8 @@ export function App() {
         </div>
         <div style={{ flex: "1 1 0", minWidth: 8 }} />
         <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8 }}>
-          <button style={{ width: 24, height: 22, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: history.length ? C.body : C.faint, cursor: "pointer" }} title="Undo" onClick={undoAction}>↰</button>
-          <button style={{ width: 24, height: 22, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: future.length ? C.body : C.faint, cursor: "pointer" }} title="Redo" onClick={redoAction}>↱</button>
-        </div>
-        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "stretch" }}>
-          <button className="hv-ctl" style={{ width: 44, background: "none", border: "none", color: C.muted, fontSize: 11, cursor: "default" }}>─</button>
-          <button className="hv-ctl" style={{ width: 44, background: "none", border: "none", color: C.muted, fontSize: 11, cursor: "default" }}>▢</button>
-          <button className="hv-close" style={{ width: 44, background: "none", border: "none", color: C.muted, fontSize: 11, cursor: "default" }} onClick={() => window.close()}>✕</button>
+          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: history.length ? C.body : C.faint, cursor: "pointer" }} title="Undo (Ctrl+Z)" onClick={undoAction}><Sym name="undo" /></button>
+          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: future.length ? C.body : C.faint, cursor: "pointer" }} title="Redo (Ctrl+Shift+Z)" onClick={redoAction}><Sym name="redo" /></button>
         </div>
       </div>
 
@@ -1176,11 +1178,19 @@ export function App() {
           {WORKSPACES.find((w) => w.label === workspace)?.hint}
         </span>
         <div style={{ flex: "1 1 0", minWidth: 8 }} />
-        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 8px", background: C.sunken, border: `1px solid ${C.border}`, borderRadius: 5, fontFamily: MONO, fontSize: 11, color: C.green }}>
+        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 8px", background: C.sunken, border: `1px solid ${C.border}`, borderRadius: 5, fontFamily: MONO, fontSize: 11, color: C.green }} title="Every edit is written straight to source">
           <span style={{ width: 6, height: 6, borderRadius: 99, background: C.green }} />
-          {savedAt ? `saved · ${edits} edit${edits === 1 ? "" : "s"}` : "in sync"}
+          {savedAt ? `saved ${savedAt}` : "in sync"}
         </div>
-        <button className="hv-primary" style={{ flex: "0 0 auto", height: 24, padding: "0 10px", ...primaryBtn }} title="Not built yet" >Preview</button>
+        <button
+          className="hv-primary"
+          style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 10px", ...primaryBtn }}
+          title="Open this page in a new window — real size, fully interactive"
+          onClick={() => doc && window.open(`/harness.html?page=${encodeURIComponent(doc.name)}`, "_blank")}
+        >
+          <Sym name="open_in_new" size={13} />
+          Preview
+        </button>
       </div>
 
       {/* ------------------------------------------------ Workspace toolbar */}
@@ -1312,7 +1322,7 @@ export function App() {
                     onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
                     title="Preview context (P)"
                   >
-                    <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Preview</span>
+                    <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Context</span>
                     <span style={{ fontFamily: MONO, fontSize: 11 }}>{role} · {canvasState} · {themeDark ? "Abyss" : "Parchment"}</span>
                     <span style={{ fontSize: 8, color: C.faint }}>▼</span>
                   </button>

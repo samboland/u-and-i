@@ -105,6 +105,20 @@ function Stage() {
   const loadSeq = useRef(0);
   const interact = useRef(false);
 
+  // Standalone preview: /harness.html?page=<name> renders the page plainly —
+  // no editor protocol, no void stage, everything interactive. This is what
+  // the editor's Preview button opens.
+  const previewName = useRef(new URLSearchParams(location.search).get("page")).current;
+  useEffect(() => {
+    if (!previewName) return;
+    interact.current = true;
+    document.title = `${previewName} — preview`;
+    document.documentElement.classList.add("uai-preview");
+    document.body.classList.add("uai-preview");
+    void loadPage(previewName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function load(file: string, props: Record<string, unknown>) {
     const seq = ++loadSeq.current;
     const loader = byRel[file];
@@ -377,13 +391,13 @@ function Stage() {
         .querySelectorAll(`[data-uai="${CSS.escape(selectedId)}"]`)
         .forEach((el) => el.classList.add("uai-selected"));
     }
-    document.body.classList.toggle("uai-page-mode", stage?.mode === "page");
-    document.documentElement.classList.toggle("uai-page-mode", stage?.mode === "page");
+    document.body.classList.toggle("uai-page-mode", stage?.mode === "page" && !previewName);
+    document.documentElement.classList.toggle("uai-page-mode", stage?.mode === "page" && !previewName);
     if (stage?.mode === "page") {
       document
         .querySelectorAll<HTMLElement>('[data-uai-kind="block"], [data-uai-kind="section"]')
         .forEach((el) => {
-          if (!el.classList.contains("uai-editing")) el.draggable = true;
+          if (!el.classList.contains("uai-editing")) el.draggable = !previewName;
         });
     }
   });
@@ -850,6 +864,14 @@ function Stage() {
 
   if (error) return <pre className="uai-error">{error}</pre>;
   if (!stage) return null;
+
+  if (stage.mode === "page" && previewName) {
+    return (
+      <Boundary resetKey={stage.file}>
+        <stage.Component />
+      </Boundary>
+    );
+  }
 
   if (stage.mode === "page") {
     // The void apron around the page lets you pan past the content edges in

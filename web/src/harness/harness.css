@@ -25,6 +25,16 @@ body {
   width: 100%;
 }
 
+/* Standalone preview (?page=…): the page plain, full-width, interactive. */
+body.uai-preview {
+  display: block;
+  padding: 0;
+}
+body.uai-preview #root {
+  max-width: none;
+  width: auto;
+}
+
 /* Page mode: dark void stage; the page renders as a framed parchment card. */
 body.uai-page-mode {
   display: block;

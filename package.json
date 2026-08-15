@@ -16,6 +16,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "clsx": "^2.1.1",
     "lucide-react": "^1.29.0",
+    "material-symbols": "^0.45.10",
     "ogl": "^1.0.11",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
