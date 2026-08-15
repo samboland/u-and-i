@@ -287,6 +287,31 @@ function Stage() {
     return () => cancelAnimationFrame(raf);
   }, [stage, frame]);
 
+  // Report where the page origin sits in the viewport so the chrome's rulers
+  // can track pan and zoom. rAF-coalesced; fires on scroll, resize, zoom.
+  useEffect(() => {
+    if (stage?.mode !== "page") return;
+    let raf = 0;
+    const report = () => {
+      raf = 0;
+      const el = document.querySelector<HTMLElement>("[data-uai-stage]");
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      post({ type: "stage-metrics", x: r.left, y: r.top });
+    };
+    const queue = () => {
+      if (!raf) raf = requestAnimationFrame(report);
+    };
+    queue();
+    window.addEventListener("scroll", queue, true);
+    window.addEventListener("resize", queue);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", queue, true);
+      window.removeEventListener("resize", queue);
+    };
+  }, [stage, frame]);
+
   // Middle-mouse drag pans the canvas (suppresses the browser's autoscroll).
   useEffect(() => {
     let pan: { x: number; y: number } | null = null;

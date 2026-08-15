@@ -266,6 +266,11 @@ export function App() {
   // Filled in below once handleChord exists; the harness message handler
   // reads it so iframe-forwarded shortcuts never go through a stale closure.
   const handleChordRef = useRef<(c: { key: string; mod: boolean; shift: boolean; alt: boolean }) => boolean>(() => false);
+  const hRuler = useRef<HTMLCanvasElement>(null);
+  const vRuler = useRef<HTMLCanvasElement>(null);
+  const stageXY = useRef({ x: 0, y: 0 });
+  const drawRulersRef = useRef<() => void>(() => {});
+  const [rulerUnit, setRulerUnit] = useState<"px" | "rem">("px");
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -535,6 +540,11 @@ export function App() {
         setCtxMenu(null);
       } else if (msg.type === "key") {
         handleChordRef.current({ key: msg.key, mod: msg.ctrl, shift: msg.shift, alt: msg.alt });
+      } else if (msg.type === "stage-metrics") {
+        // Straight to canvas — panning reports every frame and must not
+        // re-render the chrome.
+        stageXY.current = { x: msg.x, y: msg.y };
+        drawRulersRef.current();
       }
     };
     window.addEventListener("message", onMessage);
@@ -830,6 +840,75 @@ export function App() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [workspace, zoomBy]);
 
+  // ------------------------------------------------------------------ rulers
+
+  /** Draw both rulers: ticks in page units (px or rem) anchored to the page
+   * origin the harness reports, so they track pan and zoom exactly. */
+  const drawRulers = useCallback(() => {
+    const dpr = window.devicePixelRatio || 1;
+    const unitPx = rulerUnit === "rem" ? 16 : 1;
+    const pxPerUnit = unitPx * zoom;
+    let minorStep = rulerUnit === "rem" ? 1 : 10;
+    while (minorStep * pxPerUnit < 5) minorStep *= 2;
+    let majorStep = rulerUnit === "rem" ? 4 : 100;
+    while (majorStep * pxPerUnit < 34) majorStep *= 2;
+    for (const [cv, horiz] of [[hRuler.current, true], [vRuler.current, false]] as const) {
+      if (!cv) continue;
+      const w = cv.clientWidth;
+      const h = cv.clientHeight;
+      if (!w || !h) continue;
+      if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+        cv.width = Math.round(w * dpr);
+        cv.height = Math.round(h * dpr);
+      }
+      const ctx = cv.getContext("2d");
+      if (!ctx) continue;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.font = "8px ui-monospace, monospace";
+      const origin = horiz ? stageXY.current.x : stageXY.current.y;
+      const length = horiz ? w : h;
+      const start = Math.floor(-origin / (minorStep * pxPerUnit)) * minorStep;
+      for (let u = start; origin + u * pxPerUnit <= length; u += minorStep) {
+        const p = Math.round(origin + u * pxPerUnit) + 0.5;
+        if (p < 0) continue;
+        const isMajor = u % majorStep === 0;
+        ctx.strokeStyle = isMajor ? C.borderHover : C.border;
+        ctx.beginPath();
+        if (horiz) {
+          ctx.moveTo(p, 16);
+          ctx.lineTo(p, isMajor ? 2 : 11);
+        } else {
+          ctx.moveTo(16, p);
+          ctx.lineTo(isMajor ? 2 : 11, p);
+        }
+        ctx.stroke();
+        if (isMajor) {
+          ctx.fillStyle = C.faint;
+          if (horiz) ctx.fillText(String(u), p + 3, 8);
+          else {
+            ctx.save();
+            ctx.translate(8, p - 3);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText(String(u), 0, 0);
+            ctx.restore();
+          }
+        }
+      }
+    }
+  }, [zoom, rulerUnit]);
+  drawRulersRef.current = drawRulers;
+
+  useEffect(() => {
+    if (!rulersOn || workspace !== "Layout") return;
+    const raf = requestAnimationFrame(drawRulers);
+    window.addEventListener("resize", drawRulers);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", drawRulers);
+    };
+  }, [drawRulers, rulersOn, workspace, device, appZoom]);
+
   // ------------------------------------------------------------------ derived labels
 
   const canUp = !!sel.id;
@@ -1014,16 +1093,13 @@ export function App() {
 
   // ------------------------------------------------------------------ render
 
-  const rulerMinor = `${Math.max(4, Math.round(10 * zoom))}px`;
-  const rulerMajor = `${Math.max(20, Math.round(100 * zoom))}px`;
-
   return (
     <div
       style={{ display: "flex", flexDirection: "column", height: `${100 / appZoom}vh`, zoom: appZoom, background: C.win, color: C.body, fontFamily: "system-ui, sans-serif", fontSize: 12, overflow: "hidden" }}
       onClick={() => { if (openMenu) setOpenMenu(null); if (previewOpen) setPreviewOpen(false); if (ctxMenu) setCtxMenu(null); }}
     >
       {/* ---------------------------------------------------------- TopBar */}
-      <div style={{ flex: "0 0 auto", minHeight: 32, display: "flex", flexWrap: "wrap", alignItems: "stretch", background: C.sunken, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", position: "relative", zIndex: 20 }}>
+      <div style={{ flex: "0 0 auto", minHeight: 32, display: "flex", flexWrap: "wrap", alignItems: "stretch", background: C.sunken, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", position: "relative", zIndex: 40 }}>
         <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", padding: "0 10px 0 11px", fontFamily: MONO, fontSize: 12, color: C.blueLight, letterSpacing: "-0.04em" }}>u—i</span>
         {menus.map((m) => (
           <div key={m.label} style={{ flex: "0 0 auto", position: "relative" }}>
@@ -1273,13 +1349,19 @@ export function App() {
 
               {rulersOn && (
                 <div style={{ flex: "0 0 16px", display: "flex", background: C.canvasBar, borderBottom: `1px solid ${C.canvasEdge}`, overflow: "hidden" }}>
-                  <div style={{ flex: "0 0 16px", borderRight: `1px solid ${C.canvasEdge}` }} />
-                  <div style={{ flex: 1, backgroundImage: `repeating-linear-gradient(to right, ${C.border} 0 1px, transparent 1px ${rulerMinor}), repeating-linear-gradient(to right, ${C.borderHover} 0 1px, transparent 1px ${rulerMajor})`, backgroundPosition: "bottom", backgroundSize: "100% 5px, 100% 9px", backgroundRepeat: "repeat-x" }} />
+                  <button
+                    title="Ruler units (px / rem)"
+                    onClick={() => setRulerUnit((u) => (u === "px" ? "rem" : "px"))}
+                    style={{ flex: "0 0 16px", padding: 0, background: "none", border: "none", borderRight: `1px solid ${C.canvasEdge}`, color: C.faint, fontSize: 7, fontFamily: MONO, cursor: "pointer", lineHeight: 1 }}
+                  >
+                    {rulerUnit}
+                  </button>
+                  <canvas ref={hRuler} style={{ flex: 1, minWidth: 0, height: 16 }} />
                 </div>
               )}
               <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
                 {rulersOn && (
-                  <div style={{ flex: "0 0 16px", background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}`, backgroundImage: `repeating-linear-gradient(to bottom, ${C.border} 0 1px, transparent 1px ${rulerMinor})`, backgroundSize: "5px 100%", backgroundPosition: "right", backgroundRepeat: "repeat-y" }} />
+                  <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
                 )}
                 <iframe ref={iframeRef} src="/harness.html" title="canvas" style={{ flex: 1, border: "none", background: C.void }} />
               </div>

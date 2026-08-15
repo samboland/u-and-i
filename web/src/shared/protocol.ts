@@ -47,5 +47,6 @@ export type HarnessToEditor =
   | { type: "toggle-interact" }
   | { type: "escape" }
   | { type: "key"; key: string; ctrl: boolean; shift: boolean; alt: boolean }
+  | { type: "stage-metrics"; x: number; y: number }
   | { type: "zoom-wheel"; dir: 1 | -1 }
   | { type: "render-error"; message: string };
