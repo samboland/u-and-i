@@ -3,7 +3,7 @@
  * process and opens the editor in a native window. The entire web codebase is
  * unchanged — this is the VS Code recipe: Node kernel + Chromium shell.
  */
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, Menu } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,14 +21,25 @@ async function start() {
   const address = viteServer.httpServer?.address();
   const port = typeof address === "object" && address ? address.port : 4400;
 
+  // The editor draws its own menu bar — the native one would duplicate it.
+  Menu.setApplicationMenu(null);
+
   const win = new BrowserWindow({
     width: 1500,
     height: 950,
     title: "u-and-i",
     backgroundColor: "#16181d",
-    autoHideMenuBar: false,
+    autoHideMenuBar: true,
   });
   win.on("page-title-updated", (e) => e.preventDefault());
+  // Keep the accelerators the native menu used to provide.
+  win.webContents.on("before-input-event", (_e, input) => {
+    if (input.type !== "keyDown") return;
+    if (input.key === "F12") win.webContents.toggleDevTools();
+    else if (input.control && input.shift && input.key.toLowerCase() === "r") {
+      win.webContents.reloadIgnoringCache();
+    }
+  });
   await win.loadURL(`http://localhost:${port}/`);
 }
 
