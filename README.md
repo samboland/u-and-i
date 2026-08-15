@@ -1,5 +1,9 @@
 # u-and-i
 
+> **Designing or building on this repo? Read [`docs/CONTEXT.md`](docs/CONTEXT.md) first** —
+> what the target product (Adventure Alerts) actually is, its shell and visual
+> rules, and which fixture components are design-system residue vs. real domain.
+
 A visual editor for React/CSS where **the code is the source of truth**. Click
 an element on a canvas rendering your real component, change a style, and the
 edit lands in your actual `.tsx`/`.css` source as a minimal, reviewable diff —
