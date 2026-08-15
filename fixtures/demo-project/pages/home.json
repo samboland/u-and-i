@@ -41,6 +41,12 @@
           "blocks": []
         },
         {
+          "id": "i5j0v66",
+          "flex": "1",
+          "gap": "0.75rem",
+          "blocks": []
+        },
+        {
           "id": "colB",
           "flex": "4",
           "gap": "1rem",
@@ -71,16 +77,6 @@
                 "state": "final",
                 "streamingStages": []
               }
-            },
-            {
-              "id": "3hlogvb",
-              "type": "text",
-              "text": "Some text."
-            },
-            {
-              "id": "t2",
-              "type": "text",
-              "text": "Community, marketplace, expert, and hands-on signals in one view."
             }
           ],
           "alignBlocks": "stretch"

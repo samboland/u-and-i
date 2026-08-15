@@ -17,6 +17,8 @@ export default function Page() {
         <div style={{ display: "flex", gap: "1.5rem", alignItems: "flex-start" }}>
           <div data-uai-block="colA" data-uai-kind="column" style={{ flex: "1", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "stretch", minWidth: 0 }}>
           </div>
+          <div data-uai-block="i5j0v66" data-uai-kind="column" style={{ flex: "1", display: "flex", flexDirection: "column", gap: "0.75rem", alignItems: "stretch", minWidth: 0 }}>
+          </div>
           <div data-uai-block="colB" data-uai-kind="column" style={{ flex: "4", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "stretch", minWidth: 0 }}>
             <button data-uai-block="b1" data-uai-kind="block" type="button" className="ui-card" style={{ padding: "0.5rem 1.25rem", cursor: "pointer", font: "inherit", border: "none" }}>ExploreG</button>
             <h2 data-uai-block="h2" data-uai-kind="block" style={{ margin: "0" }}>Source coverage</h2>
@@ -32,8 +34,6 @@ export default function Page() {
                 "streamingStages": []
               }} />
             </div>
-            <p data-uai-block="3hlogvb" data-uai-kind="block" style={{ margin: "0" }}>Some text.</p>
-            <p data-uai-block="t2" data-uai-kind="block" style={{ margin: "0" }}>Community, marketplace, expert, and hands-on signals in one view.</p>
           </div>
         </div>
       </section>
