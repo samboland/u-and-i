@@ -3,10 +3,12 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "electron/main.mjs",
   "description": "Visual editor for React/CSS where the code is the source of truth",
   "scripts": {
     "dev": "vite",
-    "app": "node scripts/app.mjs",
+    "app": "electron .",
+    "app:browser": "node scripts/app.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -25,6 +27,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
+    "electron": "^43.3.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
