@@ -1,5 +1,7 @@
 # u—i
 
+See `ROADMAP.md` for what's next and why.
+
 Visual editor for one real Next.js app. **The code is the document** — no
 save format, no codegen, no mirrors. We parse the target app's source,
 render it on a canvas, and write visual edits back as surgical AST changes.
