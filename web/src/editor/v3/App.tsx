@@ -39,6 +39,14 @@ import {
   vdiv,
   type DeviceName,
 } from "./chrome";
+import { StyleBody, useStyleTokens } from "./StyleWorkspace";
+import {
+  WS_INITIAL,
+  MAT_PRESETS,
+  WorkshopBody,
+  materialLines,
+  type WorkshopState,
+} from "./Workshop";
 import {
   GLYPH_OF,
   KIND_LABEL,
@@ -234,10 +242,17 @@ export function App() {
   const [search, setSearch] = useState("");
   const [interact, setInteract] = useState(false);
   const [propSpecs, setPropSpecs] = useState<Record<string, PropSpec[]>>({});
+  const [styleEdits, setStyleEdits] = useState(0);
+  const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
   }, []);
+
+  const styleTokens = useStyleTokens(send, () => {
+    setStyleEdits((e) => e + 1);
+    setSavedAt(new Date().toLocaleTimeString());
+  });
 
   // ------------------------------------------------------------------ persistence
 
@@ -998,14 +1013,65 @@ export function App() {
           <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>{hintLine}</span>
         </div>
       )}
-      {workspace !== "Layout" && (
-        <div style={{ flex: "0 0 auto", minHeight: 34, display: "flex", alignItems: "center", gap: 8, padding: "4px 10px", background: C.panel, borderBottom: `1px solid ${C.border}` }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-            <span style={{ width: 7, height: 7, background: workspace === "Style" ? C.blueLight : C.muted, borderRadius: 2 }} />
-            {workspace === "Style" ? "Theme" : "Material"}
+      {workspace === "Style" && (
+        <div style={{ flex: "0 0 auto", minHeight: 34, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", background: C.panel, borderBottom: `1px solid ${C.border}`, minWidth: 0 }}>
+          <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
+            <span style={{ width: 7, height: 7, background: C.blueLight, borderRadius: 2 }} />
+            Theme
           </span>
           <div style={vdiv} />
-          <span style={{ fontFamily: MONO, fontSize: 11, color: C.faint }}>this workspace lands in the next pass</span>
+          <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Preview</span>
+          <Seg items={[
+            { label: "Parchment", active: !themeDark, onClick: () => setThemeDark(false) },
+            { label: "Abyss", active: themeDark, onClick: () => setThemeDark(true) },
+          ]} />
+          <div style={vdiv} />
+          <button className="hv-primary" style={primaryBtn} title="Token edits write to source when committed" onClick={() => setSavedAt(new Date().toLocaleTimeString())}>Write to theme.css</button>
+          <button className="hv-ctl" style={{ ...ctlBtn, color: styleEdits ? C.body : C.faint }} onClick={() => { send({ type: "token-clear" }); void styleTokens.refetch(); }}>Reset tokens</button>
+          <div style={{ flex: "1 1 0", minWidth: 8 }} />
+          <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>
+            {styleEdits ? `${styleEdits} change${styleEdits === 1 ? "" : "s"} written · theme.css` : "in sync with theme.css"}
+          </span>
+        </div>
+      )}
+      {workspace === "Workshop" && (
+        <div style={{ flex: "0 0 auto", minHeight: 34, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", background: C.panel, borderBottom: `1px solid ${C.border}`, minWidth: 0 }}>
+          <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
+            <span style={{ width: 7, height: 7, background: C.muted, borderRadius: 2 }} />
+            Material
+          </span>
+          <Field mono value={wsMat.matName} style={{ flex: "0 0 168px", width: 168, height: 22 }} onCommit={(v) => setWsMat((w) => ({ ...w, matName: v.trim().replace(/[^\w-]/g, "-") || "material", written: false }))} />
+          <div style={vdiv} />
+          <Seg items={Object.keys(MAT_PRESETS).map((label) => ({
+            label,
+            active: wsMat.matPreset === label,
+            onClick: () => setWsMat((w) => ({ ...w, mat: { ...MAT_PRESETS[label] }, matPreset: label, matEdits: w.matEdits + 1, written: false, matName: `surface-${label.toLowerCase()}` })),
+          }))} />
+          <div style={vdiv} />
+          <button
+            className="hv-primary"
+            style={primaryBtn}
+            onClick={() => {
+              void api("/api/material", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: wsMat.matName, lines: materialLines(wsMat) }),
+              }).then(() => {
+                setWsMat((w) => ({ ...w, written: true, matEdits: 0 }));
+                setSavedAt(new Date().toLocaleTimeString());
+              });
+            }}
+          >
+            Write tokens
+          </button>
+          <button className="hv-ctl" style={{ ...ctlBtn, color: wsMat.matEdits ? C.body : C.faint }} onClick={() => setWsMat(WS_INITIAL)}>Revert</button>
+          <div style={{ flex: "1 1 0", minWidth: 8 }} />
+          <button className="hv-ctl" style={{ ...ctlBtn, height: 22, padding: "0 8px", fontFamily: MONO, fontSize: 11, color: C.muted }} title="Reset graph zoom" onClick={() => setWsMat((w) => ({ ...w, graphZoom: 1 }))}>
+            {Math.round(wsMat.graphZoom * 100)}%
+          </button>
+          <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>
+            {wsMat.matEdits ? `${wsMat.matEdits} unsaved change${wsMat.matEdits === 1 ? "" : "s"} · theme.css` : "in sync with theme.css"}
+          </span>
         </div>
       )}
 
@@ -1125,12 +1191,10 @@ export function App() {
               </div>
             </div>
           </>
+        ) : workspace === "Style" ? (
+          <StyleBody tokens={styleTokens} dark={themeDark} />
         ) : (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
-            <div style={{ padding: 24, border: `1px dashed ${C.border}`, borderRadius: 8, color: C.faint, fontSize: 12, maxWidth: 420, lineHeight: 1.6 }}>
-              The {workspace} workspace is designed (see design/editor-redesign.dc.html) and lands in the next implementation pass. Layout is fully live.
-            </div>
-          </div>
+          <WorkshopBody ws={wsMat} setWs={setWsMat} />
         )}
 
         {/* ---------------------------------------------------- Right column */}

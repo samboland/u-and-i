@@ -54,13 +54,17 @@
             {
               "id": "b1",
               "type": "button",
-              "label": "ExploreG"
+              "label": "ExploreG",
+              "styles": {},
+              "margin": "0"
             },
             {
               "id": "h2",
               "type": "heading",
               "level": 2,
-              "text": "Source coverage"
+              "text": "Source coverage",
+              "margin": "0",
+              "styles": {}
             },
             {
               "id": "cmp2",

@@ -362,3 +362,12 @@
      thick end so its rim can hand over to the corner arc at full strength. */
   --ui-header-rim-reach: 5px;
 }
+
+/* @uai-materials — written by the u-and-i Workshop */
+:root {
+  --material-surface-raised-radius: 11px;
+  --material-surface-raised-surface: #f3e8db;
+  --material-surface-raised-shadow: -3.5px 3.5px 14px 0px rgba(44,34,30,0.286), 3.5px -3.5px 14px 0px rgba(255,255,255,0.504), inset -3.5px 3.5px 14px rgba(44,34,30,0.054), inset 3.5px -3.5px 14px rgba(255,255,255,0.088), inset 0 1px 0 rgba(255,255,255,0.95);
+  --material-surface-raised-shadow-pressed: -3.5px 3.5px 9.8px 0px rgba(44,34,30,0.136), 3.5px -3.5px 9.8px 0px rgba(255,255,255,0.240), inset -3.5px 3.5px 9.8px rgba(44,34,30,0.204), inset 3.5px -3.5px 9.8px rgba(255,255,255,0.330), inset 0 1px 0 rgba(255,255,255,0.95);
+}
+/* @uai-materials-end */

@@ -117,6 +117,37 @@ export function uaiApi(repoRoot: string): Plugin {
             return json(200, { tokens });
           }
 
+          if (url.pathname === "/api/material" && req.method === "POST") {
+            // Workshop output: maintain a marked block at the end of theme.css
+            // holding --material-* tokens. Lines for the same material name are
+            // replaced; other materials are preserved.
+            const { name, lines } = (await readBody(req)) as {
+              name: string;
+              lines: string[];
+            };
+            if (!/^[\w-]+$/.test(name)) throw new Error("bad material name");
+            const themePath = abs("fixtures/demo-project/src/theme.css");
+            const css = fs.readFileSync(themePath, "utf8");
+            const START = "/* @uai-materials — written by the u-and-i Workshop */";
+            const END = "/* @uai-materials-end */";
+            let existing: string[] = [];
+            let base = css;
+            const si = css.indexOf(START);
+            if (si >= 0) {
+              const ei = css.indexOf(END);
+              const block = css.slice(si, ei);
+              existing = block
+                .split("\n")
+                .filter((l) => l.trim().startsWith("--"))
+                .filter((l) => !l.trim().startsWith(`--material-${name}-`));
+              base = css.slice(0, si).trimEnd() + "\n" + css.slice(ei + END.length).trimStart();
+            }
+            const decls = [...existing, ...lines.map((l) => `  ${l.trim()}`)];
+            const block = `${START}\n:root {\n${decls.join("\n")}\n}\n${END}\n`;
+            fs.writeFileSync(themePath, base.trimEnd() + "\n\n" + block, "utf8");
+            return json(200, { ok: true });
+          }
+
           if (url.pathname === "/api/token" && req.method === "POST") {
             const { file, decl, value } = await readBody(req);
             const full = abs(file);
