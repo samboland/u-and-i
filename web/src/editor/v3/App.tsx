@@ -845,7 +845,10 @@ export function App() {
   /** Draw both rulers: ticks in page units (px or rem) anchored to the page
    * origin the harness reports, so they track pan and zoom exactly. */
   const drawRulers = useCallback(() => {
-    const dpr = window.devicePixelRatio || 1;
+    // App zoom scales the canvas bitmap after rasterization — bake it into
+    // the backing store (and align ticks to the device grid) so the rulers
+    // stay crisp at any chrome zoom.
+    const dpr = (window.devicePixelRatio || 1) * appZoom;
     const unitPx = rulerUnit === "rem" ? 16 : 1;
     const pxPerUnit = unitPx * zoom;
     let minorStep = rulerUnit === "rem" ? 1 : 10;
@@ -865,12 +868,13 @@ export function App() {
       if (!ctx) continue;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      ctx.lineWidth = 1 / dpr;
       ctx.font = "8px ui-monospace, monospace";
       const origin = horiz ? stageXY.current.x : stageXY.current.y;
       const length = horiz ? w : h;
       const start = Math.floor(-origin / (minorStep * pxPerUnit)) * minorStep;
       for (let u = start; origin + u * pxPerUnit <= length; u += minorStep) {
-        const p = Math.round(origin + u * pxPerUnit) + 0.5;
+        const p = (Math.round((origin + u * pxPerUnit) * dpr) + 0.5) / dpr;
         if (p < 0) continue;
         const isMajor = u % majorStep === 0;
         ctx.strokeStyle = isMajor ? C.borderHover : C.border;
@@ -896,7 +900,7 @@ export function App() {
         }
       }
     }
-  }, [zoom, rulerUnit]);
+  }, [zoom, rulerUnit, appZoom]);
   drawRulersRef.current = drawRulers;
 
   useEffect(() => {
