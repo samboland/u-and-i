@@ -16,6 +16,7 @@ import { extractProps } from "./props.ts";
 import { getProject, targetRootPath, type UaiProject } from "./projects.ts";
 import { scanRoutes } from "./routes.ts";
 import { analyzeShell } from "./shell.ts";
+import { getLivePort, liveProxyOptions } from "./live-proxy.ts";
 
 /** data-uai ids and request keys share this prefix + project-relative path. */
 export const APP_PREFIX = "app:";
@@ -179,7 +180,15 @@ export function uaiApi(repoRoot: string): Plugin {
           const project = getProject(repoRoot);
 
           if (url.pathname === "/api/project" && req.method === "GET") {
-            return json(200, { project });
+            // `live` is where the canvas can reach the target's own running
+            // dev server through our mirror (see server/live-proxy.ts).
+            const livePort = getLivePort();
+            return json(200, {
+              project,
+              live: livePort
+                ? { origin: `http://localhost:${livePort}`, upstream: liveProxyOptions(repoRoot).upstream }
+                : null,
+            });
           }
 
           if (url.pathname === "/api/routes" && req.method === "GET") {

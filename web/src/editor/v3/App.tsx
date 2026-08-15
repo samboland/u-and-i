@@ -105,6 +105,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** Which canvas is on screen: one component we render ourselves, or the
+ * target's own running app mirrored through the live proxy. */
+type CanvasMode = "component" | "live";
+
+/** Frame heights for the live canvas (the component canvas scrolls its own
+ * stage, so it only ever needed widths). */
+const DEVICE_HEIGHT: Record<DeviceName, number> = { Desktop: 820, Tablet: 1112, Phone: 844 };
+
 /** The one text slot an element can be edited in place through, or null when
  * its content is richer than a single JSXText child. */
 function inlineTextSlot(node: JsxNodeModel | null): number | null {
@@ -198,6 +206,14 @@ export function App() {
   const [role, setRole] = useState("Traveler");
   const [search, setSearch] = useState("");
   const [interact, setInteract] = useState(false);
+  // Live canvas: the target's own running dev server, mirrored by
+  // server/live-proxy.ts. `livePath` is the route we're showing; `liveUrl` is
+  // where the app actually ended up (it redirects, e.g. /account → /signin).
+  const [live, setLive] = useState<{ origin: string; upstream: string } | null>(null);
+  const [canvasMode, setCanvasMode] = useState<CanvasMode>("component");
+  const [livePath, setLivePath] = useState("/");
+  const [liveUrl, setLiveUrl] = useState<string | null>(null);
+  const liveFrameRef = useRef<HTMLIFrameElement>(null);
   const [styleEdits, setStyleEdits] = useState(0);
   const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
   const [appZoom, setAppZoom] = useState(() => loadPrefs().appZoom);
@@ -221,10 +237,11 @@ export function App() {
   // ------------------------------------------------------------------ boot
 
   useEffect(() => {
-    void api<{ project: { label: string; root: string } }>("/api/project")
+    void api<{ project: { label: string; root: string }; live: { origin: string; upstream: string } | null }>("/api/project")
       .then((d) => {
         setTargetLabel(d.project.label);
         setTargetRoot(d.project.root);
+        setLive(d.live);
         // Restore this project's last session.
         const session = loadProjectSession(d.project.root);
         if (session.device && session.device in DEVICES) setDevice(session.device);
@@ -493,6 +510,12 @@ export function App() {
     const onMessage = (e: MessageEvent<HarnessToEditor>) => {
       const msg = e.data;
       if (!msg || typeof msg !== "object") return;
+      // The live probe speaks its own dialect from a different origin.
+      if ((msg as { uai?: boolean }).uai) {
+        const live = msg as unknown as { type: string; url?: string };
+        if (live.type === "live-ready" && live.url) setLiveUrl(live.url);
+        return;
+      }
       if (msg.type === "ready") {
         harnessReady.current = true;
         const fsNow = fileStateRef.current;
@@ -1120,6 +1143,13 @@ export function App() {
             {/* Canvas region */}
             <div ref={canvasRegionRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 240, background: C.void }}>
               <div style={{ flex: "0 0 auto", minHeight: 30, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: `1px solid ${C.canvasEdge}`, background: C.canvasBar, minWidth: 0, position: "relative", zIndex: 25 }}>
+                <div title={live ? `Live app mirrors ${live.upstream}` : "Live app needs the target's dev server running"}>
+                  <Seg items={[
+                    { label: "Component", active: canvasMode === "component", onClick: () => setCanvasMode("component") },
+                    { label: "Live app", active: canvasMode === "live", onClick: () => setCanvasMode("live") },
+                  ]} />
+                </div>
+                <div style={{ ...vdiv, height: 16 }} />
                 <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
                 <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>{DEVICES[device].width}px</span>
                 <div style={{ ...vdiv, height: 16 }} />
@@ -1167,7 +1197,8 @@ export function App() {
                 </div>
               </div>
 
-              {rulersOn && (
+              {/* Rulers measure the component stage; the live app frames itself. */}
+              {rulersOn && canvasMode === "component" && (
                 <div style={{ flex: "0 0 16px", display: "flex", background: C.canvasBar, borderBottom: `1px solid ${C.canvasEdge}`, overflow: "hidden" }}>
                   <button
                     title="Ruler units (px / rem)"
@@ -1180,11 +1211,31 @@ export function App() {
                 </div>
               )}
               <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative" }}>
-                {rulersOn && (
+                {rulersOn && canvasMode === "component" && (
                   <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
                 )}
-                <iframe ref={iframeRef} src="/harness.html" title="canvas" style={{ flex: 1, border: "none", background: C.void }} />
-                {fileState && !fileState.renderable && !routeSel && (
+                {/* The component canvas stays mounted across a mode switch —
+                    reloading the harness would drop the rendered component
+                    and the sample props with it. */}
+                <iframe
+                  ref={iframeRef}
+                  src="/harness.html"
+                  title="canvas"
+                  style={{ flex: 1, border: "none", background: C.void, display: canvasMode === "live" ? "none" : "block" }}
+                />
+                {canvasMode === "live" && (
+                  <LiveCanvas
+                    live={live}
+                    frameRef={liveFrameRef}
+                    path={livePath}
+                    setPath={setLivePath}
+                    at={liveUrl}
+                    width={DEVICES[device].width}
+                    height={DEVICE_HEIGHT[device]}
+                    zoom={zoom}
+                  />
+                )}
+                {canvasMode === "component" && fileState && !fileState.renderable && !routeSel && (
                   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
                     <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
                       <span style={{ fontFamily: MONO, fontSize: 13, color: "#fff" }}>{fileState.file.split("/").pop()}</span>
@@ -1195,7 +1246,7 @@ export function App() {
                     </div>
                   </div>
                 )}
-                {routeSel && (
+                {canvasMode === "component" && routeSel && (
                   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
                     <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
                       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -1267,6 +1318,12 @@ export function App() {
                   onSelect={(n) => {
                     setRouteSel(n);
                     setFileFocusId(null);
+                    // In the live canvas a route is a place to go, not just a
+                    // set of files to read. Dynamic segments have no concrete
+                    // URL, so they stay put.
+                    if (canvasMode === "live" && n.files.page && !n.urlPath.includes("[")) {
+                      setLivePath(n.urlPath);
+                    }
                   }}
                 />
               )}
@@ -1460,6 +1517,102 @@ export function App() {
 // ---------------------------------------------------------------------------
 // Route card
 // ---------------------------------------------------------------------------
+
+/**
+ * The live canvas: the target's own running app, mirrored by the live proxy.
+ * We frame it (device width, zoom) and steer it (path), but we do not render
+ * it — everything inside the frame is the real app, real data included.
+ */
+function LiveCanvas({
+  live,
+  frameRef,
+  path,
+  setPath,
+  at,
+  width,
+  height,
+  zoom,
+}: {
+  live: { origin: string; upstream: string } | null;
+  frameRef: React.RefObject<HTMLIFrameElement | null>;
+  path: string;
+  setPath: (p: string) => void;
+  /** Where the app actually ended up — it redirects (e.g. /account → /signin). */
+  at: string | null;
+  width: number;
+  height: number;
+  zoom: number;
+}) {
+  const [draft, setDraft] = useState(path);
+  useEffect(() => setDraft(path), [path]);
+  if (!live) {
+    return (
+      <div style={{ flex: 1, display: "grid", placeItems: "center", background: C.void }}>
+        <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+          The live mirror isn't running. It starts with the u-and-i dev server; check the
+          console for <span style={{ fontFamily: MONO, fontSize: 10.5 }}>live app</span>.
+        </div>
+      </div>
+    );
+  }
+  // Compare paths, not prefixes: "/signin" starts with "/" too.
+  let landedElsewhere = false;
+  let landedAt = "";
+  try {
+    if (at) {
+      landedAt = new URL(at).pathname;
+      landedElsewhere = landedAt !== path;
+    }
+  } catch {
+    /* not a URL we can read — treat as no redirect */
+  }
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: C.void }}>
+      <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", background: C.canvasBar, borderBottom: `1px solid ${C.canvasEdge}` }}>
+        <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Path</span>
+        <input
+          className="fc"
+          aria-label="Live app path"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") setPath(draft.startsWith("/") ? draft : `/${draft}`);
+            if (e.key === "Escape") setDraft(path);
+          }}
+          style={{ ...inputStyle, flex: 1, minWidth: 0, height: 22, fontFamily: MONO, fontSize: 11 }}
+        />
+        <button className="hv-ctl" style={ctlBtn} title="Reload the live page" onClick={() => { if (frameRef.current) frameRef.current.src = `${live.origin}${path}`; }}>
+          Reload
+        </button>
+        <button className="hv-ctl" style={ctlBtn} title={`Open ${live.upstream}${path} in a browser`} onClick={() => window.open(`${live.upstream}${path}`, "_blank")}>
+          Open
+        </button>
+      </div>
+      {landedElsewhere && (
+        <div style={{ flex: "0 0 auto", padding: "3px 10px", background: C.amberBg, borderBottom: `1px solid ${C.amberBorder}`, fontSize: 10.5, color: C.amber }}>
+          The app sent us to <span style={{ fontFamily: MONO }}>{landedAt}</span> — usually a sign-in redirect. Sign in inside the canvas and it will stick.
+        </div>
+      )}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>
+        <div style={{ width: width * zoom, height: height * zoom, margin: "0 auto" }}>
+          <iframe
+            ref={frameRef}
+            src={`${live.origin}${path}`}
+            title="live app"
+            style={{
+              width,
+              height,
+              border: "none",
+              background: "#fff",
+              transform: `scale(${zoom})`,
+              transformOrigin: "top left",
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function RouteCard({
   route,
