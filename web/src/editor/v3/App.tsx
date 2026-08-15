@@ -111,6 +111,40 @@ function parentIndexOf(node: JsxNodeModel): number {
 }
 
 // ---------------------------------------------------------------------------
+// Persistent preferences (localStorage — editor state, never source truth)
+// ---------------------------------------------------------------------------
+
+interface Prefs {
+  appZoom: number;
+  rulersOn: boolean;
+  rulerUnit: "px" | "rem";
+  /** Restore the last open file (per target) on launch. */
+  reopenLast: boolean;
+}
+const DEFAULT_PREFS: Prefs = { appZoom: 1, rulersOn: true, rulerUnit: "px", reopenLast: true };
+
+function loadPrefs(): Prefs {
+  try {
+    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem("uai:prefs") ?? "{}") };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+interface ProjectSession {
+  openFile?: string;
+  device?: DeviceName;
+  zoom?: number;
+}
+function loadProjectSession(root: string): ProjectSession {
+  try {
+    return JSON.parse(localStorage.getItem(`uai:proj:${root}`) ?? "{}") as ProjectSession;
+  } catch {
+    return {};
+  }
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -147,23 +181,26 @@ export function App() {
   const [outlinerMode, setOutlinerMode] = useState<"File" | "Routes">("Routes");
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [rulersOn, setRulersOn] = useState(true);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [reopenLast, setReopenLast] = useState(() => loadPrefs().reopenLast);
+  const [rulersOn, setRulersOn] = useState(() => loadPrefs().rulersOn);
   const [device, setDevice] = useState<DeviceName>("Desktop");
   const [zoom, setZoom] = useState<number>(DEVICES.Desktop.zoom);
+  const [targetRoot, setTargetRoot] = useState<string | null>(null);
   const [themeDark, setThemeDark] = useState(false);
   const [role, setRole] = useState("Traveler");
   const [search, setSearch] = useState("");
   const [interact, setInteract] = useState(false);
   const [styleEdits, setStyleEdits] = useState(0);
   const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
-  const [appZoom, setAppZoom] = useState(1);
+  const [appZoom, setAppZoom] = useState(() => loadPrefs().appZoom);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const handleChordRef = useRef<(c: { key: string; mod: boolean; shift: boolean; alt: boolean }) => boolean>(() => false);
   const hRuler = useRef<HTMLCanvasElement>(null);
   const vRuler = useRef<HTMLCanvasElement>(null);
   const stageXY = useRef({ x: 0, y: 0 });
   const drawRulersRef = useRef<() => void>(() => {});
-  const [rulerUnit, setRulerUnit] = useState<"px" | "rem">("px");
+  const [rulerUnit, setRulerUnit] = useState<"px" | "rem">(() => loadPrefs().rulerUnit);
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -177,14 +214,47 @@ export function App() {
   // ------------------------------------------------------------------ boot
 
   useEffect(() => {
-    void api<{ project: { label: string } }>("/api/project")
-      .then((d) => setTargetLabel(d.project.label))
+    void api<{ project: { label: string; root: string } }>("/api/project")
+      .then((d) => {
+        setTargetLabel(d.project.label);
+        setTargetRoot(d.project.root);
+        // Restore this project's last session.
+        const session = loadProjectSession(d.project.root);
+        if (session.device && session.device in DEVICES) setDevice(session.device);
+        if (session.zoom && ZOOMS.includes(session.zoom)) setZoom(session.zoom);
+        if (loadPrefs().reopenLast && session.openFile) {
+          void openFileRef.current(session.openFile).catch(() => {});
+        }
+      })
       .catch(() => setTargetLabel("no target app"));
     void api<{ tree: RouteNode }>("/api/routes").then((r) => setRouteTree(r.tree)).catch(() => {});
     void api<{ files: string[]; meta: Record<string, { serverOnly: boolean; exportName?: string }> }>(
       "/api/components",
     ).then(setComponents).catch(() => {});
   }, []);
+
+  // Persist global prefs + the per-project session as they change.
+  useEffect(() => {
+    try {
+      const prefs: Prefs = { appZoom, rulersOn, rulerUnit, reopenLast };
+      localStorage.setItem("uai:prefs", JSON.stringify(prefs));
+    } catch {
+      /* storage unavailable — prefs just don't persist */
+    }
+  }, [appZoom, rulersOn, rulerUnit, reopenLast]);
+
+  useEffect(() => {
+    if (!targetRoot) return;
+    try {
+      // Keep the last-known open file even while nothing is open (e.g. the
+      // brief window during boot restore) — closing isn't a concept here.
+      const existing = loadProjectSession(targetRoot);
+      const session: ProjectSession = { openFile: fileState?.file ?? existing.openFile, device, zoom };
+      localStorage.setItem(`uai:proj:${targetRoot}`, JSON.stringify(session));
+    } catch {
+      /* ditto */
+    }
+  }, [targetRoot, fileState?.file, device, zoom]);
 
   // Shell analysis for the selected route.
   useEffect(() => {
@@ -517,7 +587,7 @@ export function App() {
       if (c.mod && !c.shift && k === "z") undoAction();
       else if (c.mod && c.shift && k === "z") redoAction();
       else if (c.key === "Tab" && workspace === "Layout") setInteract((v) => !v);
-      else if (c.key === "Escape") setCtxMenu(null);
+      else if (c.key === "Escape") { setCtxMenu(null); setPrefsOpen(false); }
       // Application (chrome) zoom: Ctrl+Shift+± — canvas zoom: plain Ctrl+±.
       else if (c.mod && c.shift && (c.key === "+" || c.key === "=")) {
         setAppZoom((z) => Math.min(1.5, Math.round((z + 0.1) * 10) / 10));
@@ -674,6 +744,8 @@ export function App() {
         { sep: true },
         { label: "Move up", accel: "Alt+Up", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: Math.max(0, fileNode.slot - 2) }, fileNode.tag) },
         { label: "Move down", accel: "Alt+Down", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: fileNode.slot + 2 }, fileNode.tag) },
+        { sep: true },
+        { label: "Preferences…", action: () => setPrefsOpen(true) },
       ],
     },
     {
@@ -1235,6 +1307,78 @@ export function App() {
           </div>
         );
       })()}
+
+      {/* ---------------------------------------------------------- Preferences */}
+      {prefsOpen && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }}
+          onClick={() => setPrefsOpen(false)}
+        >
+          <div
+            style={{ width: 420, maxWidth: "90vw", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 24px 60px rgba(0,0,0,0.6)", display: "flex", flexDirection: "column" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#fff" }}>Preferences</span>
+              <button className="hv-close" style={{ width: 26, height: 22, background: "none", border: "none", color: C.muted, cursor: "pointer", borderRadius: 4 }} onClick={() => setPrefsOpen(false)}>✕</button>
+            </div>
+            <div style={{ padding: "12px 14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ ...sectionHeader }}>Application</div>
+              <Row label="Scale">
+                <Seg grow items={[0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.5].map((z) => ({
+                  label: `${Math.round(z * 100)}%`,
+                  active: Math.abs(appZoom - z) < 0.01,
+                  onClick: () => setAppZoom(z),
+                }))} />
+              </Row>
+              <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5, marginTop: -4 }}>
+                Also Ctrl+Shift+± anywhere; Ctrl+Shift+0 resets. Remembered across sessions.
+              </div>
+
+              <div style={{ ...sectionHeader, marginTop: 4 }}>Canvas</div>
+              <Row label="Rulers">
+                <Seg grow items={[
+                  { label: "Shown", active: rulersOn, onClick: () => setRulersOn(true) },
+                  { label: "Hidden", active: !rulersOn, onClick: () => setRulersOn(false) },
+                ]} />
+              </Row>
+              <Row label="Ruler units">
+                <Seg grow items={(["px", "rem"] as const).map((u) => ({
+                  label: u,
+                  active: rulerUnit === u,
+                  onClick: () => setRulerUnit(u),
+                }))} />
+              </Row>
+
+              <div style={{ ...sectionHeader, marginTop: 4 }}>Session</div>
+              <Row label="On launch">
+                <Seg grow items={[
+                  { label: "Reopen last file", active: reopenLast, onClick: () => setReopenLast(true) },
+                  { label: "Start empty", active: !reopenLast, onClick: () => setReopenLast(false) },
+                ]} />
+              </Row>
+              <Row label="Remembered">
+                <button
+                  className="hv-ctl"
+                  style={ctlBtn}
+                  onClick={() => {
+                    for (let i = localStorage.length - 1; i >= 0; i--) {
+                      const k = localStorage.key(i);
+                      if (k?.startsWith("uai:proj:") || k?.startsWith("uai:samples:")) localStorage.removeItem(k);
+                    }
+                  }}
+                >
+                  Clear sessions & sample props
+                </button>
+              </Row>
+
+              <div style={{ marginTop: 6, padding: "8px 10px", background: C.sunken, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
+                More settings will land here as the editor grows — keyboard remapping, default device, canvas theme, target switching.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ---------------------------------------------------------- StatusBar */}
       <div style={{ flex: "0 0 26px", display: "flex", alignItems: "center", gap: 10, padding: "0 10px", background: C.panel, borderTop: `1px solid ${C.border}`, fontSize: 11, minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
