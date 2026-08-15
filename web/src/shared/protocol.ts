@@ -46,5 +46,6 @@ export type HarnessToEditor =
   | { type: "context-menu"; id: string | null; x: number; y: number }
   | { type: "toggle-interact" }
   | { type: "escape" }
+  | { type: "key"; key: string; ctrl: boolean; shift: boolean; alt: boolean }
   | { type: "zoom-wheel"; dir: 1 | -1 }
   | { type: "render-error"; message: string };

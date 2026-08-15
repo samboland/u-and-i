@@ -263,6 +263,9 @@ export function App() {
   const [appZoom, setAppZoom] = useState(1);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const clipboard = useRef<{ kind: SelKind; node: Section | Column | Block } | null>(null);
+  // Filled in below once handleChord exists; the harness message handler
+  // reads it so iframe-forwarded shortcuts never go through a stale closure.
+  const handleChordRef = useRef<(c: { key: string; mod: boolean; shift: boolean; alt: boolean }) => boolean>(() => false);
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -530,6 +533,8 @@ export function App() {
         setInteract((v) => !v);
       } else if (msg.type === "escape") {
         setCtxMenu(null);
+      } else if (msg.type === "key") {
+        handleChordRef.current({ key: msg.key, mod: msg.ctrl, shift: msg.shift, alt: msg.alt });
       }
     };
     window.addEventListener("message", onMessage);
@@ -761,46 +766,55 @@ export function App() {
 
   // ------------------------------------------------------------------ keyboard
 
+  /** One shortcut map for both key sources: the chrome's own keydown events
+   * and chords forwarded from the focused canvas iframe. Returns handled. */
+  const handleChord = useCallback(
+    (c: { key: string; mod: boolean; shift: boolean; alt: boolean }): boolean => {
+      const k = c.key.toLowerCase();
+      if (c.mod && !c.shift && k === "z") undoAction();
+      else if (c.mod && c.shift && k === "z") redoAction();
+      else if (c.mod && k === "d") duplicateAction();
+      else if (c.mod && k === "c") { if (!window.getSelection()?.toString()) copyAction(); }
+      else if (c.mod && k === "x") cutAction();
+      else if (c.mod && k === "v") pasteAction();
+      else if (c.key === "Tab" && workspace === "Layout") setInteract((v) => !v);
+      else if (c.key === "Escape") setCtxMenu(null);
+      else if (c.key === "Delete") deleteSel();
+      else if (c.alt && c.key === "ArrowUp") moveBy(-1);
+      else if (c.alt && c.key === "ArrowDown") moveBy(1);
+      else if (c.key === "F2" && selRef.current.kind === "block" && selRef.current.id) {
+        send({ type: "begin-edit", id: selRef.current.id });
+      }
+      // Application (chrome) zoom: Ctrl+Shift+± — canvas zoom: plain Ctrl+±.
+      else if (c.mod && c.shift && (c.key === "+" || c.key === "=")) {
+        setAppZoom((z) => Math.min(1.5, Math.round((z + 0.1) * 10) / 10));
+      } else if (c.mod && c.shift && (c.key === "_" || c.key === "-")) {
+        setAppZoom((z) => Math.max(0.7, Math.round((z - 0.1) * 10) / 10));
+      } else if (c.mod && c.shift && c.key === ")") setAppZoom(1);
+      else if (c.mod && (c.key === "=" || c.key === "+")) zoomBy(1);
+      else if (c.mod && c.key === "-") zoomBy(-1);
+      else if (c.mod && c.key === "0") setZoom(DEVICES[device].zoom);
+      else if (k === "p" && !c.mod && !c.alt) setPreviewOpen((v) => !v);
+      else if (c.alt && ["1", "2", "3", "4"].includes(c.key)) {
+        setCanvasState(CANVAS_STATES[Number(c.key) - 1]);
+      } else return false;
+      return true;
+    },
+    [undoAction, redoAction, duplicateAction, copyAction, cutAction, pasteAction, deleteSel, moveBy, zoomBy, device, send, workspace],
+  );
+  handleChordRef.current = handleChord;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); undoAction(); }
-      else if (mod && e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); redoAction(); }
-      else if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateAction(); }
-      else if (mod && e.key.toLowerCase() === "c" && !window.getSelection()?.toString()) copyAction();
-      else if (mod && e.key.toLowerCase() === "x") { e.preventDefault(); cutAction(); }
-      else if (mod && e.key.toLowerCase() === "v") { e.preventDefault(); pasteAction(); }
-      else if (e.key === "Tab" && workspace === "Layout") { e.preventDefault(); setInteract((v) => !v); }
-      else if (e.key === "Escape") setCtxMenu(null);
-      else if (e.key === "Delete") deleteSel();
-      else if (e.altKey && e.key === "ArrowUp") { e.preventDefault(); moveBy(-1); }
-      else if (e.altKey && e.key === "ArrowDown") { e.preventDefault(); moveBy(1); }
-      else if (e.key === "F2" && selRef.current.kind === "block" && selRef.current.id) {
-        send({ type: "begin-edit", id: selRef.current.id });
-      }
-      // Application (chrome) zoom: Ctrl+Shift+± — canvas zoom: plain Ctrl+±.
-      else if (mod && e.shiftKey && (e.key === "+" || e.key === "=")) {
+      if (handleChord({ key: e.key, mod: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey })) {
         e.preventDefault();
-        setAppZoom((z) => Math.min(1.5, Math.round((z + 0.1) * 10) / 10));
-      } else if (mod && e.shiftKey && (e.key === "_" || e.key === "-")) {
-        e.preventDefault();
-        setAppZoom((z) => Math.max(0.7, Math.round((z - 0.1) * 10) / 10));
-      } else if (mod && e.shiftKey && e.key === ")") {
-        e.preventDefault();
-        setAppZoom(1);
-      } else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoomBy(1); }
-      else if (mod && e.key === "-") { e.preventDefault(); zoomBy(-1); }
-      else if (mod && e.key === "0") { e.preventDefault(); setZoom(DEVICES[device].zoom); }
-      else if (e.key.toLowerCase() === "p" && !mod) setPreviewOpen((v) => !v);
-      else if (e.altKey && ["1", "2", "3", "4"].includes(e.key)) {
-        setCanvasState(CANVAS_STATES[Number(e.key) - 1]);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undoAction, redoAction, duplicateAction, copyAction, cutAction, pasteAction, deleteSel, moveBy, zoomBy, device, send, workspace]);
+  }, [handleChord]);
 
   // Ctrl+scroll over the chrome's canvas region (rulers, void margins) zooms
   // the page; scrolls over the iframe itself arrive via the zoom-wheel message.

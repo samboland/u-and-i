@@ -529,7 +529,10 @@ function Stage() {
       const id = el?.getAttribute("data-uai-block") ?? null;
       post({ type: "context-menu", id, x: e.clientX, y: e.clientY });
     };
-    // Tab flips the editor's Edit/View mode even while the page has focus.
+    // The editor's shortcuts must keep working while the page has focus:
+    // Tab and Escape always forward; in Edit mode every shortcut chord
+    // (modifier combos, Delete, F2) forwards too. View mode leaves the
+    // keyboard to the page itself.
     const key = (e: KeyboardEvent) => {
       if (stageRef.current?.mode !== "page") return;
       const t = e.target as HTMLElement;
@@ -537,9 +540,16 @@ function Stage() {
       if (e.key === "Tab") {
         e.preventDefault();
         post({ type: "toggle-interact" });
-      } else if (e.key === "Escape") {
-        post({ type: "escape" });
+        return;
       }
+      if (e.key === "Escape") {
+        post({ type: "escape" });
+        return;
+      }
+      if (interact.current) return;
+      if (!(e.ctrlKey || e.metaKey || e.altKey || e.key === "Delete" || e.key === "F2")) return;
+      e.preventDefault();
+      post({ type: "key", key: e.key, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey });
     };
     document.addEventListener("mouseover", over);
     document.addEventListener("click", click, true);
