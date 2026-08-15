@@ -353,6 +353,7 @@ function Stage() {
         .forEach((el) => el.classList.add("uai-selected"));
     }
     document.body.classList.toggle("uai-page-mode", stage?.mode === "page");
+    document.documentElement.classList.toggle("uai-page-mode", stage?.mode === "page");
     if (stage?.mode === "page") {
       document
         .querySelectorAll<HTMLElement>('[data-uai-kind="block"], [data-uai-kind="section"]')
