@@ -1,19 +1,22 @@
 /**
- * Electron shell: runs the u-and-i daemon (Vite + AST engine) inside the main
- * process and opens the editor in a native window. The entire web codebase is
- * unchanged — this is the VS Code recipe: Node kernel + Chromium shell.
+ * Electron shell: spawns the u-and-i daemon (Vite + AST engine) as a Node
+ * child process and opens the editor in a native window. The server runs
+ * outside the GUI process (see electron/server.mjs for why — Windows plays
+ * the system error sound for failed DLL probes in GUI processes), and a
+ * server crash can't take the window down.
  */
 import { app, BrowserWindow, Menu } from "electron";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-/** @type {import("vite").ViteDevServer | undefined} */
-let viteServer;
+/** @type {import("node:child_process").ChildProcess | undefined} */
+let serverProc;
 
 // Every failure-shaped event, timestamped — for chasing environment-specific
-// launch problems (e.g. the mystery error sound on some starts).
+// launch problems.
 const t0 = Date.now();
 const diag = (name, detail) =>
   console.warn(`[diag +${((Date.now() - t0) / 1000).toFixed(1)}s] ${name}${detail ? ` ${detail}` : ""}`);
@@ -22,25 +25,38 @@ app.on("render-process-gone", (_e, _wc, d) => diag("render-process-gone", JSON.s
 process.on("uncaughtException", (err) => diag("uncaughtException", String(err?.stack ?? err)));
 process.on("unhandledRejection", (err) => diag("unhandledRejection", String(err)));
 
-async function start() {
-  // Bisect mode for the launch error-sound hunt: UAI_BARE=1 skips vite
-  // entirely and opens a static window, so a ding here means Chromium's own
-  // process startup; silence means the Node/vite side.
-  if (process.env.UAI_BARE) {
-    Menu.setApplicationMenu(null);
-    const win = new BrowserWindow({ width: 600, height: 300, title: "u-and-i bare", backgroundColor: "#16181d" });
-    await win.loadURL(
-      "data:text/html,<body style='background:%2316181d;color:%23e8eaee;font-family:sans-serif'><h2>bare mode — no vite</h2></body>",
-    );
-    return;
-  }
-  const { createServer } = await import("vite");
-  viteServer = await createServer({
-    configFile: path.join(repoRoot, "vite.config.ts"),
+/** Start server.mjs under Electron-as-Node; resolves with the port. */
+function startServer() {
+  return new Promise((resolve, reject) => {
+    serverProc = spawn(process.execPath, [path.join(repoRoot, "electron", "server.mjs")], {
+      cwd: repoRoot,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    let buf = "";
+    let ready = false;
+    serverProc.stdout.on("data", (chunk) => {
+      const text = String(chunk);
+      if (!ready) {
+        buf += text;
+        const m = buf.match(/^UAI_PORT (\d+)$/m);
+        if (m) {
+          ready = true;
+          resolve(Number(m[1]));
+        }
+      }
+      process.stdout.write(text);
+    });
+    serverProc.on("exit", (code) => {
+      diag("server exited", `code ${code}`);
+      serverProc = undefined;
+      if (!ready) reject(new Error(`server exited before ready (code ${code})`));
+    });
   });
-  await viteServer.listen();
-  const address = viteServer.httpServer?.address();
-  const port = typeof address === "object" && address ? address.port : 4400;
+}
+
+async function start() {
+  const port = await startServer();
 
   // The editor draws its own menu bar — the native one would duplicate it.
   Menu.setApplicationMenu(null);
@@ -80,11 +96,6 @@ app.whenReady().then(start);
 
 app.on("window-all-closed", () => app.quit());
 
-app.on("will-quit", (e) => {
-  if (viteServer) {
-    e.preventDefault();
-    const server = viteServer;
-    viteServer = undefined;
-    void server.close().finally(() => app.quit());
-  }
+app.on("will-quit", () => {
+  serverProc?.kill();
 });
