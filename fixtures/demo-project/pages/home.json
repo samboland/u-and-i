@@ -35,6 +35,18 @@
       "gap": "1.5rem",
       "columns": [
         {
+          "id": "colA",
+          "flex": "1",
+          "gap": "1rem",
+          "blocks": []
+        },
+        {
+          "id": "i5j0v66",
+          "flex": "1",
+          "gap": "0.75rem",
+          "blocks": []
+        },
+        {
           "id": "colB",
           "flex": "4",
           "gap": "1rem",
@@ -49,7 +61,7 @@
             {
               "id": "h2",
               "type": "heading",
-              "level": 1,
+              "level": 2,
               "text": "Source coverage",
               "styles": {}
             },
