@@ -93,6 +93,9 @@ function Stage() {
   const selMetaRef = useRef(selMeta);
   selMetaRef.current = selMeta;
   const [frame, setFrame] = useState({ width: 1100, zoom: 0.62 });
+  const frameRef = useRef(frame);
+  frameRef.current = frame;
+  const zoomAnchor = useRef<{ x: number; y: number; zoom: number } | null>(null);
   const [canvasState, setCanvasState] = useState<CanvasState>("Default");
   const [showNotes, setShowNotes] = useState(true);
   const [annotations, setAnnotations] = useState<{
@@ -244,6 +247,46 @@ function Stage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Cursor-anchored zoom: when the zoom the editor sent back lands, shift
+  // scroll so the content point under the cursor stays under the cursor.
+  useEffect(() => {
+    const anchor = zoomAnchor.current;
+    if (!anchor || stage?.mode !== "page" || frame.zoom === anchor.zoom) return;
+    zoomAnchor.current = null;
+    const el = document.querySelector<HTMLElement>("[data-uai-stage]");
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const originX = rect.left + window.scrollX;
+    const originY = rect.top + window.scrollY;
+    const cx = (window.scrollX + anchor.x - originX) / anchor.zoom;
+    const cy = (window.scrollY + anchor.y - originY) / anchor.zoom;
+    window.scrollTo({
+      left: originX + cx * frame.zoom - anchor.x,
+      top: originY + cy * frame.zoom - anchor.y,
+    });
+  }, [frame.zoom, stage]);
+
+  // Center the page inside the void apron on load / page or device change
+  // (not on zoom — zooming must not yank the pan position).
+  const centeredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (stage?.mode !== "page") {
+      centeredFor.current = null;
+      return;
+    }
+    const key = `${stage.file}:${frame.width}`;
+    if (centeredFor.current === key) return;
+    centeredFor.current = key;
+    const raf = requestAnimationFrame(() => {
+      const stageW = frame.width * frame.zoom;
+      window.scrollTo({
+        left: window.innerWidth * 0.85 - Math.max(0, (window.innerWidth - stageW) / 2),
+        top: window.innerHeight * 0.85 - 22,
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [stage, frame]);
+
   // Middle-mouse drag pans the canvas (suppresses the browser's autoscroll).
   useEffect(() => {
     let pan: { x: number; y: number } | null = null;
@@ -278,6 +321,7 @@ function Stage() {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey || stageRef.current?.mode !== "page") return;
       e.preventDefault();
+      zoomAnchor.current = { x: e.clientX, y: e.clientY, zoom: frameRef.current.zoom };
       post({ type: "zoom-wheel", dir: e.deltaY < 0 ? 1 : -1 });
     };
     window.addEventListener("wheel", onWheel, { passive: false });
@@ -747,13 +791,17 @@ function Stage() {
   if (!stage) return null;
 
   if (stage.mode === "page") {
+    // The void apron around the page lets you pan past the content edges in
+    // every direction; a centering scroll on load puts the page in view.
     return (
-      <div style={{ width: stage ? frame.width * frame.zoom : "auto", margin: "0 auto" }}>
-        <div style={{ width: frame.width, transform: `scale(${frame.zoom})`, transformOrigin: "top left" }}>
-          <div className="uai-page-surface">
-            <Boundary resetKey={stage.file}>
-              <stage.Component />
-            </Boundary>
+      <div style={{ padding: "85vh 85vw", width: "max-content" }}>
+        <div style={{ width: frame.width * frame.zoom }}>
+          <div data-uai-stage style={{ width: frame.width, transform: `scale(${frame.zoom})`, transformOrigin: "top left" }}>
+            <div className="uai-page-surface">
+              <Boundary resetKey={stage.file}>
+                <stage.Component />
+              </Boundary>
+            </div>
           </div>
         </div>
       </div>
