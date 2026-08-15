@@ -23,6 +23,17 @@ process.on("uncaughtException", (err) => diag("uncaughtException", String(err?.s
 process.on("unhandledRejection", (err) => diag("unhandledRejection", String(err)));
 
 async function start() {
+  // Bisect mode for the launch error-sound hunt: UAI_BARE=1 skips vite
+  // entirely and opens a static window, so a ding here means Chromium's own
+  // process startup; silence means the Node/vite side.
+  if (process.env.UAI_BARE) {
+    Menu.setApplicationMenu(null);
+    const win = new BrowserWindow({ width: 600, height: 300, title: "u-and-i bare", backgroundColor: "#16181d" });
+    await win.loadURL(
+      "data:text/html,<body style='background:%2316181d;color:%23e8eaee;font-family:sans-serif'><h2>bare mode — no vite</h2></body>",
+    );
+    return;
+  }
   const { createServer } = await import("vite");
   viteServer = await createServer({
     configFile: path.join(repoRoot, "vite.config.ts"),
