@@ -12,6 +12,16 @@ const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 /** @type {import("vite").ViteDevServer | undefined} */
 let viteServer;
 
+// Every failure-shaped event, timestamped — for chasing environment-specific
+// launch problems (e.g. the mystery error sound on some starts).
+const t0 = Date.now();
+const diag = (name, detail) =>
+  console.warn(`[diag +${((Date.now() - t0) / 1000).toFixed(1)}s] ${name}${detail ? ` ${detail}` : ""}`);
+app.on("child-process-gone", (_e, d) => diag("child-process-gone", JSON.stringify(d)));
+app.on("render-process-gone", (_e, _wc, d) => diag("render-process-gone", JSON.stringify(d)));
+process.on("uncaughtException", (err) => diag("uncaughtException", String(err?.stack ?? err)));
+process.on("unhandledRejection", (err) => diag("unhandledRejection", String(err)));
+
 async function start() {
   const { createServer } = await import("vite");
   viteServer = await createServer({
