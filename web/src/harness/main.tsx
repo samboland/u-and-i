@@ -629,15 +629,25 @@ function Stage() {
       e.preventDefault();
       post({ type: "key", key: e.key, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey });
     };
+    // Component mode: double-click descends into the element's source file.
+    const dbl = (e: MouseEvent) => {
+      if (interact.current || stageRef.current?.mode !== "component") return;
+      const el = (e.target as Element).closest?.("[data-uai]");
+      if (!el) return;
+      e.preventDefault();
+      post({ type: "open-component", id: el.getAttribute("data-uai")! });
+    };
     document.addEventListener("mouseover", over);
     document.addEventListener("click", click, true);
     document.addEventListener("contextmenu", ctx);
     document.addEventListener("keydown", key);
+    document.addEventListener("dblclick", dbl);
     return () => {
       document.removeEventListener("mouseover", over);
       document.removeEventListener("click", click, true);
       document.removeEventListener("contextmenu", ctx);
       document.removeEventListener("keydown", key);
+      document.removeEventListener("dblclick", dbl);
     };
   }, []);
 

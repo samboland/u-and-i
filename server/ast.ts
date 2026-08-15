@@ -282,7 +282,7 @@ function propsModel(node: Record<string, unknown>): PropModel[] {
 }
 
 /** Local component name → import specifier, from the file's import declarations. */
-function importMap(ast: unknown): Map<string, string> {
+export function importMap(ast: unknown): Map<string, string> {
   const map = new Map<string, string>();
   const body = (ast as { program: { body: unknown[] } }).program.body;
   for (const stmt of body) {

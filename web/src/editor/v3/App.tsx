@@ -210,13 +210,18 @@ export function App() {
   const [routeTree, setRouteTree] = useState<RouteNode | null>(null);
   const routesFetched = useRef(false);
   const [routeSel, setRouteSel] = useState<RouteNode | null>(null);
+  const [routeShell, setRouteShell] = useState<{
+    viewFile: string | null;
+    viewTag: string | null;
+    contentNote: string | null;
+  } | null>(null);
   // Which design system the canvas iframe runs; AA components preview in a
   // dedicated ?project=aa document so the two .ui-* systems never mix.
   const [canvasProject, setCanvasProject] = useState<"demo" | "aa">("demo");
   const [insertSource, setInsertSource] = useState<"Demo kit" | "Adventure Alerts">("Demo kit");
   const [aaComponents, setAaComponents] = useState<{
     files: string[];
-    meta: Record<string, { serverOnly: boolean }>;
+    meta: Record<string, { serverOnly: boolean; exportName?: string }>;
   } | null>(null);
   // Code-is-truth file mode: a real source file open for direct editing.
   // `file` is the request key; `canvasKey` is what the tagger stamps on DOM.
@@ -236,6 +241,10 @@ export function App() {
   fileFocusRef.current = fileFocusId;
   const [fileCollapsed, setFileCollapsed] = useState<Set<string>>(new Set());
   const [touchedFiles, setTouchedFiles] = useState<Set<string>>(new Set());
+  // Assigned after editFile/openFile are defined; lets earlier callbacks and
+  // the message handler reach them without stale closures.
+  const editFileRef = useRef<(edit: FileEdit, expectTag: string) => void | Promise<void>>(() => {});
+  const openFileRef = useRef<(project: "demo" | "aa", file: string) => Promise<void>>(async () => {});
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -384,6 +393,18 @@ export function App() {
       .catch(() => {});
   }, [outlinerMode]);
 
+  // Shell analysis for the selected route: find its primary view component.
+  useEffect(() => {
+    setRouteShell(null);
+    const page = routeSel?.files.page;
+    if (!page) return;
+    void api<{ viewFile: string | null; viewTag: string | null; contentNote: string | null }>(
+      `/api/page-shell?project=aa&file=${encodeURIComponent(page)}`,
+    )
+      .then(setRouteShell)
+      .catch(() => {});
+  }, [routeSel]);
+
   // ------------------------------------------------------------------ selection helpers
 
   const hit = doc ? locate(doc, sel.kind === "block" ? sel.id : null) : null;
@@ -485,6 +506,21 @@ export function App() {
           if (own) {
             setFileFocusId(own);
             send({ type: "select", id: own });
+          }
+        }
+      } else if (msg.type === "open-component") {
+        // Double-click descend: into the clicked element's own source file
+        // (nested component), or the focused tag's import within this file.
+        const m = msg.id.match(/^(aa:)?(.+?)::\d+$/);
+        if (m) {
+          const project = m[1] ? ("aa" as const) : ("demo" as const);
+          const file = m[2];
+          const fsNow = fileStateRef.current;
+          if (fsNow && fsNow.project === project && fsNow.file === file) {
+            const node = findModelNode(fsNow.model, msg.id);
+            if (node?.componentSource) void openFileRef.current(project, node.componentSource);
+          } else {
+            void openFileRef.current(project, file);
           }
         }
       } else if (msg.type === "selected-block") {
@@ -625,6 +661,7 @@ export function App() {
       send({ type: "render", file: canvasKey, props: values });
     }
   }, [canvasProject, send]);
+  openFileRef.current = openFile;
 
   const setSampleProp = useCallback((name: string, value: unknown) => {
     setFileState((s) => {
@@ -641,6 +678,34 @@ export function App() {
       return { ...s, values };
     });
   }, [send]);
+
+  /** Insert a JSX snippet into the open file: inside the focused container,
+   * after the focused leaf, or appended to the root element. */
+  const insertIntoFile = useCallback(
+    (jsx: string, imports?: { source: string; named?: string[]; default?: string }[]) => {
+      const fs = fileStateRef.current;
+      if (!fs || !fs.model.length) return;
+      const focus = findModelNode(fs.model, fileFocusRef.current);
+      let parentIndex: number;
+      let childPos: number;
+      if (focus && /^[a-z]/.test(focus.tag) && !focus.selfClosing) {
+        parentIndex = focus.index;
+        childPos = 9999; // server clamps to children.length
+      } else if (focus && focus.can.structural && focus.parentId) {
+        parentIndex = Number(focus.parentId.match(/::(\d+)$/)?.[1] ?? 0);
+        childPos = focus.slot + 2;
+      } else {
+        parentIndex = fs.model[0].index;
+        childPos = 9999;
+      }
+      const expectTag = findModelNode(
+        fs.model,
+        `${fs.canvasKey}::${parentIndex}`,
+      )?.tag ?? "";
+      void editFileRef.current({ op: "insert-element", parentIndex, childPos, jsx, imports }, expectTag);
+    },
+    [],
+  );
 
   /** THE file-edit funnel: one path for every AST mutation. Writes the real
    * file, replaces the (ephemeral-id) model, re-anchors selection, records
@@ -697,6 +762,7 @@ export function App() {
     },
     [send],
   );
+  editFileRef.current = editFile;
 
   // ------------------------------------------------------------------ operations
 
@@ -1465,6 +1531,36 @@ export function App() {
               </div>
               {insertSource === "Adventure Alerts" ? (
                 <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
+                  {fileState && (
+                    <div style={{ borderTop: `1px solid ${C.softDiv}` }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
+                        <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>Primitives</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>
+                          insert into {fileState.file.split("/").pop()}
+                        </span>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 10px" }}>
+                        {[
+                          { label: "Container", icon: "▤", jsx: '<div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}></div>' },
+                          { label: "Heading", icon: "H", jsx: "<h2>Heading</h2>" },
+                          { label: "Paragraph", icon: "¶", jsx: "<p>New paragraph</p>" },
+                          { label: "Button", icon: "▭", jsx: '<button type="button">Button</button>' },
+                          { label: "Link", icon: "↗", jsx: '<a href="#">Link</a>' },
+                          { label: "Image", icon: "▨", jsx: '<img src="" alt="" style={{ width: "160px", height: "90px", background: "var(--muted, #ddd)" }} />' },
+                        ].map((p) => (
+                          <button
+                            key={p.label}
+                            className="hv-ctl-border"
+                            onClick={() => insertIntoFile(p.jsx)}
+                            style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.body, cursor: "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap" }}
+                          >
+                            <span style={{ flex: "0 0 auto", color: C.blueLight, width: 13, textAlign: "center" }}>{p.icon}</span>
+                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{p.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {(() => {
                     if (!aaComponents) {
                       return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
@@ -1488,22 +1584,39 @@ export function App() {
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px" }}>
                           {files.map((f) => {
-                            const serverOnly = aaComponents.meta[f]?.serverOnly;
+                            const meta = aaComponents.meta[f];
+                            const serverOnly = meta?.serverOnly;
                             const name = f.split("/").pop()!.replace(/\.tsx$/, "");
                             const active = fileState?.canvasKey === `aa:${f}`;
+                            const insertable = !!fileState && !serverOnly && !!meta?.exportName;
                             return (
-                              <button
-                                key={f}
-                                className={serverOnly ? undefined : "hv-ctl-border"}
-                                disabled={serverOnly}
-                                title={serverOnly ? "Server component — can't render in the canvas" : f}
-                                onClick={() => void openFile("aa", f)}
-                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
-                              >
-                                <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
-                                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-                                {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
-                              </button>
+                              <div key={f} style={{ display: "flex", gap: 3 }}>
+                                <button
+                                  className={serverOnly ? undefined : "hv-ctl-border"}
+                                  disabled={serverOnly}
+                                  title={serverOnly ? "Server component — can't render in the canvas" : `Open ${f}`}
+                                  onClick={() => void openFile("aa", f)}
+                                  style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
+                                >
+                                  <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
+                                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                                  {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
+                                </button>
+                                {insertable && (
+                                  <button
+                                    className="hv-ctl-border"
+                                    title={`Insert <${meta!.exportName} /> into ${fileState!.file.split("/").pop()}`}
+                                    onClick={() =>
+                                      insertIntoFile(`<${meta!.exportName} />`, [
+                                        { source: `@/${f.replace(/^src\//, "").replace(/\.tsx$/, "")}`, named: [meta!.exportName!] },
+                                      ])
+                                    }
+                                    style={{ flex: "0 0 22px", display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.blueLight, cursor: "pointer" }}
+                                  >
+                                    +
+                                  </button>
+                                )}
+                              </div>
                             );
                           })}
                         </div>
@@ -1789,6 +1902,7 @@ export function App() {
                 <Properties
                   tab={propTab}
                   routeSel={routeSel}
+                  routeShell={routeShell}
                   fileState={fileState}
                   fileFocus={fileState ? findModelNode(fileState.model, fileFocusId) : null}
                   editFile={editFile}
@@ -1924,6 +2038,7 @@ export function App() {
 function Properties(props: {
   tab: PropTab;
   routeSel?: RouteNode | null;
+  routeShell?: { viewFile: string | null; viewTag: string | null; contentNote: string | null } | null;
   fileState?: {
     project: "demo" | "aa";
     file: string;
@@ -2058,8 +2173,30 @@ function Properties(props: {
         ) : (
           <div style={{ fontSize: 11, color: C.faint }}>none</div>
         )}
+        {props.routeShell?.contentNote && (
+          <div style={{ padding: "6px 8px", background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 6, fontSize: 10.5, color: C.amber, lineHeight: 1.5 }}>
+            {props.routeShell.contentNote}
+          </div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+          {props.routeShell?.viewFile && (
+            <button
+              className="hv-primary"
+              style={primaryBtn}
+              title={props.routeShell.viewFile}
+              onClick={() => void props.openFile?.("aa", props.routeShell!.viewFile!)}
+            >
+              Open {props.routeShell.viewTag} (the page's view)
+            </button>
+          )}
+          {r.files.page && (
+            <button className="hv-ctl" style={ctlBtn} onClick={() => void props.openFile?.("aa", r.files.page!)}>
+              Edit page code
+            </button>
+          )}
+        </div>
         <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5, marginTop: 4 }}>
-          Read-only: adventure-alerts routes are interpreted from <span style={{ fontFamily: MONO }}>src/app</span>, never modified.
+          The route structure is interpreted from <span style={{ fontFamily: MONO }}>src/app</span>; opening a file edits the real code.
         </div>
       </div>
     );

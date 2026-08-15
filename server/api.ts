@@ -17,6 +17,7 @@ import { extractProps } from "./props.ts";
 import { listPages, loadPage, savePage, type PageDoc } from "./pages.ts";
 import { aaRootPath, getProject, getProjects, type UaiProject } from "./projects.ts";
 import { scanRoutes } from "./routes.ts";
+import { analyzeShell } from "./shell.ts";
 
 function toRel(root: string, absPath: string): string {
   return path.relative(root, absPath).split(path.sep).join("/");
@@ -181,17 +182,41 @@ export function uaiApi(repoRoot: string): Plugin {
             return json(200, { tree: scanRoutes(project) });
           }
 
+          if (url.pathname === "/api/page-shell" && req.method === "GET") {
+            const rel = url.searchParams.get("file")!;
+            const code = fs.readFileSync(abs(project, rel), "utf8");
+            const shell = analyzeShell(code, importResolver(project, rel));
+            // Thin shells hide their nature one hop down (terms → policy-view
+            // → markdown content); scan the resolved view too.
+            if (shell.viewFile && !shell.contentNote) {
+              try {
+                const viewCode = fs.readFileSync(abs(project, shell.viewFile), "utf8");
+                if (/content\/legal|renderMarkdown/.test(viewCode)) {
+                  shell.contentNote =
+                    "This page renders versioned Markdown content — its copy isn't JSX-editable.";
+                }
+              } catch {
+                /* view unreadable — leave as-is */
+              }
+            }
+            return json(200, shell);
+          }
+
           if (url.pathname === "/api/components" && req.method === "GET") {
             const dir = path.join(project.root, project.srcDir, "components");
             const relBase = project.kind === "fixture" ? repoRoot : project.root;
             const files = listFiles(dir, /\.tsx$/)
               .filter((f) => !/\.test\.tsx$/.test(f))
               .map((f) => toRel(relBase, f));
-            const meta: Record<string, { serverOnly: boolean }> = {};
+            const meta: Record<string, { serverOnly: boolean; exportName?: string }> = {};
             if (project.kind === "next") {
               for (const rel of files) {
                 try {
-                  meta[rel] = { serverOnly: isServerOnly(fs.readFileSync(abs(project, rel), "utf8")) };
+                  const code = fs.readFileSync(abs(project, rel), "utf8");
+                  const exportName = code.match(
+                    /export\s+(?:default\s+)?(?:async\s+)?(?:function|const)\s+([A-Z]\w+)/,
+                  )?.[1];
+                  meta[rel] = { serverOnly: isServerOnly(code), exportName };
                 } catch {
                   meta[rel] = { serverOnly: true };
                 }
