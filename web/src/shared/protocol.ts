@@ -30,7 +30,7 @@ export type EditorToHarness =
 
 export type HarnessToEditor =
   | { type: "ready" }
-  | { type: "selected"; id: string }
+  | { type: "selected"; id: string; chain?: string[] }
   | { type: "selected-block"; id: string }
   | { type: "move-block"; blockId: string; targetColumnId: string; index: number }
   | { type: "move-section"; sectionId: string; index: number }

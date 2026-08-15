@@ -585,8 +585,17 @@ function Stage() {
         post({ type: "selected-block", id });
       } else {
         const id = el.getAttribute("data-uai")!;
+        // The innermost hit may belong to a nested component's file; the
+        // ancestor chain lets the editor resolve to the file it has open.
+        const chain: string[] = [];
+        let cur: Element | null = el;
+        while (cur) {
+          const v = cur.getAttribute?.("data-uai");
+          if (v) chain.push(v);
+          cur = cur.parentElement;
+        }
         setSelectedId(id);
-        post({ type: "selected", id });
+        post({ type: "selected", id, chain });
       }
     };
     const ctx = (e: MouseEvent) => {

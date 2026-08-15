@@ -205,8 +205,11 @@ export function uaiApi(repoRoot: string): Plugin {
             const full = abs(project, rel);
             const code = fs.readFileSync(full, "utf8");
             const analysis = analyzeFile(code);
+            // Model ids must equal the canvas's data-uai values, which the
+            // tagger prefixes with the project id for non-fixture roots.
+            const modelKey = project.kind === "fixture" ? rel : `${project.id}:${rel}`;
             return json(200, {
-              model: buildModel(code, rel, { resolveImport: importResolver(project, rel) }),
+              model: buildModel(code, modelKey, { resolveImport: importResolver(project, rel) }),
               props: extractProps(project.kind === "next" ? project.root : repoRoot, full, {
                 tsconfig: project.kind === "next",
               }),
@@ -225,9 +228,10 @@ export function uaiApi(repoRoot: string): Plugin {
             };
             const full = abs(project, file);
             const before = fs.readFileSync(full, "utf8");
+            const modelKey = project.kind === "fixture" ? file : `${project.id}:${file}`;
             if (expectTag) {
               // Cheap staleness check: the editor's model must still match disk.
-              const model = buildModel(before, file);
+              const model = buildModel(before, modelKey);
               const idx =
                 "index" in edit ? edit.index : "parentIndex" in edit ? edit.parentIndex : -1;
               const flat: { index: number; tag: string }[] = [];
@@ -246,8 +250,8 @@ export function uaiApi(repoRoot: string): Plugin {
             fs.writeFileSync(full, result.code, "utf8");
             return json(200, {
               ok: true,
-              model: buildModel(result.code, file, { resolveImport: importResolver(project, file) }),
-              focusId: result.focusIndex != null ? `${file}::${result.focusIndex}` : null,
+              model: buildModel(result.code, modelKey, { resolveImport: importResolver(project, file) }),
+              focusId: result.focusIndex != null ? `${modelKey}::${result.focusIndex}` : null,
               before,
               after: result.code,
             });

@@ -39,6 +39,7 @@ import {
   vdiv,
   type DeviceName,
 } from "./chrome";
+import { FileNodeCard, FileOutliner } from "./FileMode";
 import { OutlinerRow } from "./OutlinerRow";
 import { RouteTree, routeId, type RouteNode } from "./RouteTree";
 import { StyleBody, useStyleTokens } from "./StyleWorkspace";
@@ -64,11 +65,14 @@ import {
   locate,
   makeBlock,
   noteEntries,
+  findModelNode,
   parseBox,
   reId,
   setBlockTextValue,
   uid,
   type Block,
+  type FileEdit,
+  type JsxNodeModel,
   type Column,
   type NewSpec,
   type PageDoc,
@@ -99,17 +103,7 @@ const PROP_TABS = [
 ] as const;
 type PropTab = (typeof PROP_TABS)[number]["label"];
 
-/** "24" → "24px": bare numbers in length fields mean pixels, like every
- * design tool. Keeps calc()/var()/keywords untouched. */
-function normalizeLen(v: string): string {
-  const t = v.trim();
-  return /^-?\d+(\.\d+)?$/.test(t) && t !== "0" ? `${t}px` : t;
-}
-
-const LENGTH_PROPS = new Set([
-  "width", "maxWidth", "minWidth", "height", "maxHeight", "minHeight",
-  "top", "right", "bottom", "left", "padding", "gap",
-]);
+import { Field, LENGTH_PROPS, Row, Seg, Sym, normalizeLen } from "./controls";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
@@ -148,89 +142,19 @@ interface PropSpec {
   control: { kind: string; options?: string[] };
 }
 
-// ---------------------------------------------------------------------------
-// Tiny shared controls
-// ---------------------------------------------------------------------------
-
-function Field({
-  value,
-  placeholder,
-  mono,
-  style,
-  onCommit,
-  title,
-}: {
-  value: string;
-  placeholder?: string;
-  mono?: boolean;
-  style?: CSSProperties;
-  title?: string;
-  onCommit: (v: string) => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  const [last, setLast] = useState(value);
-  if (value !== last) {
-    setLast(value);
-    setDraft(value);
-  }
-  return (
-    <input
-      className="fc"
-      type="text"
-      value={draft}
-      placeholder={placeholder}
-      title={title}
-      style={{ ...inputStyle, ...(mono ? { fontFamily: MONO, fontSize: 11 } : {}), ...style }}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => draft !== value && onCommit(draft)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        if (e.key === "Escape") setDraft(value);
-        e.stopPropagation();
-      }}
-    />
-  );
-}
-
-function Seg({
-  items,
-  grow,
-}: {
-  items: { label: string; active: boolean; onClick: () => void }[];
-  grow?: boolean;
-}) {
-  return (
-    <div style={{ ...trough, ...(grow ? { flex: "1 1 0", minWidth: 0 } : {}) }}>
-      {items.map((it) => (
-        <button
-          key={it.label}
-          style={segBtn(it.active, grow ? { flex: 1, minWidth: 0, padding: "0 4px" } : undefined)}
-          onClick={it.onClick}
-        >
-          {it.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Material Symbols glyph (rounded set, self-hosted font). */
-function Sym({ name, size = 15 }: { name: string; size?: number }) {
-  return (
-    <span aria-hidden className="material-symbols-rounded" style={{ fontSize: size, lineHeight: 1 }}>
-      {name}
-    </span>
-  );
-}
-
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-      <span style={{ ...rowLabel, whiteSpace: "nowrap", lineHeight: 1.25 }}>{label}</span>
-      {children}
-    </div>
-  );
-}
+/** One undo stack across both truth systems: the page-doc sandbox and
+ * direct file edits (which undo by restoring exact prior file bytes). */
+type HistoryEntry =
+  | { kind: "doc"; doc: PageDoc; sel: Sel }
+  | {
+      kind: "file";
+      project: string;
+      file: string;
+      before: string;
+      after: string;
+      focusBefore: string | null;
+      focusAfter: string | null;
+    };
 
 // ---------------------------------------------------------------------------
 // App
@@ -249,8 +173,8 @@ export function App() {
   const selRef = useRef(sel);
   selRef.current = sel;
 
-  const [history, setHistory] = useState<{ doc: PageDoc; sel: Sel }[]>([]);
-  const [future, setFuture] = useState<{ doc: PageDoc; sel: Sel }[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [future, setFuture] = useState<HistoryEntry[]>([]);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   const [workspace, setWorkspace] = useState<Workspace>("Layout");
@@ -294,13 +218,24 @@ export function App() {
     files: string[];
     meta: Record<string, { serverOnly: boolean }>;
   } | null>(null);
-  const [aaPreview, setAaPreview] = useState<{
+  // Code-is-truth file mode: a real source file open for direct editing.
+  // `file` is the request key; `canvasKey` is what the tagger stamps on DOM.
+  const [fileState, setFileState] = useState<{
+    project: "demo" | "aa";
     file: string;
+    canvasKey: string;
+    model: JsxNodeModel[];
+    renderable: boolean;
     specs: PropSpec[];
     values: Record<string, unknown>;
   } | null>(null);
-  const aaPreviewRef = useRef(aaPreview);
-  aaPreviewRef.current = aaPreview;
+  const fileStateRef = useRef(fileState);
+  fileStateRef.current = fileState;
+  const [fileFocusId, setFileFocusId] = useState<string | null>(null);
+  const fileFocusRef = useRef(fileFocusId);
+  fileFocusRef.current = fileFocusId;
+  const [fileCollapsed, setFileCollapsed] = useState<Set<string>>(new Set());
+  const [touchedFiles, setTouchedFiles] = useState<Set<string>>(new Set());
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -329,7 +264,7 @@ export function App() {
       if (!cur) return;
       const next = structuredClone(cur);
       const selPatch = mutator(next) ?? {};
-      setHistory((h) => [...h.slice(-39), { doc: cur, sel: selRef.current }]);
+      setHistory((h) => [...h.slice(-59), { kind: "doc", doc: cur, sel: selRef.current }]);
       setFuture([]);
       setDoc(next);
       if (selPatch.kind !== undefined || selPatch.id !== undefined) {
@@ -340,38 +275,72 @@ export function App() {
     [persist],
   );
 
+  /** Undo a file edit: write the exact prior bytes back, then re-sync the
+   * open model if the restored file is on screen. */
+  const restoreFile = useCallback(
+    async (entry: Extract<HistoryEntry, { kind: "file" }>, direction: "undo" | "redo") => {
+      const text = direction === "undo" ? entry.before : entry.after;
+      await api(`/api/restore?project=${entry.project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: entry.file, text }),
+      });
+      setSavedAt(new Date().toLocaleTimeString());
+      const fsNow = fileStateRef.current;
+      if (fsNow && fsNow.project === entry.project && fsNow.file === entry.file) {
+        const d = await api<{ model: JsxNodeModel[] }>(
+          `/api/component?project=${entry.project}&file=${encodeURIComponent(entry.file)}`,
+        );
+        setFileState((s) => (s ? { ...s, model: d.model } : s));
+        setFileFocusId(direction === "undo" ? entry.focusBefore : entry.focusAfter);
+      }
+    },
+    [],
+  );
+
   const undoAction = useCallback(() => {
     setHistory((h) => {
       if (!h.length) return h;
       const prev = h[h.length - 1];
-      const cur = docRef.current;
-      if (cur) setFuture((f) => [...f, { doc: cur, sel: selRef.current }]);
-      setDoc(prev.doc);
-      setSel(prev.sel);
-      void persist(prev.doc);
+      if (prev.kind === "doc") {
+        const cur = docRef.current;
+        if (cur) setFuture((f) => [...f, { kind: "doc", doc: cur, sel: selRef.current }]);
+        setDoc(prev.doc);
+        setSel(prev.sel);
+        void persist(prev.doc);
+      } else {
+        setFuture((f) => [...f, prev]);
+        void restoreFile(prev, "undo");
+      }
       return h.slice(0, -1);
     });
-  }, [persist]);
+  }, [persist, restoreFile]);
 
   const redoAction = useCallback(() => {
     setFuture((f) => {
       if (!f.length) return f;
       const next = f[f.length - 1];
-      const cur = docRef.current;
-      if (cur) setHistory((h) => [...h.slice(-39), { doc: cur, sel: selRef.current }]);
-      setDoc(next.doc);
-      setSel(next.sel);
-      void persist(next.doc);
+      if (next.kind === "doc") {
+        const cur = docRef.current;
+        if (cur) setHistory((h) => [...h.slice(-59), { kind: "doc", doc: cur, sel: selRef.current }]);
+        setDoc(next.doc);
+        setSel(next.sel);
+        void persist(next.doc);
+      } else {
+        setHistory((h) => [...h.slice(-59), next]);
+        void restoreFile(next, "redo");
+      }
       return f.slice(0, -1);
     });
-  }, [persist]);
+  }, [persist, restoreFile]);
 
   const openPage = useCallback(async (name: string) => {
     const data = await api<{ doc: PageDoc }>(`/api/page?name=${encodeURIComponent(name)}`);
     setDoc(data.doc);
     setSel({ kind: null, id: null });
     setRouteSel(null);
-    setAaPreview(null);
+    setFileState(null);
+    setFileFocusId(null);
     setCanvasProject("demo");
     setHistory([]);
     setFuture([]);
@@ -495,13 +464,28 @@ export function App() {
       const d = docRef.current;
       if (msg.type === "ready") {
         harnessReady.current = true;
-        const preview = aaPreviewRef.current;
-        if (canvasProject === "aa" && preview) {
-          send({ type: "render", file: preview.file, props: preview.values });
+        const fsNow = fileStateRef.current;
+        if (fsNow && fsNow.renderable && (fsNow.project === "aa") === (canvasProject === "aa")) {
+          send({ type: "render", file: fsNow.canvasKey, props: fsNow.values });
         } else if (d) {
           iframeRef.current?.contentWindow?.postMessage({ type: "render-page", name: d.name }, "*");
           send({ type: "set-device", width: DEVICES[device].width });
           send({ type: "set-zoom", zoom });
+        }
+      } else if (msg.type === "selected") {
+        // Component-mode canvas click → sync file-mode selection. The click
+        // may land inside a nested component's DOM; resolve via the ancestor
+        // chain to the nearest element belonging to the open file.
+        const fsNow = fileStateRef.current;
+        if (fsNow) {
+          const prefix = `${fsNow.canvasKey}::`;
+          const own = msg.id?.startsWith(prefix)
+            ? msg.id
+            : (msg.chain ?? []).find((c) => c.startsWith(prefix));
+          if (own) {
+            setFileFocusId(own);
+            send({ type: "select", id: own });
+          }
         }
       } else if (msg.type === "selected-block") {
         setCtxMenu(null);
@@ -600,50 +584,119 @@ export function App() {
     return () => window.removeEventListener("message", onMessage);
   }, [edit, select, send, device, zoom, appZoom, canvasProject]);
 
-  // ------------------------------------------------------------------ AA component preview
+  // ------------------------------------------------------------------ file mode (code is truth)
 
-  /** Open an adventure-alerts component in the AA canvas: fetch its prop
-   * specs, derive safe defaults, remount the iframe in ?project=aa mode. */
-  const openAaComponent = useCallback(async (file: string) => {
+  /** Open a real source file for direct editing: fetch its JSX model + prop
+   * specs, seed sample render props (localStorage → derived defaults), and
+   * point the canvas at the right design-system document. */
+  const openFile = useCallback(async (project: "demo" | "aa", file: string) => {
     setRouteSel(null);
     setSel({ kind: null, id: null });
-    let specs: PropSpec[] = [];
+    setFileFocusId(null);
+    setFileCollapsed(new Set());
+    setOutlinerMode("Page"); // the file tree lives in the Page outliner slot
+    const d = await api<{
+      model: JsxNodeModel[];
+      props: PropSpec[];
+      renderable: boolean;
+    }>(`/api/component?project=${project}&file=${encodeURIComponent(file)}`);
+    let values: Record<string, unknown> = {};
     try {
-      const d = await api<{ props: PropSpec[] }>(
-        `/api/component?project=aa&file=${encodeURIComponent(file)}`,
-      );
-      specs = d.props;
+      const saved = localStorage.getItem(`uai:samples:${project}:${file}`);
+      if (saved) values = JSON.parse(saved) as Record<string, unknown>;
     } catch {
-      /* prop extraction is best-effort */
+      /* corrupt entry — fall through to defaults */
     }
-    const values: Record<string, unknown> = {};
-    for (const s of specs) {
-      if (s.optional) continue;
-      if (s.control.kind === "string") values[s.name] = s.name;
-      else if (s.control.kind === "number") values[s.name] = 0;
-      else if (s.control.kind === "boolean") values[s.name] = false;
-      else if (s.control.kind === "select") values[s.name] = s.control.options?.[0];
+    if (Object.keys(values).length === 0) {
+      for (const s of d.props) {
+        if (s.optional) continue;
+        if (s.control.kind === "string") values[s.name] = s.name;
+        else if (s.control.kind === "number") values[s.name] = 0;
+        else if (s.control.kind === "boolean") values[s.name] = false;
+        else if (s.control.kind === "select") values[s.name] = s.control.options?.[0];
+      }
     }
-    const preview = { file: `aa:${file}`, specs, values };
-    setAaPreview(preview);
-    if (canvasProject !== "aa") {
-      setCanvasProject("aa"); // remount → ready handler sends the render
-    } else {
-      send({ type: "render", file: preview.file, props: values });
+    const canvasKey = project === "aa" ? `aa:${file}` : file;
+    setFileState({ project, file, canvasKey, model: d.model, renderable: d.renderable, specs: d.props, values });
+    const targetCanvas = project === "aa" ? "aa" : "demo";
+    if (canvasProject !== targetCanvas) {
+      setCanvasProject(targetCanvas); // remount → ready handler sends the render
+    } else if (d.renderable) {
+      send({ type: "render", file: canvasKey, props: values });
     }
   }, [canvasProject, send]);
 
-  const setAaProp = useCallback((name: string, value: unknown) => {
-    setAaPreview((p) => {
-      if (!p) return p;
-      const values = { ...p.values };
+  const setSampleProp = useCallback((name: string, value: unknown) => {
+    setFileState((s) => {
+      if (!s) return s;
+      const values = { ...s.values };
       if (value === undefined || value === "") delete values[name];
       else values[name] = value;
-      const next = { ...p, values };
-      send({ type: "render", file: p.file, props: values });
-      return next;
+      try {
+        localStorage.setItem(`uai:samples:${s.project}:${s.file}`, JSON.stringify(values));
+      } catch {
+        /* storage full — fine, samples are disposable */
+      }
+      if (s.renderable) send({ type: "render", file: s.canvasKey, props: values });
+      return { ...s, values };
     });
   }, [send]);
+
+  /** THE file-edit funnel: one path for every AST mutation. Writes the real
+   * file, replaces the (ephemeral-id) model, re-anchors selection, records
+   * undo, and tracks touched files. */
+  const editFile = useCallback(
+    async (edit: FileEdit, expectTag: string) => {
+      const fs = fileStateRef.current;
+      if (!fs) return;
+      const res = await fetch(`/api/edit?project=${fs.project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: fs.file, edit, expectTag }),
+      });
+      const body = (await res.json()) as {
+        model?: JsxNodeModel[];
+        focusId?: string | null;
+        before?: string;
+        after?: string;
+        error?: string;
+      };
+      if (res.status === 409) {
+        // Stale model — the file changed underneath us; re-sync silently.
+        const d = await api<{ model: JsxNodeModel[] }>(
+          `/api/component?project=${fs.project}&file=${encodeURIComponent(fs.file)}`,
+        );
+        setFileState((s) => (s ? { ...s, model: d.model } : s));
+        setFileFocusId(null);
+        return;
+      }
+      if (!res.ok || !body.model) {
+        console.warn(`edit rejected: ${body.error}`);
+        setSavedAt(`✗ ${String(body.error).slice(0, 60)}`);
+        return;
+      }
+      const focusBefore = fileFocusRef.current;
+      setFileState((s) => (s ? { ...s, model: body.model! } : s));
+      setFileFocusId(body.focusId ?? null);
+      setHistory((h) => [
+        ...h.slice(-59),
+        {
+          kind: "file",
+          project: fs.project,
+          file: fs.file,
+          before: body.before!,
+          after: body.after!,
+          focusBefore,
+          focusAfter: body.focusId ?? null,
+        },
+      ]);
+      setFuture([]);
+      setTouchedFiles((t) => new Set(t).add(`${fs.project}:${fs.file}`));
+      setSavedAt(new Date().toLocaleTimeString());
+      if (body.focusId) send({ type: "select", id: body.focusId });
+    },
+    [send],
+  );
 
   // ------------------------------------------------------------------ operations
 
@@ -875,6 +928,35 @@ export function App() {
   const handleChord = useCallback(
     (c: { key: string; mod: boolean; shift: boolean; alt: boolean }): boolean => {
       const k = c.key.toLowerCase();
+      // File mode captures structural keys for the focused JSX node.
+      const fsNow = fileStateRef.current;
+      const fileNode =
+        fsNow && fileFocusRef.current ? findModelNode(fsNow.model, fileFocusRef.current) : null;
+      if (fileNode) {
+        const parentIdx = Number(fileNode.parentId?.match(/::(\d+)$/)?.[1] ?? fileNode.index);
+        if (c.key === "Delete" && fileNode.can.structural) {
+          void editFile({ op: "delete-element", index: fileNode.index }, fileNode.tag);
+          return true;
+        }
+        if (c.mod && k === "d" && fileNode.can.structural) {
+          void editFile({ op: "duplicate-element", index: fileNode.index }, fileNode.tag);
+          return true;
+        }
+        if (c.alt && c.key === "ArrowUp" && fileNode.can.structural) {
+          void editFile(
+            { op: "move-element", index: fileNode.index, newParentIndex: parentIdx, childPos: Math.max(0, fileNode.slot - 2) },
+            fileNode.tag,
+          );
+          return true;
+        }
+        if (c.alt && c.key === "ArrowDown" && fileNode.can.structural) {
+          void editFile(
+            { op: "move-element", index: fileNode.index, newParentIndex: parentIdx, childPos: fileNode.slot + 2 },
+            fileNode.tag,
+          );
+          return true;
+        }
+      }
       if (c.mod && !c.shift && k === "z") undoAction();
       else if (c.mod && c.shift && k === "z") redoAction();
       else if (c.mod && k === "d") duplicateAction();
@@ -904,7 +986,7 @@ export function App() {
       } else return false;
       return true;
     },
-    [undoAction, redoAction, duplicateAction, copyAction, cutAction, pasteAction, deleteSel, moveBy, zoomBy, device, send, workspace],
+    [undoAction, redoAction, duplicateAction, copyAction, cutAction, pasteAction, deleteSel, moveBy, zoomBy, device, send, workspace, editFile],
   );
   handleChordRef.current = handleChord;
 
@@ -1365,7 +1447,8 @@ export function App() {
                     onClick: () => {
                       setInsertSource(s);
                       if (s === "Demo kit" && canvasProject === "aa") {
-                        setAaPreview(null);
+                        setFileState(null);
+                        setFileFocusId(null);
                         setCanvasProject("demo");
                       }
                       if (s === "Adventure Alerts" && !aaComponents) {
@@ -1407,14 +1490,14 @@ export function App() {
                           {files.map((f) => {
                             const serverOnly = aaComponents.meta[f]?.serverOnly;
                             const name = f.split("/").pop()!.replace(/\.tsx$/, "");
-                            const active = aaPreview?.file === `aa:${f}`;
+                            const active = fileState?.canvasKey === `aa:${f}`;
                             return (
                               <button
                                 key={f}
                                 className={serverOnly ? undefined : "hv-ctl-border"}
                                 disabled={serverOnly}
                                 title={serverOnly ? "Server component — can't render in the canvas" : f}
-                                onClick={() => void openAaComponent(f)}
+                                onClick={() => void openFile("aa", f)}
                                 style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
                               >
                                 <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
@@ -1545,6 +1628,17 @@ export function App() {
                   title="canvas"
                   style={{ flex: 1, border: "none", background: C.void }}
                 />
+                {fileState && !fileState.renderable && !routeSel && (
+                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
+                    <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                      <span style={{ fontFamily: MONO, fontSize: 13, color: "#fff" }}>{fileState.file.split("/").pop()}</span>
+                      <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+                        Server component — no live preview here. Edits still apply to the real code
+                        (see them in <span style={{ fontFamily: MONO, fontSize: 10.5 }}>next dev</span>); use the Outliner to pick elements.
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {routeSel && (
                   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
                     <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1586,7 +1680,31 @@ export function App() {
               <Seg items={(["Page", "Project"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />
             </div>
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8 }}>
-              {outlinerMode === "Page" && doc && doc.sections.map((s, si) => (
+              {outlinerMode === "Page" && fileState && (
+                <>
+                  <div style={{ padding: "4px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileState.file}>
+                    {fileState.file.split("/").pop()}
+                  </div>
+                  <FileOutliner
+                    model={fileState.model}
+                    focusId={fileFocusId}
+                    collapsed={fileCollapsed}
+                    onToggle={(id) =>
+                      setFileCollapsed((c) => {
+                        const next = new Set(c);
+                        if (next.has(id)) next.delete(id);
+                        else next.add(id);
+                        return next;
+                      })
+                    }
+                    onSelect={(m) => {
+                      setFileFocusId(m.id);
+                      send({ type: "select", id: m.id });
+                    }}
+                  />
+                </>
+              )}
+              {outlinerMode === "Page" && !fileState && doc && doc.sections.map((s, si) => (
                 <div key={s.id}>
                   <OutlinerRow pad={10} glyph="▤" glyphColor={C.blueLight} label={s.label ?? `section ${si + 1}`} selected={sel.id === s.id} mark={SEL_COLOR.section}
                     caret={collapsed[s.id] ? "▸" : "▾"}
@@ -1671,8 +1789,11 @@ export function App() {
                 <Properties
                   tab={propTab}
                   routeSel={routeSel}
-                  aaPreview={canvasProject === "aa" ? aaPreview : null}
-                  setAaProp={setAaProp}
+                  fileState={fileState}
+                  fileFocus={fileState ? findModelNode(fileState.model, fileFocusId) : null}
+                  editFile={editFile}
+                  openFile={openFile}
+                  setSampleProp={setSampleProp}
                   doc={doc}
                   sel={sel}
                   block={block}
@@ -1770,6 +1891,17 @@ export function App() {
         <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, color: C.muted }}>{crumb}</span>
         <div style={{ flex: "1 1 0", minWidth: 8 }} />
         <span style={{ flex: "0 0 auto", color: C.green }}>{savedAt ? `saved to source at ${savedAt}` : "in sync with source"}</span>
+        {touchedFiles.size > 0 && (
+          <>
+            <div style={{ ...vdiv, height: 14 }} />
+            <span
+              style={{ flex: "0 0 auto", color: C.amber, cursor: "help" }}
+              title={[...touchedFiles].join("\n")}
+            >
+              {touchedFiles.size} file{touchedFiles.size === 1 ? "" : "s"} edited — review with git
+            </span>
+          </>
+        )}
         <div style={{ ...vdiv, height: 14 }} />
         <span style={{ flex: "0 0 auto", color: C.muted }}>
           {needsDataCount === 0 ? "all elements bound" : `${needsDataCount} element${needsDataCount === 1 ? "" : "s"} needs data`}
@@ -1792,8 +1924,19 @@ export function App() {
 function Properties(props: {
   tab: PropTab;
   routeSel?: RouteNode | null;
-  aaPreview?: { file: string; specs: PropSpec[]; values: Record<string, unknown> } | null;
-  setAaProp?: (name: string, value: unknown) => void;
+  fileState?: {
+    project: "demo" | "aa";
+    file: string;
+    canvasKey: string;
+    model: JsxNodeModel[];
+    renderable: boolean;
+    specs: PropSpec[];
+    values: Record<string, unknown>;
+  } | null;
+  fileFocus?: JsxNodeModel | null;
+  editFile?: (edit: FileEdit, expectTag: string) => void;
+  openFile?: (project: "demo" | "aa", file: string) => Promise<void>;
+  setSampleProp?: (name: string, value: unknown) => void;
   doc: PageDoc | null;
   sel: Sel;
   block: Block | null;
@@ -1814,14 +1957,27 @@ function Properties(props: {
   const { tab, doc, sel, block, colHit, secHit, notes, edit, patchBlock, select } = props;
   const pad: CSSProperties = { padding: "9px 10px 12px", display: "flex", flexDirection: "column", gap: 6 };
 
-  if (props.aaPreview && !props.routeSel) {
-    const p = props.aaPreview;
-    const rel = p.file.replace(/^aa:/, "");
+  if (props.fileState && !props.routeSel) {
+    const p = props.fileState;
+    // A focused node → its code-editing card; otherwise the sample-props
+    // card for the file's root render.
+    if (props.fileFocus && props.editFile) {
+      return (
+        <FileNodeCard
+          file={p.file}
+          node={props.fileFocus}
+          onEdit={props.editFile}
+          onOpenSource={(src) => void props.openFile?.(p.project, src)}
+        />
+      );
+    }
     return (
       <div style={pad}>
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={rel}>{rel}</div>
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p.file}>{p.file}</div>
         <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
-          Live preview of the real adventure-alerts component. Prop edits re-render the canvas; nothing is written.
+          {p.renderable
+            ? "Sample render props — preview only, never written to code. Click an element on the canvas or in the Outliner to edit its code."
+            : "Server component — no live preview. Pick elements in the Outliner to edit their code."}
         </div>
         {p.specs.map((s) => {
           const raw = p.values[s.name];
@@ -1829,8 +1985,8 @@ function Properties(props: {
             return (
               <Row key={s.name} label={s.name}>
                 <Seg grow items={[
-                  { label: "false", active: raw !== true, onClick: () => props.setAaProp?.(s.name, false) },
-                  { label: "true", active: raw === true, onClick: () => props.setAaProp?.(s.name, true) },
+                  { label: "false", active: raw !== true, onClick: () => props.setSampleProp?.(s.name, false) },
+                  { label: "true", active: raw === true, onClick: () => props.setSampleProp?.(s.name, true) },
                 ]} />
               </Row>
             );
@@ -1838,7 +1994,7 @@ function Properties(props: {
           if (s.control.kind === "select" && s.control.options) {
             return (
               <Row key={s.name} label={s.name}>
-                <select className="fc" value={String(raw ?? "")} onChange={(e) => props.setAaProp?.(s.name, e.target.value || undefined)} style={{ ...inputStyle, height: 22, padding: "0 5px", flex: 1, minWidth: 0 }}>
+                <select className="fc" value={String(raw ?? "")} onChange={(e) => props.setSampleProp?.(s.name, e.target.value || undefined)} style={{ ...inputStyle, height: 22, padding: "0 5px", flex: 1, minWidth: 0 }}>
                   <option value="">—</option>
                   {s.control.options.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
@@ -1850,11 +2006,11 @@ function Properties(props: {
             <div key={s.name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <span style={{ flex: "0 0 74px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: C.muted }} title={s.typeText}>{s.name}</span>
               <Field value={display} onCommit={(v) => {
-                if (v === "") return props.setAaProp?.(s.name, undefined);
-                if (s.control.kind === "number") return props.setAaProp?.(s.name, Number(v) || 0);
+                if (v === "") return props.setSampleProp?.(s.name, undefined);
+                if (s.control.kind === "number") return props.setSampleProp?.(s.name, Number(v) || 0);
                 let val: unknown = v;
                 if (s.control.kind === "json") { try { val = JSON.parse(v); } catch { /* keep string */ } }
-                props.setAaProp?.(s.name, val);
+                props.setSampleProp?.(s.name, val);
               }} style={{ flex: 1, minWidth: 0 }} />
             </div>
           );
