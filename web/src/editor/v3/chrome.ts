@@ -52,7 +52,7 @@ export const DEVICES = {
 } as const;
 export type DeviceName = keyof typeof DEVICES;
 
-export const ZOOMS = [0.4, 0.5, 0.62, 0.75, 0.9, 1, 1.25];
+export const ZOOMS = [0.25, 0.4, 0.5, 0.62, 0.75, 0.9, 1, 1.25, 1.5, 2, 3, 4];
 export const CANVAS_STATES = ["Default", "Loading", "Empty", "Error"] as const;
 export const ROLES = ["Traveler", "Advisor", "Admin", "Operator"];
 
