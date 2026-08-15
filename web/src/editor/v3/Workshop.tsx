@@ -144,7 +144,7 @@ export function WorkshopBody({
     };
   }, [ws.graphZoom]);
 
-  // Ctrl+wheel zoom on the graph
+  // Ctrl+wheel zoom + middle-mouse pan on the graph
   useEffect(() => {
     const el = graphRef.current;
     if (!el) return;
@@ -153,8 +153,34 @@ export function WorkshopBody({
       e.preventDefault();
       setWs((w) => ({ ...w, graphZoom: Math.min(1.6, Math.max(0.5, w.graphZoom * (e.deltaY < 0 ? 1.08 : 0.92))) }));
     };
+    let pan: { x: number; y: number } | null = null;
+    const down = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      pan = { x: e.clientX, y: e.clientY };
+      el.style.cursor = "grabbing";
+    };
+    const move = (e: MouseEvent) => {
+      if (!pan) return;
+      el.scrollLeft += pan.x - e.clientX;
+      el.scrollTop += pan.y - e.clientY;
+      pan = { x: e.clientX, y: e.clientY };
+    };
+    const up = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      pan = null;
+      el.style.cursor = "";
+    };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("mousedown", down);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("mousedown", down);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
   }, [setWs]);
 
   const shadow = matShadow(m, wsState);

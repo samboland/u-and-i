@@ -244,6 +244,35 @@ function Stage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Middle-mouse drag pans the canvas (suppresses the browser's autoscroll).
+  useEffect(() => {
+    let pan: { x: number; y: number } | null = null;
+    const down = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      pan = { x: e.clientX, y: e.clientY };
+      document.documentElement.style.cursor = "grabbing";
+    };
+    const move = (e: MouseEvent) => {
+      if (!pan) return;
+      window.scrollBy(pan.x - e.clientX, pan.y - e.clientY);
+      pan = { x: e.clientX, y: e.clientY };
+    };
+    const up = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      pan = null;
+      document.documentElement.style.cursor = "";
+    };
+    window.addEventListener("mousedown", down);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousedown", down);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, []);
+
   // Ctrl+scroll zooms the canvas — forwarded to the editor, which owns zoom.
   useEffect(() => {
     const onWheel = (e: WheelEvent) => {
