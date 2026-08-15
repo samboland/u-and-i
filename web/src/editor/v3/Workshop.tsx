@@ -369,7 +369,7 @@ export function WorkshopBody({
           </div>
           <div style={{ flex: "1 1 210px", minWidth: 160, display: "flex", flexDirection: "column", gap: 5, minHeight: 0 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ flex: 1, minWidth: 0, fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.08em" }}>Writes to theme.css</span>
+              <span style={{ flex: 1, minWidth: 0, fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.08em" }}>Writes to the app’s globals.css</span>
               <span style={{ flex: "0 0 auto", fontSize: 9.5, color: ws.written ? C.green : C.amber }}>{ws.written ? "written" : "not written yet"}</span>
             </div>
             <div style={{ flex: 1, overflow: "auto", maxHeight: 86, background: C.sunken, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 8px", fontFamily: MONO, fontSize: 10, lineHeight: 1.65, color: C.muted, whiteSpace: "pre" }}>

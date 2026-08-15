@@ -1,26 +1,23 @@
 /**
- * Importer-aware resolver. Vite's resolve.alias is global and runs before
- * every plugin, so "@/…" and "next/link" cannot live there — the demo
- * fixture and the adventure-alerts checkout both use those specifiers and
- * need different answers. This plugin routes by who is importing:
- *
- *   importer inside adventure-alerts  → AA's own src, canvas shims for
- *     next/* + next-auth + server-only, throwing stubs for @/auth + @/db
- *   any other importer                → the demo fixture's src and its
- *     original next/link stub (legacy behavior, unchanged)
+ * Importer-aware resolver for the target app: when a module inside the
+ * target Next.js checkout imports something, remap its Next-specific and
+ * server-only imports to the canvas shims and its "@/…" alias to its own
+ * src tree. Modules outside the target (u-and-i's own code) are untouched.
  */
 import fs from "node:fs";
 import path from "node:path";
 import type { Plugin } from "vite";
 
-export function uaiResolver(repoRoot: string, aaRoot: string | null): Plugin {
+export function uaiResolver(repoRoot: string, targetRoot: string | null): Plugin {
   const shims = path.join(repoRoot, "web", "src", "harness", "next-shims");
   const shim = (f: string) => path.join(shims, f);
-  const fixtureSrc = path.join(repoRoot, "fixtures", "demo-project", "src");
-  const fixtureLink = path.join(repoRoot, "fixtures", "stubs", "next-link.tsx");
-  const aaMarker = aaRoot ? `/${path.basename(aaRoot)}/` : null;
+  const targetFs = targetRoot?.replaceAll("\\", "/") ?? null;
+  // Vite hands importers outside its root in several spellings: absolute,
+  // /@fs/-prefixed, or relative. Match on the checkout's directory name so
+  // all of them count.
+  const marker = targetRoot ? `/${path.basename(targetRoot)}/` : null;
 
-  const aaExact: Record<string, string> = {
+  const exact: Record<string, string> = {
     "next/link": shim("link.tsx"),
     "next/navigation": shim("navigation.ts"),
     "next/image": shim("image.tsx"),
@@ -44,20 +41,14 @@ export function uaiResolver(repoRoot: string, aaRoot: string | null): Plugin {
     name: "uai-resolver",
     enforce: "pre",
     resolveId(source, importer) {
-      const imp = importer ? importer.split("?")[0].replaceAll("\\", "/") : "";
-      const fromAA = !!aaMarker && (imp.includes(aaMarker) || imp.startsWith(aaRoot!.replaceAll("\\", "/")));
+      if (!targetFs || !marker || !importer) return null;
+      const imp = importer.split("?")[0].replaceAll("\\", "/");
+      if (!imp.startsWith(targetFs) && !imp.includes(marker)) return null;
 
-      if (fromAA) {
-        if (aaExact[source]) return aaExact[source];
-        if (source === "@/auth" || source.startsWith("@/auth/")) return shim("server-stub.ts");
-        if (source === "@/db" || source.startsWith("@/db/")) return shim("server-stub.ts");
-        if (source.startsWith("@/")) return withExt(path.join(aaRoot!, "src", source.slice(2)));
-        return null;
-      }
-
-      // Legacy demo-fixture mappings (previously global resolve.alias).
-      if (source === "next/link") return fixtureLink;
-      if (source.startsWith("@/")) return withExt(path.join(fixtureSrc, source.slice(2)));
+      if (exact[source]) return exact[source];
+      if (source === "@/auth" || source.startsWith("@/auth/")) return shim("server-stub.ts");
+      if (source === "@/db" || source.startsWith("@/db/")) return shim("server-stub.ts");
+      if (source.startsWith("@/")) return withExt(path.join(targetRoot!, "src", source.slice(2)));
       return null;
     },
   };

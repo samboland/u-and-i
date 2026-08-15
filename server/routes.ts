@@ -109,7 +109,6 @@ function walk(
 }
 
 export function scanRoutes(project: UaiProject): RouteNode {
-  if (project.kind !== "next") throw new Error(`project "${project.id}" has no route tree`);
   const appDir = path.join(project.root, project.srcDir, "app");
   if (!fs.existsSync(appDir)) throw new Error(`no app directory at ${appDir}`);
   return walk(project.root, appDir, "", "/", []);

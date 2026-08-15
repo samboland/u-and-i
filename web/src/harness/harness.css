@@ -1,45 +1,23 @@
-/* Editor affordances only. The canvas design-system CSS (fixture theme OR
-   adventure-alerts globals) is chosen at boot by main.tsx — the two design
-   systems both define .ui-* classes and must never coexist in a document. */
+/* Editor affordances + stage base. The target app's design system CSS is
+   imported separately from the generated target-canvas.css. */
 
+html,
 body {
   margin: 0;
+  background: #101216;
+}
+body {
   min-height: 100vh;
-  background: var(--background);
+  padding: 22px 0 40px;
   color: var(--foreground);
   font-family: var(--font-body, system-ui, sans-serif);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 3rem;
   box-sizing: border-box;
 }
-
 #root {
-  max-width: 480px;
-  width: 100%;
-}
-
-/* Standalone preview (?page=…): the page plain, full-width, interactive. */
-body.uai-preview {
-  display: block;
-  padding: 0;
-}
-body.uai-preview #root {
-  max-width: none;
   width: auto;
 }
 
-/* Page mode: dark void stage; the page renders as a framed parchment card. */
-body.uai-page-mode {
-  display: block;
-  background: #101216;
-  padding: 22px 0 40px;
-}
-body.uai-page-mode #root {
-  max-width: none;
-  width: auto;
-}
+/* The stage surface: the target's own background/foreground tokens. */
 .uai-page-surface {
   background: var(--background);
   color: var(--foreground);
@@ -48,119 +26,23 @@ body.uai-page-mode #root {
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
 }
 
-/* Hover + selection (component mode keeps the single orange outline) */
-[data-uai],
-[data-uai-block] {
+/* Standalone preview (?file=…): the component plain, full-width, interactive. */
+body.uai-preview {
+  display: block;
+  padding: 2rem;
+  background: var(--background);
+}
+
+/* Hover + selection */
+[data-uai] {
   outline-offset: 2px;
 }
-[data-uai].uai-hover,
-[data-uai-block].uai-hover {
+[data-uai].uai-hover {
   outline: 2px dashed #328ec1;
   cursor: default;
 }
 [data-uai].uai-selected {
   outline: 2px solid #ff6b00;
-}
-
-/* Page mode: semantic per-kind selection */
-.uai-sel-block {
-  outline: 2px solid #ff6b00 !important;
-  outline-offset: 3px !important;
-  border-radius: 2px;
-}
-.uai-sel-column {
-  outline: 2px solid #5fae6f !important;
-  outline-offset: 6px !important;
-  border-radius: 2px;
-}
-.uai-sel-section {
-  outline: 2px solid #6fb8ea !important;
-  outline-offset: 3px !important;
-}
-
-/* Selection badge (tab on the element's top-left edge) */
-.uai-badge {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 3px 3px 0 0;
-  font-family: system-ui, sans-serif;
-  font-size: 9.5px;
-  white-space: nowrap;
-  z-index: 1003;
-  pointer-events: none;
-}
-
-/* Dev-note pin + callout */
-.uai-pin {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  border-radius: 99px;
-  background: #d9b45b;
-  color: #2c221e;
-  font-family: system-ui, sans-serif;
-  font-size: 11px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(44, 34, 30, 0.3);
-  z-index: 1002;
-  pointer-events: none;
-}
-.uai-callout {
-  margin-top: 8px;
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  padding: 8px 10px;
-  border: 1px dashed #d9b45b;
-  border-radius: 6px;
-  background: rgba(217, 180, 91, 0.1);
-  max-width: 38rem;
-  font-size: 12px;
-  line-height: 1.45;
-}
-.uai-callout-n {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  border-radius: 99px;
-  background: #d9b45b;
-  color: #2c221e;
-  font-size: 10px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
-}
-
-/* Empty-column + canvas-state wells */
-.uai-empty-well {
-  padding: 10px;
-  border: 1px dashed rgba(44, 34, 30, 0.2);
-  border-radius: 8px;
-  font-size: 11px;
-  color: rgba(44, 34, 30, 0.45);
-  text-align: center;
-}
-.uai-state-well {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed rgba(44, 34, 30, 0.28);
-  border-radius: 8px;
-  background: var(--background);
-  font-size: 12px;
-  color: var(--muted-foreground);
-  z-index: 1001;
-  box-sizing: border-box;
 }
 
 /* Drag & drop */
@@ -174,12 +56,8 @@ body.uai-page-mode #root {
   pointer-events: none;
   z-index: 1000;
 }
-[data-uai-kind].uai-editing {
-  outline: 2px solid #328ec1;
-  cursor: text;
-}
 
-/* Scrollbars — component mode sits on parchment, page mode on the void. */
+/* Scrollbars — the stage always sits on the void. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -189,29 +67,23 @@ body.uai-page-mode #root {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(44, 34, 30, 0.25);
+  background: #2a2e37;
   border-radius: 5px;
-  border: 2px solid transparent;
+  border: 2px solid #101216;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(44, 34, 30, 0.4);
-  background-clip: padding-box;
-}
-html.uai-page-mode ::-webkit-scrollbar-thumb,
-html.uai-page-mode::-webkit-scrollbar-thumb {
-  background: #2a2e37;
-  border: 2px solid #101216;
-}
-html.uai-page-mode ::-webkit-scrollbar-thumb:hover,
-html.uai-page-mode::-webkit-scrollbar-thumb:hover {
   background: #3a4356;
-  border: 2px solid #101216;
 }
 
 .uai-error {
   font-family: ui-monospace, monospace;
   font-size: 12px;
-  color: #b91c1c;
+  color: #e07a7a;
+  background: #1b1e24;
+  padding: 12px;
+  border-radius: 6px;
+  max-width: 60rem;
+  margin: 2rem auto;
   white-space: pre-wrap;
 }

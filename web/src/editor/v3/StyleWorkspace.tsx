@@ -37,7 +37,7 @@ interface GroupSpec {
 
 const CATS: Record<string, { note: string; groups: GroupSpec[] }> = {
   Colors: {
-    note: "src/theme.css",
+    note: "app globals.css",
     groups: [
       { name: "Provenance trust ladder", rows: [
         { token: "--source-community", cssVar: "--source-community", usage: "where a crawled fact came from" },
@@ -61,8 +61,8 @@ const CATS: Record<string, { note: string; groups: GroupSpec[] }> = {
         { token: "--muted-foreground (dark)", cssVar: "--muted-foreground", occurrence: 1, usage: "cards go lighter than the canvas" },
       ]},
       { name: "Beacon · one bit", rows: [
-        { token: "--beacon-armed", cssVar: "--beacon-armed", usage: "luminance slam, from", missingNote: "no token in theme.css yet" },
-        { token: "--beacon-fired", cssVar: "--beacon-fired", usage: "…to. Never hue.", missingNote: "no token in theme.css yet" },
+        { token: "--beacon-armed", cssVar: "--beacon-armed", usage: "luminance slam, from", missingNote: "no such token in the app yet" },
+        { token: "--beacon-fired", cssVar: "--beacon-fired", usage: "…to. Never hue.", missingNote: "no such token in the app yet" },
       ]},
     ],
   },

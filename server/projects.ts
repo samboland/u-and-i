@@ -1,58 +1,43 @@
 /**
- * Project registry: the targets u-and-i can read and edit.
- * "demo" is the bundled fixture sandbox. "aa" is the real adventure-alerts
- * Next.js repo — writable, but only through the AST edit/restore endpoints
- * (u-and-i has no save format: it edits the real code, and git in the
- * target repo is the safety net). It is omitted entirely when the sibling
- * checkout doesn't exist so the editor degrades gracefully.
+ * Target resolution: u-and-i serves exactly one Next.js app at a time — the
+ * folder named by UAI_TARGET or uai.config.json's "target" (relative paths
+ * resolve against the u-and-i repo root). There is no bundled demo and no
+ * save format: the target's real code is the document, and git in the
+ * target repo is the safety net.
  */
 import fs from "node:fs";
 import path from "node:path";
 
 export interface UaiProject {
-  id: string;
+  id: "app";
   label: string;
   /** Absolute root the path sandbox resolves against. */
   root: string;
-  kind: "fixture" | "next";
   srcDir: string;
-  writable: boolean;
 }
 
-export function getProjects(repoRoot: string): Record<string, UaiProject> {
-  const projects: Record<string, UaiProject> = {
-    demo: {
-      id: "demo",
-      label: "Demo project",
-      root: path.join(repoRoot, "fixtures", "demo-project"),
-      kind: "fixture",
-      srcDir: "src",
-      writable: true,
-    },
-  };
-  const aaRoot = aaRootPath(repoRoot);
-  if (aaRoot) {
-    projects.aa = {
-      id: "aa",
-      label: "Adventure Alerts",
-      root: aaRoot,
-      kind: "next",
-      srcDir: "src",
-      writable: true,
-    };
+export function targetRootPath(repoRoot: string): string | null {
+  let target = process.env.UAI_TARGET;
+  if (!target) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(path.join(repoRoot, "uai.config.json"), "utf8"));
+      target = cfg.target;
+    } catch {
+      /* no config */
+    }
   }
-  return projects;
-}
-
-/** The adventure-alerts checkout, or null when absent. */
-export function aaRootPath(repoRoot: string): string | null {
-  const root = process.env.UAI_AA_ROOT ?? path.resolve(repoRoot, "..", "adventure-alerts");
+  if (!target) return null;
+  const root = path.resolve(repoRoot, target);
   return fs.existsSync(path.join(root, "package.json")) ? root : null;
 }
 
-export function getProject(repoRoot: string, id: string | null): UaiProject {
-  const projects = getProjects(repoRoot);
-  const project = projects[id ?? "demo"];
-  if (!project) throw new Error(`unknown project "${id}"`);
-  return project;
+export function getProject(repoRoot: string): UaiProject {
+  const root = targetRootPath(repoRoot);
+  if (!root) {
+    throw new Error(
+      "no target app — set UAI_TARGET or uai.config.json { target } to a Next.js app folder",
+    );
+  }
+  const srcDir = fs.existsSync(path.join(root, "src", "app")) ? "src" : ".";
+  return { id: "app", label: path.basename(root), root, srcDir };
 }

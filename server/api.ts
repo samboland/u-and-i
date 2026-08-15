@@ -1,12 +1,11 @@
 /**
  * Vite plugins:
- *  - uaiTagger: injects data-uai ids into component files served to the
- *    harness (transform only — never touches disk). Covers the demo fixture
- *    and, when present, the adventure-alerts checkout.
- *  - uaiApi: the daemon API. Reads/parses/writes the real files on disk.
- *    Every endpoint is project-scoped (?project=demo|aa, default demo);
- *    write endpoints refuse non-writable projects — that is the hard line
- *    that keeps adventure-alerts read-only this iteration.
+ *  - uaiTagger: injects data-uai ids into the target app's component files
+ *    served to the harness (transform only — never touches disk).
+ *  - uaiApi: the daemon API. Reads/parses/writes the target app's real
+ *    files on disk. There is no save format and no bundled demo: every
+ *    write is an AST edit (or byte-verbatim restore) against the one
+ *    configured Next.js app.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -14,10 +13,12 @@ import type { Plugin, ViteDevServer } from "vite";
 import { analyzeFile, applyEdit, buildModel, tagTransform, type Edit } from "./ast.ts";
 import { parseTokens, writeToken } from "./tokens.ts";
 import { extractProps } from "./props.ts";
-import { listPages, loadPage, savePage, type PageDoc } from "./pages.ts";
-import { aaRootPath, getProject, getProjects, type UaiProject } from "./projects.ts";
+import { getProject, targetRootPath, type UaiProject } from "./projects.ts";
 import { scanRoutes } from "./routes.ts";
 import { analyzeShell } from "./shell.ts";
+
+/** data-uai ids and request keys share this prefix + project-relative path. */
+export const APP_PREFIX = "app:";
 
 function toRel(root: string, absPath: string): string {
   return path.relative(root, absPath).split(path.sep).join("/");
@@ -26,7 +27,7 @@ function toRel(root: string, absPath: string): string {
 function listFiles(dir: string, ext: RegExp, out: string[] = []): string[] {
   if (!fs.existsSync(dir)) return out;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".next") continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) listFiles(full, ext, out);
     else if (ext.test(entry.name)) out.push(full);
@@ -42,33 +43,22 @@ function isServerOnly(code: string): boolean {
 }
 
 export function uaiTagger(repoRoot: string): Plugin {
-  // [components dir, id prefix] — the prefix makes harness selection ids
-  // line up with the editor's project-prefixed file keys.
-  const roots: { dir: string; base: string; prefix: string }[] = [
-    {
-      dir: path.join(repoRoot, "fixtures", "demo-project", "src", "components"),
-      base: repoRoot,
-      prefix: "",
-    },
-  ];
-  const aaRoot = aaRootPath(repoRoot);
-  if (aaRoot) {
-    roots.push({
-      dir: path.join(aaRoot, "src", "components"),
-      base: aaRoot,
-      prefix: "aa:",
-    });
-  }
-  const normalized = roots.map((r) => ({ ...r, dirFs: r.dir.replaceAll("\\", "/") }));
+  const root = targetRootPath(repoRoot);
+  const componentsDir = root
+    ? path.join(root, "src", "components").replaceAll("\\", "/")
+    : null;
+  const appDir = root ? path.join(root, "src", "app").replaceAll("\\", "/") : null;
   return {
     name: "uai-tagger",
     enforce: "pre",
     transform(code, id) {
+      if (!root) return null;
       const file = id.split("?")[0].replaceAll("\\", "/");
       if (!file.endsWith(".tsx")) return null;
-      const root = normalized.find((r) => file.startsWith(r.dirFs));
-      if (!root) return null;
-      const rel = root.prefix + toRel(root.base, file);
+      if (!(componentsDir && file.startsWith(componentsDir)) && !(appDir && file.startsWith(appDir))) {
+        return null;
+      }
+      const rel = APP_PREFIX + toRel(root, file);
       try {
         return { code: tagTransform(code, rel), map: null };
       } catch (err) {
@@ -85,27 +75,40 @@ async function readBody(req: import("node:http").IncomingMessage): Promise<any> 
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
+/** The canvas design-system CSS is target-dependent (Tailwind @source needs
+ * literal paths), so it's generated at boot into a gitignored real file. */
+function writeTargetCanvasCss(repoRoot: string): void {
+  const out = path.join(repoRoot, "web", "src", "harness", "target-canvas.css");
+  const root = targetRootPath(repoRoot);
+  let content = "/* GENERATED at dev-server boot from uai.config.json — do not edit. */\n";
+  if (root) {
+    const fsRoot = root.replaceAll("\\", "/");
+    const globals = ["src/app/globals.css", "app/globals.css", "src/styles/globals.css"]
+      .map((p) => `${fsRoot}/${p}`)
+      .find((p) => fs.existsSync(p));
+    if (globals) content += `@import "${globals}";\n`;
+    content += `@source "${fsRoot}/src/components";\n@source "${fsRoot}/src/app";\n`;
+    if (path.basename(root) === "adventure-alerts") {
+      // Stand-in for this app's next/font/local wiring.
+      content += `@import "./aa/aa-fonts.css";\n`;
+    }
+  }
+  if (!fs.existsSync(out) || fs.readFileSync(out, "utf8") !== content) {
+    fs.writeFileSync(out, content, "utf8");
+  }
+}
+
 export function uaiApi(repoRoot: string): Plugin {
-  /** Resolve a request-supplied relative path inside the project sandbox.
-   * Demo keeps its legacy repo-relative keys ("fixtures/demo-project/...");
-   * other projects use project-relative keys ("src/components/..."). */
+  /** Resolve a request-supplied project-relative path inside the target. */
   const abs = (project: UaiProject, rel: string) => {
-    const base = project.kind === "fixture" ? repoRoot : project.root;
-    const full = path.resolve(base, rel);
+    const full = path.resolve(project.root, rel);
     if (!full.startsWith(path.resolve(project.root))) {
-      throw new Error("path escapes project root");
+      throw new Error("path escapes the target app");
     }
     return full;
   };
 
-  const assertWritable = (project: UaiProject) => {
-    if (!project.writable) {
-      throw new Error(`project "${project.id}" is read-only`);
-    }
-  };
-
-  /** Resolve an import specifier to a request-key-compatible relative path,
-   * or null when it points outside the project / at a package. */
+  /** Resolve an import specifier to a project-relative file, or null. */
   const importResolver = (project: UaiProject, fromRel: string) => (spec: string): string | null => {
     let base: string;
     if (spec.startsWith("@/")) {
@@ -118,8 +121,7 @@ export function uaiApi(repoRoot: string): Plugin {
     for (const ext of ["", ".tsx", ".ts", "/index.tsx", "/index.ts"]) {
       const candidate = base + ext;
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        const relBase = project.kind === "fixture" ? repoRoot : project.root;
-        const rel = toRel(relBase, candidate);
+        const rel = toRel(project.root, candidate);
         return rel.startsWith("..") ? null : rel;
       }
     }
@@ -139,14 +141,16 @@ export function uaiApi(repoRoot: string): Plugin {
 
   return {
     name: "uai-api",
+    config() {
+      writeTargetCanvasCss(repoRoot);
+    },
     configureServer(server: ViteDevServer) {
-      // adventure-alerts components reference public/ assets by absolute URL
-      // ("/brand/logo.svg"); serve that dir so the canvas isn't full of
-      // broken images. Real editor paths never exist in public/, so this
-      // can't shadow them.
-      const aaRoot = aaRootPath(repoRoot);
-      if (aaRoot) {
-        const publicDir = path.resolve(aaRoot, "public");
+      // The target app references public/ assets by absolute URL; serve that
+      // dir so the canvas isn't full of broken images. Real editor paths
+      // never exist in public/, so this can't shadow them.
+      const root = targetRootPath(repoRoot);
+      if (root) {
+        const publicDir = path.resolve(root, "public");
         server.middlewares.use((req, res, next) => {
           const pathname = decodeURIComponent(
             new URL(req.url ?? "/", "http://localhost").pathname,
@@ -172,10 +176,10 @@ export function uaiApi(repoRoot: string): Plugin {
         };
 
         try {
-          const project = getProject(repoRoot, url.searchParams.get("project"));
+          const project = getProject(repoRoot);
 
-          if (url.pathname === "/api/projects" && req.method === "GET") {
-            return json(200, { projects: Object.values(getProjects(repoRoot)) });
+          if (url.pathname === "/api/project" && req.method === "GET") {
+            return json(200, { project });
           }
 
           if (url.pathname === "/api/routes" && req.method === "GET") {
@@ -204,22 +208,19 @@ export function uaiApi(repoRoot: string): Plugin {
 
           if (url.pathname === "/api/components" && req.method === "GET") {
             const dir = path.join(project.root, project.srcDir, "components");
-            const relBase = project.kind === "fixture" ? repoRoot : project.root;
             const files = listFiles(dir, /\.tsx$/)
               .filter((f) => !/\.test\.tsx$/.test(f))
-              .map((f) => toRel(relBase, f));
+              .map((f) => toRel(project.root, f));
             const meta: Record<string, { serverOnly: boolean; exportName?: string }> = {};
-            if (project.kind === "next") {
-              for (const rel of files) {
-                try {
-                  const code = fs.readFileSync(abs(project, rel), "utf8");
-                  const exportName = code.match(
-                    /export\s+(?:default\s+)?(?:async\s+)?(?:function|const)\s+([A-Z]\w+)/,
-                  )?.[1];
-                  meta[rel] = { serverOnly: isServerOnly(code), exportName };
-                } catch {
-                  meta[rel] = { serverOnly: true };
-                }
+            for (const rel of files) {
+              try {
+                const code = fs.readFileSync(abs(project, rel), "utf8");
+                const exportName = code.match(
+                  /export\s+(?:default\s+)?(?:async\s+)?(?:function|const)\s+([A-Z]\w+)/,
+                )?.[1];
+                meta[rel] = { serverOnly: isServerOnly(code), exportName };
+              } catch {
+                meta[rel] = { serverOnly: true };
               }
             }
             return json(200, { files, meta });
@@ -230,14 +231,9 @@ export function uaiApi(repoRoot: string): Plugin {
             const full = abs(project, rel);
             const code = fs.readFileSync(full, "utf8");
             const analysis = analyzeFile(code);
-            // Model ids must equal the canvas's data-uai values, which the
-            // tagger prefixes with the project id for non-fixture roots.
-            const modelKey = project.kind === "fixture" ? rel : `${project.id}:${rel}`;
             return json(200, {
-              model: buildModel(code, modelKey, { resolveImport: importResolver(project, rel) }),
-              props: extractProps(project.kind === "next" ? project.root : repoRoot, full, {
-                tsconfig: project.kind === "next",
-              }),
+              model: buildModel(code, APP_PREFIX + rel, { resolveImport: importResolver(project, rel) }),
+              props: extractProps(project.root, full, { tsconfig: true }),
               // Async components (server pages) can't run in a browser canvas;
               // they get assisted (no-live-preview) editing instead.
               renderable: !isServerOnly(code) && !analysis.defaultAsync,
@@ -245,7 +241,6 @@ export function uaiApi(repoRoot: string): Plugin {
           }
 
           if (url.pathname === "/api/edit" && req.method === "POST") {
-            assertWritable(project);
             const { file, edit, expectTag } = (await readBody(req)) as {
               file: string;
               edit: Edit;
@@ -253,7 +248,7 @@ export function uaiApi(repoRoot: string): Plugin {
             };
             const full = abs(project, file);
             const before = fs.readFileSync(full, "utf8");
-            const modelKey = project.kind === "fixture" ? file : `${project.id}:${file}`;
+            const modelKey = APP_PREFIX + file;
             if (expectTag) {
               // Cheap staleness check: the editor's model must still match disk.
               const model = buildModel(before, modelKey);
@@ -285,17 +280,14 @@ export function uaiApi(repoRoot: string): Plugin {
           if (url.pathname === "/api/restore" && req.method === "POST") {
             // Byte-verbatim write for undo/redo: `before`/`after` from edit
             // responses restore exactly, no AST round-trip.
-            assertWritable(project);
             const { file, text } = (await readBody(req)) as { file: string; text: string };
             fs.writeFileSync(abs(project, file), text, "utf8");
             return json(200, { ok: true });
           }
 
           if (url.pathname === "/api/tokens" && req.method === "GET") {
-            const dir =
-              project.kind === "fixture" ? project.root : path.join(project.root, project.srcDir);
-            const relBase = project.kind === "fixture" ? repoRoot : project.root;
-            const files = listFiles(dir, /\.css$/).map((f) => toRel(relBase, f));
+            const dir = path.join(project.root, project.srcDir);
+            const files = listFiles(dir, /\.css$/).map((f) => toRel(project.root, f));
             const tokens = files.map((rel) => ({
               file: rel,
               decls: parseTokens(fs.readFileSync(abs(project, rel), "utf8")),
@@ -303,18 +295,28 @@ export function uaiApi(repoRoot: string): Plugin {
             return json(200, { tokens });
           }
 
+          if (url.pathname === "/api/token" && req.method === "POST") {
+            const { file, decl, value } = await readBody(req);
+            const full = abs(project, file);
+            const css = fs.readFileSync(full, "utf8");
+            const next = writeToken(css, decl, value);
+            fs.writeFileSync(full, next, "utf8");
+            return json(200, { ok: true });
+          }
+
           if (url.pathname === "/api/material" && req.method === "POST") {
-            assertWritable(project);
-            if (project.kind !== "fixture") throw new Error("materials are a fixture-project feature");
-            // Workshop output: maintain a marked block at the end of theme.css
-            // holding --material-* tokens. Lines for the same material name are
-            // replaced; other materials are preserved.
+            // Workshop output: maintain a marked block at the end of the
+            // app's global stylesheet holding --material-* tokens. Lines for
+            // the same material name are replaced; others are preserved.
             const { name, lines } = (await readBody(req)) as {
               name: string;
               lines: string[];
             };
             if (!/^[\w-]+$/.test(name)) throw new Error("bad material name");
-            const themePath = abs(project, "fixtures/demo-project/src/theme.css");
+            const globalsRel = ["src/app/globals.css", "app/globals.css", "src/styles/globals.css"]
+              .find((p) => fs.existsSync(abs(project, p)));
+            if (!globalsRel) throw new Error("no globals.css found in the target app");
+            const themePath = abs(project, globalsRel);
             const css = fs.readFileSync(themePath, "utf8");
             const START = "/* @uai-materials — written by the u-and-i Workshop */";
             const END = "/* @uai-materials-end */";
@@ -333,43 +335,6 @@ export function uaiApi(repoRoot: string): Plugin {
             const decls = [...existing, ...lines.map((l) => `  ${l.trim()}`)];
             const block = `${START}\n:root {\n${decls.join("\n")}\n}\n${END}\n`;
             fs.writeFileSync(themePath, base.trimEnd() + "\n\n" + block, "utf8");
-            return json(200, { ok: true });
-          }
-
-          if (url.pathname === "/api/token" && req.method === "POST") {
-            assertWritable(project);
-            if (project.kind !== "fixture") throw new Error("token writes are fixture-only for now");
-            const { file, decl, value } = await readBody(req);
-            const full = abs(project, file);
-            const css = fs.readFileSync(full, "utf8");
-            const next = writeToken(css, decl, value);
-            fs.writeFileSync(full, next, "utf8");
-            return json(200, { ok: true });
-          }
-
-          // Page documents are a fixture-project concept until the write-side
-          // of the Next pivot lands (colocated page.uai.json per route).
-          if (url.pathname === "/api/pages" && req.method === "GET") {
-            if (project.kind !== "fixture") throw new Error("pages live per-route in Next projects");
-            return json(200, { pages: listPages(project.root) });
-          }
-
-          if (url.pathname === "/api/page" && req.method === "GET") {
-            if (project.kind !== "fixture") throw new Error("pages live per-route in Next projects");
-            const name = url.searchParams.get("name")!;
-            if (!/^[\w-]+$/.test(name)) throw new Error("bad page name");
-            const doc = loadPage(project.root, name);
-            // Refresh the generated module so it always matches the current
-            // codegen version, not the one that last saved it.
-            savePage(project.root, doc);
-            return json(200, { doc });
-          }
-
-          if (url.pathname === "/api/page" && req.method === "POST") {
-            assertWritable(project);
-            if (project.kind !== "fixture") throw new Error("pages live per-route in Next projects");
-            const { doc } = (await readBody(req)) as { doc: PageDoc };
-            savePage(project.root, doc);
             return json(200, { ok: true });
           }
 

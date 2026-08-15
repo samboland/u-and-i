@@ -1,44 +1,41 @@
 /**
- * u-and-i editor shell v3 — converted from design/editor-redesign.dc.html.
+ * u-and-i editor shell — code is truth, no save format.
  *
- * Regions: TopBar (menus + workspace tabs) · DocumentRow · workspace toolbar ·
- * workspace main (Layout: Insert | Canvas; Style/Workshop pending) · the
- * constant right column (Outliner over Properties) · StatusBar.
+ * The editor serves exactly one target Next.js app (uai.config.json /
+ * UAI_TARGET). Opening a route or component opens its REAL source file:
+ * the Outliner shows the file's JSX tree, the canvas renders the actual
+ * module through the next/* shims, and every mutation is an AST edit
+ * written straight into the file — undo restores exact prior bytes.
  *
- * All document mutations flow through one edit(mutator) funnel — that funnel
- * IS the undo feature. The canvas renders the real generated page in the
- * harness iframe; this chrome only sends protocol messages.
+ * Regions: TopBar (menus + workspace tabs) · DocumentRow · workspace main
+ * (Layout: Insert | Canvas; Style; Workshop) · right column (Outliner over
+ * Properties) · StatusBar. All file mutations flow through one editFile
+ * funnel — that funnel IS the undo feature.
  */
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
-  type ReactNode,
 } from "react";
-import { mocks } from "../../../../fixtures/mocks";
-import type { CanvasState, EditorToHarness, HarnessToEditor } from "../../shared/protocol";
+import type { EditorToHarness, HarnessToEditor } from "../../shared/protocol";
 import {
   C,
-  CANVAS_STATES,
   DEVICES,
   MONO,
   ROLES,
-  SEL_COLOR,
   ZOOMS,
-  amberBtn,
   ctlBtn,
   inputStyle,
   primaryBtn,
-  rowLabel,
   sectionHeader,
   segBtn,
   trough,
   vdiv,
   type DeviceName,
 } from "./chrome";
+import { Field, Row, Seg, Sym } from "./controls";
 import { FileNodeCard, FileOutliner } from "./FileMode";
 import { OutlinerRow } from "./OutlinerRow";
 import { RouteTree, routeId, type RouteNode } from "./RouteTree";
@@ -50,90 +47,26 @@ import {
   materialLines,
   type WorkshopState,
 } from "./Workshop";
-import {
-  GLYPH_OF,
-  KIND_LABEL,
-  allBlocks,
-  blockTag,
-  blockText,
-  blockTitle,
-  defaultDoc,
-  defaultSection,
-  findColumn,
-  findSection,
-  joinBox,
-  locate,
-  makeBlock,
-  noteEntries,
-  findModelNode,
-  parseBox,
-  reId,
-  setBlockTextValue,
-  uid,
-  type Block,
-  type FileEdit,
-  type JsxNodeModel,
-  type Column,
-  type NewSpec,
-  type PageDoc,
-  type Section,
-  type Sel,
-  type SelKind,
-} from "./model";
+import { findModelNode, type FileEdit, type JsxNodeModel } from "./model";
 
-const MIME_BLOCK = "application/x-uai-new-block";
-const MIME_SECTION = "application/x-uai-new-section";
-const MIME_COLUMN = "application/x-uai-new-column";
+const MIME_JSX = "application/x-uai-jsx";
+const APP_PREFIX = "app:";
 
 const WORKSPACES = [
-  { label: "Layout", hint: "compose the page" },
+  { label: "Layout", hint: "edit the app's real components" },
   { label: "Style", hint: "edit theme tokens with a live preview" },
-  { label: "Workshop", hint: "build components and their materials" },
+  { label: "Workshop", hint: "build materials for the design system" },
 ] as const;
 type Workspace = (typeof WORKSPACES)[number]["label"];
 
-const PROP_TABS = [
-  { label: "Content", glyph: "✎" },
-  { label: "Placement", glyph: "⊞" },
-  { label: "Style", glyph: "◐" },
-  { label: "Props", glyph: "⚙" },
-  { label: "Data", glyph: "◈" },
-  { label: "Notes", glyph: "✱" },
-  { label: "Source", glyph: "⎇" },
-] as const;
-type PropTab = (typeof PROP_TABS)[number]["label"];
-
-import { Field, LENGTH_PROPS, Row, Seg, Sym, normalizeLen } from "./controls";
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
-  const body = await res.json();
-  if (!res.ok) throw new Error(body.error ?? res.statusText);
-  return body as T;
-}
-
-const UI_DIR = "fixtures/demo-project/src/components/ui";
-const COMPONENT_FILES: Record<string, string> = {
-  ConfidenceBar: "fixtures/demo-project/src/components/product-card/confidence-bar.tsx",
-  ResultCard: "fixtures/demo-project/src/components/explore/result-card.tsx",
-};
-function fileForComponent(name: string): string {
-  return COMPONENT_FILES[name] ?? `${UI_DIR}/${name}.tsx`;
-}
-function componentSpec(name: string): NewSpec {
-  const file = fileForComponent(name);
-  const mock = mocks[file];
-  return {
-    type: "component",
-    file,
-    exportName: mock?.exportName ?? name,
-    props: mock?.props ?? {},
-  };
-}
-const UI_KIT = Object.keys(mocks)
-  .filter((k) => k.startsWith(UI_DIR) && !/icons|tooltip|index/.test(k))
-  .map((k) => k.split("/").pop()!.replace(/\.tsx$/, ""))
-  .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+const PRIMITIVES: { label: string; icon: string; jsx: string }[] = [
+  { label: "Container", icon: "▤", jsx: '<div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}></div>' },
+  { label: "Heading", icon: "H", jsx: "<h2>Heading</h2>" },
+  { label: "Paragraph", icon: "¶", jsx: "<p>New paragraph</p>" },
+  { label: "Button", icon: "▭", jsx: '<button type="button">Button</button>' },
+  { label: "Link", icon: "↗", jsx: '<a href="#">Link</a>' },
+  { label: "Image", icon: "▨", jsx: '<img src="" alt="" style={{ width: "160px", height: "90px", background: "var(--muted, #ddd)" }} />' },
+];
 
 interface PropSpec {
   name: string;
@@ -142,19 +75,40 @@ interface PropSpec {
   control: { kind: string; options?: string[] };
 }
 
-/** One undo stack across both truth systems: the page-doc sandbox and
- * direct file edits (which undo by restoring exact prior file bytes). */
-type HistoryEntry =
-  | { kind: "doc"; doc: PageDoc; sel: Sel }
-  | {
-      kind: "file";
-      project: string;
-      file: string;
-      before: string;
-      after: string;
-      focusBefore: string | null;
-      focusAfter: string | null;
-    };
+interface FileState {
+  file: string;
+  canvasKey: string;
+  model: JsxNodeModel[];
+  renderable: boolean;
+  specs: PropSpec[];
+  values: Record<string, unknown>;
+}
+
+interface ShellInfo {
+  viewFile: string | null;
+  viewTag: string | null;
+  contentNote: string | null;
+}
+
+type HistoryEntry = {
+  file: string;
+  before: string;
+  after: string;
+  focusBefore: string | null;
+  focusAfter: string | null;
+};
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, init);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? res.statusText);
+  return body as T;
+}
+
+function parentIndexOf(node: JsxNodeModel): number {
+  const m = node.parentId?.match(/::(\d+)$/);
+  return m ? Number(m[1]) : node.index;
+}
 
 // ---------------------------------------------------------------------------
 // App
@@ -165,75 +119,16 @@ export function App() {
   const canvasRegionRef = useRef<HTMLDivElement>(null);
   const harnessReady = useRef(false);
 
-  const [pages, setPages] = useState<string[]>([]);
-  const [doc, setDoc] = useState<PageDoc | null>(null);
-  const docRef = useRef<PageDoc | null>(null);
-  docRef.current = doc;
-  const [sel, setSel] = useState<Sel>({ kind: null, id: null });
-  const selRef = useRef(sel);
-  selRef.current = sel;
-
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [future, setFuture] = useState<HistoryEntry[]>([]);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-
-  const [workspace, setWorkspace] = useState<Workspace>("Layout");
-  const [propTab, setPropTab] = useState<PropTab>("Content");
-  const [outlinerMode, setOutlinerMode] = useState<"Page" | "Project">("Page");
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [rulersOn, setRulersOn] = useState(true);
-  const [notesOn, setNotesOn] = useState(true);
-  const [device, setDevice] = useState<DeviceName>("Desktop");
-  const [zoom, setZoom] = useState<number>(DEVICES.Desktop.zoom);
-  const [canvasState, setCanvasState] = useState<CanvasState>("Default");
-  const [themeDark, setThemeDark] = useState(false);
-  const [role, setRole] = useState("Traveler");
-  const [search, setSearch] = useState("");
-  const [interact, setInteract] = useState(false);
-  const [propSpecs, setPropSpecs] = useState<Record<string, PropSpec[]>>({});
-  const [styleEdits, setStyleEdits] = useState(0);
-  const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
-  const [appZoom, setAppZoom] = useState(1);
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const clipboard = useRef<{ kind: SelKind; node: Section | Column | Block } | null>(null);
-  // Filled in below once handleChord exists; the harness message handler
-  // reads it so iframe-forwarded shortcuts never go through a stale closure.
-  const handleChordRef = useRef<(c: { key: string; mod: boolean; shift: boolean; alt: boolean }) => boolean>(() => false);
-  const hRuler = useRef<HTMLCanvasElement>(null);
-  const vRuler = useRef<HTMLCanvasElement>(null);
-  const stageXY = useRef({ x: 0, y: 0 });
-  const drawRulersRef = useRef<() => void>(() => {});
-  const [rulerUnit, setRulerUnit] = useState<"px" | "rem">("px");
-  // Next-project (adventure-alerts) route tree — read-only this iteration.
+  const [targetLabel, setTargetLabel] = useState<string>("…");
   const [routeTree, setRouteTree] = useState<RouteNode | null>(null);
-  const routesFetched = useRef(false);
   const [routeSel, setRouteSel] = useState<RouteNode | null>(null);
-  const [routeShell, setRouteShell] = useState<{
-    viewFile: string | null;
-    viewTag: string | null;
-    contentNote: string | null;
-  } | null>(null);
-  // Which design system the canvas iframe runs; AA components preview in a
-  // dedicated ?project=aa document so the two .ui-* systems never mix.
-  const [canvasProject, setCanvasProject] = useState<"demo" | "aa">("demo");
-  const [insertSource, setInsertSource] = useState<"Demo kit" | "Adventure Alerts">("Demo kit");
-  const [aaComponents, setAaComponents] = useState<{
+  const [routeShell, setRouteShell] = useState<ShellInfo | null>(null);
+  const [components, setComponents] = useState<{
     files: string[];
     meta: Record<string, { serverOnly: boolean; exportName?: string }>;
   } | null>(null);
-  // Code-is-truth file mode: a real source file open for direct editing.
-  // `file` is the request key; `canvasKey` is what the tagger stamps on DOM.
-  const [fileState, setFileState] = useState<{
-    project: "demo" | "aa";
-    file: string;
-    canvasKey: string;
-    model: JsxNodeModel[];
-    renderable: boolean;
-    specs: PropSpec[];
-    values: Record<string, unknown>;
-  } | null>(null);
+
+  const [fileState, setFileState] = useState<FileState | null>(null);
   const fileStateRef = useRef(fileState);
   fileStateRef.current = fileState;
   const [fileFocusId, setFileFocusId] = useState<string | null>(null);
@@ -241,10 +136,34 @@ export function App() {
   fileFocusRef.current = fileFocusId;
   const [fileCollapsed, setFileCollapsed] = useState<Set<string>>(new Set());
   const [touchedFiles, setTouchedFiles] = useState<Set<string>>(new Set());
-  // Assigned after editFile/openFile are defined; lets earlier callbacks and
-  // the message handler reach them without stale closures.
   const editFileRef = useRef<(edit: FileEdit, expectTag: string) => void | Promise<void>>(() => {});
-  const openFileRef = useRef<(project: "demo" | "aa", file: string) => Promise<void>>(async () => {});
+  const openFileRef = useRef<(file: string) => Promise<void>>(async () => {});
+
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [future, setFuture] = useState<HistoryEntry[]>([]);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  const [workspace, setWorkspace] = useState<Workspace>("Layout");
+  const [outlinerMode, setOutlinerMode] = useState<"File" | "Routes">("Routes");
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [rulersOn, setRulersOn] = useState(true);
+  const [device, setDevice] = useState<DeviceName>("Desktop");
+  const [zoom, setZoom] = useState<number>(DEVICES.Desktop.zoom);
+  const [themeDark, setThemeDark] = useState(false);
+  const [role, setRole] = useState("Traveler");
+  const [search, setSearch] = useState("");
+  const [interact, setInteract] = useState(false);
+  const [styleEdits, setStyleEdits] = useState(0);
+  const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
+  const [appZoom, setAppZoom] = useState(1);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const handleChordRef = useRef<(c: { key: string; mod: boolean; shift: boolean; alt: boolean }) => boolean>(() => false);
+  const hRuler = useRef<HTMLCanvasElement>(null);
+  const vRuler = useRef<HTMLCanvasElement>(null);
+  const stageXY = useRef({ x: 0, y: 0 });
+  const drawRulersRef = useRef<() => void>(() => {});
+  const [rulerUnit, setRulerUnit] = useState<"px" | "rem">("px");
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -255,390 +174,41 @@ export function App() {
     setSavedAt(new Date().toLocaleTimeString());
   });
 
-  // ------------------------------------------------------------------ persistence
+  // ------------------------------------------------------------------ boot
 
-  const persist = useCallback(async (next: PageDoc) => {
-    await api("/api/page", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doc: next }),
-    });
-    setSavedAt(new Date().toLocaleTimeString());
+  useEffect(() => {
+    void api<{ project: { label: string } }>("/api/project")
+      .then((d) => setTargetLabel(d.project.label))
+      .catch(() => setTargetLabel("no target app"));
+    void api<{ tree: RouteNode }>("/api/routes").then((r) => setRouteTree(r.tree)).catch(() => {});
+    void api<{ files: string[]; meta: Record<string, { serverOnly: boolean; exportName?: string }> }>(
+      "/api/components",
+    ).then(setComponents).catch(() => {});
   }, []);
 
-  /** The one mutation funnel — deep-copies, applies, records history, saves. */
-  const edit = useCallback(
-    (mutator: (d: PageDoc) => Partial<Sel> | void) => {
-      const cur = docRef.current;
-      if (!cur) return;
-      const next = structuredClone(cur);
-      const selPatch = mutator(next) ?? {};
-      setHistory((h) => [...h.slice(-59), { kind: "doc", doc: cur, sel: selRef.current }]);
-      setFuture([]);
-      setDoc(next);
-      if (selPatch.kind !== undefined || selPatch.id !== undefined) {
-        setSel({ kind: selPatch.kind ?? null, id: selPatch.id ?? null });
-      }
-      void persist(next);
-    },
-    [persist],
-  );
-
-  /** Undo a file edit: write the exact prior bytes back, then re-sync the
-   * open model if the restored file is on screen. */
-  const restoreFile = useCallback(
-    async (entry: Extract<HistoryEntry, { kind: "file" }>, direction: "undo" | "redo") => {
-      const text = direction === "undo" ? entry.before : entry.after;
-      await api(`/api/restore?project=${entry.project}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file: entry.file, text }),
-      });
-      setSavedAt(new Date().toLocaleTimeString());
-      const fsNow = fileStateRef.current;
-      if (fsNow && fsNow.project === entry.project && fsNow.file === entry.file) {
-        const d = await api<{ model: JsxNodeModel[] }>(
-          `/api/component?project=${entry.project}&file=${encodeURIComponent(entry.file)}`,
-        );
-        setFileState((s) => (s ? { ...s, model: d.model } : s));
-        setFileFocusId(direction === "undo" ? entry.focusBefore : entry.focusAfter);
-      }
-    },
-    [],
-  );
-
-  const undoAction = useCallback(() => {
-    setHistory((h) => {
-      if (!h.length) return h;
-      const prev = h[h.length - 1];
-      if (prev.kind === "doc") {
-        const cur = docRef.current;
-        if (cur) setFuture((f) => [...f, { kind: "doc", doc: cur, sel: selRef.current }]);
-        setDoc(prev.doc);
-        setSel(prev.sel);
-        void persist(prev.doc);
-      } else {
-        setFuture((f) => [...f, prev]);
-        void restoreFile(prev, "undo");
-      }
-      return h.slice(0, -1);
-    });
-  }, [persist, restoreFile]);
-
-  const redoAction = useCallback(() => {
-    setFuture((f) => {
-      if (!f.length) return f;
-      const next = f[f.length - 1];
-      if (next.kind === "doc") {
-        const cur = docRef.current;
-        if (cur) setHistory((h) => [...h.slice(-59), { kind: "doc", doc: cur, sel: selRef.current }]);
-        setDoc(next.doc);
-        setSel(next.sel);
-        void persist(next.doc);
-      } else {
-        setHistory((h) => [...h.slice(-59), next]);
-        void restoreFile(next, "redo");
-      }
-      return f.slice(0, -1);
-    });
-  }, [persist, restoreFile]);
-
-  const openPage = useCallback(async (name: string) => {
-    const data = await api<{ doc: PageDoc }>(`/api/page?name=${encodeURIComponent(name)}`);
-    setDoc(data.doc);
-    setSel({ kind: null, id: null });
-    setRouteSel(null);
-    setFileState(null);
-    setFileFocusId(null);
-    setCanvasProject("demo");
-    setHistory([]);
-    setFuture([]);
-    if (harnessReady.current) {
-      iframeRef.current?.contentWindow?.postMessage({ type: "render-page", name }, "*");
-    }
-  }, []);
-
-  const newPage = useCallback(async () => {
-    const name = window.prompt("Page name (letters, dashes):");
-    if (!name || !/^[\w-]+$/.test(name)) return;
-    const d = defaultDoc(name);
-    await api("/api/page", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doc: d }),
-    });
-    setPages((p) => (p.includes(name) ? p : [...p, name]));
-    await openPage(name);
-  }, [openPage]);
-
-  // Boot
-  useEffect(() => {
-    void api<{ pages: string[] }>("/api/pages").then(async (d) => {
-      setPages(d.pages);
-      const first = d.pages.includes("home") ? "home" : d.pages[0];
-      if (first) await openPage(first);
-    });
-  }, [openPage]);
-
-  // Load the Next-project route tree the first time Project mode opens.
-  useEffect(() => {
-    if (outlinerMode !== "Project" || routesFetched.current) return;
-    routesFetched.current = true;
-    void api<{ projects: { id: string }[] }>("/api/projects")
-      .then((d) =>
-        d.projects.some((p) => p.id === "aa")
-          ? api<{ tree: RouteNode }>("/api/routes?project=aa").then((r) => setRouteTree(r.tree))
-          : undefined,
-      )
-      .catch(() => {});
-  }, [outlinerMode]);
-
-  // Shell analysis for the selected route: find its primary view component.
+  // Shell analysis for the selected route.
   useEffect(() => {
     setRouteShell(null);
     const page = routeSel?.files.page;
     if (!page) return;
-    void api<{ viewFile: string | null; viewTag: string | null; contentNote: string | null }>(
-      `/api/page-shell?project=aa&file=${encodeURIComponent(page)}`,
-    )
+    void api<ShellInfo>(`/api/page-shell?file=${encodeURIComponent(page)}`)
       .then(setRouteShell)
       .catch(() => {});
   }, [routeSel]);
 
-  // ------------------------------------------------------------------ selection helpers
-
-  const hit = doc ? locate(doc, sel.kind === "block" ? sel.id : null) : null;
-  const colHit = doc && sel.kind === "column" ? findColumn(doc, sel.id) : null;
-  const secHit = doc && sel.kind === "section" ? findSection(doc, sel.id) : null;
-  const block = hit?.block ?? null;
-  const selAccent = sel.kind ? SEL_COLOR[sel.kind] : SEL_COLOR.none;
-  const selKindLabel = block
-    ? KIND_LABEL[block.type]
-    : sel.kind === "column"
-      ? "Column"
-      : sel.kind === "section"
-        ? "Section"
-        : "Nothing";
-  const notes = doc ? noteEntries(doc) : [];
-  const needsDataCount = doc ? allBlocks(doc).filter((e) => e.block.needsData).length : 0;
-
-  const badgeFor = useCallback(
-    (d: PageDoc, kind: SelKind, id: string): string => {
-      if (kind === "section") {
-        const f = findSection(d, id);
-        return f ? `Section · ${f.sec.label ?? f.sec.id}` : "Section";
-      }
-      if (kind === "column") {
-        const f = findColumn(d, id);
-        if (!f) return "Column";
-        const total = f.sec.columns.reduce((a, c) => a + (parseInt(c.flex) || 1), 0);
-        return `Column ${f.ci + 1} · ${f.col.flex} of ${total}`;
-      }
-      const h = locate(d, id);
-      return h ? `${KIND_LABEL[h.block.type]} · ${blockTag(h.block)}` : "Element";
-    },
-    [],
-  );
-
-  const select = useCallback((kind: SelKind | null, id: string | null) => {
-    setSel({ kind, id });
-    if (kind) setRouteSel(null);
-  }, []);
-
-  // ------------------------------------------------------------------ canvas sync
-
-  useEffect(() => {
-    if (!doc) return;
-    send({
-      type: "select-block",
-      id: sel.id,
-      kind: sel.kind ?? undefined,
-      badge: sel.kind && sel.id ? badgeFor(doc, sel.kind, sel.id) : undefined,
-    });
-  }, [sel, doc, send, badgeFor]);
-
-  useEffect(() => {
-    if (!doc) return;
-    send({
-      type: "set-annotations",
-      notes: notesOn ? notes.map((n) => ({ id: n.block.id, n: n.n, text: n.block.note! })) : [],
-      needsData: allBlocks(doc)
-        .filter((e) => e.block.needsData)
-        .map((e) => e.block.id),
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, notesOn]);
-
-  useEffect(() => send({ type: "set-device", width: DEVICES[device].width }), [device, send]);
-  useEffect(() => send({ type: "set-zoom", zoom }), [zoom, send]);
-  useEffect(() => send({ type: "set-canvas-state", state: canvasState }), [canvasState, send]);
-  useEffect(() => send({ type: "set-show-notes", on: notesOn }), [notesOn, send]);
-  useEffect(() => send({ type: "set-theme", dark: themeDark }), [themeDark, send]);
-  useEffect(() => send({ type: "set-interact", on: interact }), [interact, send]);
-
-  // ------------------------------------------------------------------ harness messages
-
-  useEffect(() => {
-    const onMessage = (e: MessageEvent<HarnessToEditor>) => {
-      const msg = e.data;
-      if (!msg || typeof msg !== "object") return;
-      const d = docRef.current;
-      if (msg.type === "ready") {
-        harnessReady.current = true;
-        const fsNow = fileStateRef.current;
-        if (fsNow && fsNow.renderable && (fsNow.project === "aa") === (canvasProject === "aa")) {
-          send({ type: "render", file: fsNow.canvasKey, props: fsNow.values });
-        } else if (d) {
-          iframeRef.current?.contentWindow?.postMessage({ type: "render-page", name: d.name }, "*");
-          send({ type: "set-device", width: DEVICES[device].width });
-          send({ type: "set-zoom", zoom });
-        }
-      } else if (msg.type === "selected") {
-        // Component-mode canvas click → sync file-mode selection. The click
-        // may land inside a nested component's DOM; resolve via the ancestor
-        // chain to the nearest element belonging to the open file.
-        const fsNow = fileStateRef.current;
-        if (fsNow) {
-          const prefix = `${fsNow.canvasKey}::`;
-          const own = msg.id?.startsWith(prefix)
-            ? msg.id
-            : (msg.chain ?? []).find((c) => c.startsWith(prefix));
-          if (own) {
-            setFileFocusId(own);
-            send({ type: "select", id: own });
-          }
-        }
-      } else if (msg.type === "open-component") {
-        // Double-click descend: into the clicked element's own source file
-        // (nested component), or the focused tag's import within this file.
-        const m = msg.id.match(/^(aa:)?(.+?)::\d+$/);
-        if (m) {
-          const project = m[1] ? ("aa" as const) : ("demo" as const);
-          const file = m[2];
-          const fsNow = fileStateRef.current;
-          if (fsNow && fsNow.project === project && fsNow.file === file) {
-            const node = findModelNode(fsNow.model, msg.id);
-            if (node?.componentSource) void openFileRef.current(project, node.componentSource);
-          } else {
-            void openFileRef.current(project, file);
-          }
-        }
-      } else if (msg.type === "selected-block") {
-        setCtxMenu(null);
-        if (!d) return;
-        if (locate(d, msg.id)) select("block", msg.id);
-        else if (findColumn(d, msg.id)) select("column", msg.id);
-        else if (findSection(d, msg.id)) select("section", msg.id);
-      } else if (msg.type === "move-block") {
-        edit((p) => {
-          let moved: Block | undefined;
-          for (const s of p.sections)
-            for (const c of s.columns) {
-              const i = c.blocks.findIndex((b) => b.id === msg.blockId);
-              if (i > -1) moved = c.blocks.splice(i, 1)[0];
-            }
-          if (!moved) return;
-          for (const s of p.sections)
-            for (const c of s.columns)
-              if (c.id === msg.targetColumnId) {
-                c.blocks.splice(Math.min(msg.index, c.blocks.length), 0, moved);
-                return { kind: "block", id: moved.id };
-              }
-        });
-      } else if (msg.type === "move-section") {
-        edit((p) => {
-          const i = p.sections.findIndex((s) => s.id === msg.sectionId);
-          if (i < 0) return;
-          const [s] = p.sections.splice(i, 1);
-          p.sections.splice(Math.min(msg.index, p.sections.length), 0, s);
-          return { kind: "section", id: s.id };
-        });
-      } else if (msg.type === "insert-block") {
-        const spec = msg.item as NewSpec;
-        edit((p) => {
-          const b = makeBlock(spec);
-          for (const s of p.sections)
-            for (const c of s.columns)
-              if (c.id === msg.targetColumnId) {
-                c.blocks.splice(Math.min(msg.index, c.blocks.length), 0, b);
-                return { kind: "block", id: b.id };
-              }
-          for (const s of p.sections)
-            if (s.id === msg.targetSectionId) {
-              s.columns.push({ id: uid(), flex: "1", gap: "0.75rem", blocks: [b] });
-              return { kind: "block", id: b.id };
-            }
-        });
-      } else if (msg.type === "insert-section") {
-        edit((p) => {
-          const s = defaultSection();
-          p.sections.splice(Math.min(msg.index, p.sections.length), 0, s);
-          return { kind: "section", id: s.id };
-        });
-      } else if (msg.type === "insert-column") {
-        edit((p) => {
-          for (const s of p.sections)
-            if (s.id === msg.sectionId) {
-              const c = { id: uid(), flex: "1", gap: "0.75rem", blocks: [] };
-              s.columns.splice(Math.min(msg.index, s.columns.length), 0, c);
-              return { kind: "column", id: c.id };
-            }
-        });
-      } else if (msg.type === "edit-text") {
-        edit((p) => {
-          const h = locate(p, msg.blockId);
-          if (h) setBlockTextValue(h.block, msg.text);
-        });
-      } else if (msg.type === "zoom-wheel") {
-        zoomBy(msg.dir);
-      } else if (msg.type === "context-menu") {
-        if (d && msg.id) {
-          if (locate(d, msg.id)) select("block", msg.id);
-          else if (findColumn(d, msg.id)) select("column", msg.id);
-          else if (findSection(d, msg.id)) select("section", msg.id);
-        } else {
-          select(null, null);
-        }
-        // Iframe coords → chrome coords. The rect is in visual (app-zoomed)
-        // pixels; the fixed-position menu lives in the zoomed coordinate space.
-        const r = iframeRef.current?.getBoundingClientRect();
-        if (r) setCtxMenu({ x: r.left / appZoom + msg.x, y: r.top / appZoom + msg.y });
-      } else if (msg.type === "toggle-interact") {
-        setInteract((v) => !v);
-      } else if (msg.type === "escape") {
-        setCtxMenu(null);
-      } else if (msg.type === "key") {
-        handleChordRef.current({ key: msg.key, mod: msg.ctrl, shift: msg.shift, alt: msg.alt });
-      } else if (msg.type === "stage-metrics") {
-        // Straight to canvas — panning reports every frame and must not
-        // re-render the chrome.
-        stageXY.current = { x: msg.x, y: msg.y };
-        drawRulersRef.current();
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [edit, select, send, device, zoom, appZoom, canvasProject]);
-
   // ------------------------------------------------------------------ file mode (code is truth)
 
-  /** Open a real source file for direct editing: fetch its JSX model + prop
-   * specs, seed sample render props (localStorage → derived defaults), and
-   * point the canvas at the right design-system document. */
-  const openFile = useCallback(async (project: "demo" | "aa", file: string) => {
+  const openFile = useCallback(async (file: string) => {
     setRouteSel(null);
-    setSel({ kind: null, id: null });
     setFileFocusId(null);
     setFileCollapsed(new Set());
-    setOutlinerMode("Page"); // the file tree lives in the Page outliner slot
-    const d = await api<{
-      model: JsxNodeModel[];
-      props: PropSpec[];
-      renderable: boolean;
-    }>(`/api/component?project=${project}&file=${encodeURIComponent(file)}`);
+    setOutlinerMode("File");
+    const d = await api<{ model: JsxNodeModel[]; props: PropSpec[]; renderable: boolean }>(
+      `/api/component?file=${encodeURIComponent(file)}`,
+    );
     let values: Record<string, unknown> = {};
     try {
-      const saved = localStorage.getItem(`uai:samples:${project}:${file}`);
+      const saved = localStorage.getItem(`uai:samples:app:${file}`);
       if (saved) values = JSON.parse(saved) as Record<string, unknown>;
     } catch {
       /* corrupt entry — fall through to defaults */
@@ -652,15 +222,10 @@ export function App() {
         else if (s.control.kind === "select") values[s.name] = s.control.options?.[0];
       }
     }
-    const canvasKey = project === "aa" ? `aa:${file}` : file;
-    setFileState({ project, file, canvasKey, model: d.model, renderable: d.renderable, specs: d.props, values });
-    const targetCanvas = project === "aa" ? "aa" : "demo";
-    if (canvasProject !== targetCanvas) {
-      setCanvasProject(targetCanvas); // remount → ready handler sends the render
-    } else if (d.renderable) {
-      send({ type: "render", file: canvasKey, props: values });
-    }
-  }, [canvasProject, send]);
+    const canvasKey = APP_PREFIX + file;
+    setFileState({ file, canvasKey, model: d.model, renderable: d.renderable, specs: d.props, values });
+    if (d.renderable) send({ type: "render", file: canvasKey, props: values });
+  }, [send]);
   openFileRef.current = openFile;
 
   const setSampleProp = useCallback((name: string, value: unknown) => {
@@ -670,42 +235,14 @@ export function App() {
       if (value === undefined || value === "") delete values[name];
       else values[name] = value;
       try {
-        localStorage.setItem(`uai:samples:${s.project}:${s.file}`, JSON.stringify(values));
+        localStorage.setItem(`uai:samples:app:${s.file}`, JSON.stringify(values));
       } catch {
-        /* storage full — fine, samples are disposable */
+        /* storage full — samples are disposable */
       }
       if (s.renderable) send({ type: "render", file: s.canvasKey, props: values });
       return { ...s, values };
     });
   }, [send]);
-
-  /** Insert a JSX snippet into the open file: inside the focused container,
-   * after the focused leaf, or appended to the root element. */
-  const insertIntoFile = useCallback(
-    (jsx: string, imports?: { source: string; named?: string[]; default?: string }[]) => {
-      const fs = fileStateRef.current;
-      if (!fs || !fs.model.length) return;
-      const focus = findModelNode(fs.model, fileFocusRef.current);
-      let parentIndex: number;
-      let childPos: number;
-      if (focus && /^[a-z]/.test(focus.tag) && !focus.selfClosing) {
-        parentIndex = focus.index;
-        childPos = 9999; // server clamps to children.length
-      } else if (focus && focus.can.structural && focus.parentId) {
-        parentIndex = Number(focus.parentId.match(/::(\d+)$/)?.[1] ?? 0);
-        childPos = focus.slot + 2;
-      } else {
-        parentIndex = fs.model[0].index;
-        childPos = 9999;
-      }
-      const expectTag = findModelNode(
-        fs.model,
-        `${fs.canvasKey}::${parentIndex}`,
-      )?.tag ?? "";
-      void editFileRef.current({ op: "insert-element", parentIndex, childPos, jsx, imports }, expectTag);
-    },
-    [],
-  );
 
   /** THE file-edit funnel: one path for every AST mutation. Writes the real
    * file, replaces the (ephemeral-id) model, re-anchors selection, records
@@ -714,7 +251,7 @@ export function App() {
     async (edit: FileEdit, expectTag: string) => {
       const fs = fileStateRef.current;
       if (!fs) return;
-      const res = await fetch(`/api/edit?project=${fs.project}`, {
+      const res = await fetch("/api/edit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file: fs.file, edit, expectTag }),
@@ -727,9 +264,8 @@ export function App() {
         error?: string;
       };
       if (res.status === 409) {
-        // Stale model — the file changed underneath us; re-sync silently.
         const d = await api<{ model: JsxNodeModel[] }>(
-          `/api/component?project=${fs.project}&file=${encodeURIComponent(fs.file)}`,
+          `/api/component?file=${encodeURIComponent(fs.file)}`,
         );
         setFileState((s) => (s ? { ...s, model: d.model } : s));
         setFileFocusId(null);
@@ -746,8 +282,6 @@ export function App() {
       setHistory((h) => [
         ...h.slice(-59),
         {
-          kind: "file",
-          project: fs.project,
           file: fs.file,
           before: body.before!,
           after: body.after!,
@@ -756,7 +290,7 @@ export function App() {
         },
       ]);
       setFuture([]);
-      setTouchedFiles((t) => new Set(t).add(`${fs.project}:${fs.file}`));
+      setTouchedFiles((t) => new Set(t).add(fs.file));
       setSavedAt(new Date().toLocaleTimeString());
       if (body.focusId) send({ type: "select", id: body.focusId });
     },
@@ -764,206 +298,88 @@ export function App() {
   );
   editFileRef.current = editFile;
 
-  // ------------------------------------------------------------------ operations
-
-  const patchBlock = useCallback(
-    (fn: (b: Block) => void) => {
-      const id = selRef.current.id;
-      if (!id) return;
-      edit((p) => {
-        const h = locate(p, id);
-        if (h) fn(h.block);
-      });
+  /** Insert a JSX snippet into the open file: inside the focused container,
+   * after the focused leaf, or appended to the root element. */
+  const insertIntoFile = useCallback(
+    (jsx: string, imports?: { source: string; named?: string[]; default?: string }[]) => {
+      const fs = fileStateRef.current;
+      if (!fs || !fs.model.length) return;
+      const focus = findModelNode(fs.model, fileFocusRef.current);
+      let parentIndex: number;
+      let childPos: number;
+      if (focus && /^[a-z]/.test(focus.tag) && !focus.selfClosing) {
+        parentIndex = focus.index;
+        childPos = 9999; // server clamps to children.length
+      } else if (focus && focus.can.structural && focus.parentId) {
+        parentIndex = parentIndexOf(focus);
+        childPos = focus.slot + 2;
+      } else {
+        parentIndex = fs.model[0].index;
+        childPos = 9999;
+      }
+      const expectTag = findModelNode(fs.model, `${fs.canvasKey}::${parentIndex}`)?.tag ?? "";
+      void editFileRef.current({ op: "insert-element", parentIndex, childPos, jsx, imports }, expectTag);
     },
-    [edit],
+    [],
   );
 
-  const insertBlock = useCallback(
-    (spec: NewSpec) => {
-      edit((p) => {
-        const b = makeBlock(spec);
-        const s = selRef.current;
-        const h = s.kind === "block" ? locate(p, s.id) : null;
-        if (h) {
-          h.col.blocks.splice(h.idx + 1, 0, b);
-          return { kind: "block", id: b.id };
-        }
-        const cf = s.kind === "column" ? findColumn(p, s.id) : null;
-        const col =
-          cf?.col ??
-          p.sections[p.sections.length - 1]?.columns[0] ??
-          (() => {
-            const sc = defaultSection();
-            sc.columns[0].blocks = [];
-            p.sections.push(sc);
-            return sc.columns[0];
-          })();
-        col.blocks.push(b);
-        return { kind: "block", id: b.id };
+  /** Undo a file edit: write the exact prior bytes back, then re-sync. */
+  const restoreFile = useCallback(
+    async (entry: HistoryEntry, direction: "undo" | "redo") => {
+      const text = direction === "undo" ? entry.before : entry.after;
+      await api("/api/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: entry.file, text }),
       });
+      setSavedAt(new Date().toLocaleTimeString());
+      const fsNow = fileStateRef.current;
+      if (fsNow && fsNow.file === entry.file) {
+        const d = await api<{ model: JsxNodeModel[] }>(
+          `/api/component?file=${encodeURIComponent(entry.file)}`,
+        );
+        setFileState((s) => (s ? { ...s, model: d.model } : s));
+        setFileFocusId(direction === "undo" ? entry.focusBefore : entry.focusAfter);
+      }
     },
-    [edit],
+    [],
   );
 
-  const addSection = useCallback(() => {
-    edit((p) => {
-      const sc = defaultSection();
-      sc.columns[0].blocks = [];
-      p.sections.push(sc);
-      return { kind: "section", id: sc.id };
+  const undoAction = useCallback(() => {
+    setHistory((h) => {
+      if (!h.length) return h;
+      const prev = h[h.length - 1];
+      setFuture((f) => [...f, prev]);
+      void restoreFile(prev, "undo");
+      return h.slice(0, -1);
     });
-  }, [edit]);
+  }, [restoreFile]);
 
-  const addColumn = useCallback(() => {
-    edit((p) => {
-      const s = selRef.current;
-      const target =
-        (s.kind === "block" ? locate(p, s.id)?.sec : null) ??
-        (s.kind === "column" ? findColumn(p, s.id)?.sec : null) ??
-        (s.kind === "section" ? findSection(p, s.id)?.sec : null) ??
-        p.sections[p.sections.length - 1];
-      if (!target) return;
-      const c = { id: uid(), flex: "1", gap: "0.75rem", blocks: [] };
-      target.columns.push(c);
-      return { kind: "column", id: c.id };
+  const redoAction = useCallback(() => {
+    setFuture((f) => {
+      if (!f.length) return f;
+      const next = f[f.length - 1];
+      setHistory((h) => [...h.slice(-59), next]);
+      void restoreFile(next, "redo");
+      return f.slice(0, -1);
     });
-  }, [edit]);
+  }, [restoreFile]);
 
-  const deleteSel = useCallback(() => {
-    const s = selRef.current;
-    if (!s.id) return;
-    edit((p) => {
-      if (s.kind === "block") {
-        const h = locate(p, s.id);
-        if (h) h.col.blocks.splice(h.idx, 1);
-      } else if (s.kind === "column") {
-        const f = findColumn(p, s.id);
-        if (f && f.sec.columns.length > 1) f.sec.columns.splice(f.ci, 1);
-      } else if (s.kind === "section") {
-        const f = findSection(p, s.id);
-        if (f) p.sections.splice(f.si, 1);
-      }
-      return { kind: null, id: null };
+  // ------------------------------------------------------------------ canvas sync
+
+  useEffect(() => send({ type: "set-device", width: DEVICES[device].width }), [device, send]);
+  useEffect(() => send({ type: "set-zoom", zoom }), [zoom, send]);
+  useEffect(() => send({ type: "set-theme", dark: themeDark }), [themeDark, send]);
+  useEffect(() => send({ type: "set-interact", on: interact }), [interact, send]);
+  useEffect(() => {
+    send({
+      type: "set-session",
+      session: {
+        user: { name: `Canvas ${role}`, email: `${role.toLowerCase()}@example.com`, image: null, role: role.toLowerCase() },
+        expires: "2099-01-01T00:00:00.000Z",
+      },
     });
-  }, [edit]);
-
-  const duplicateAction = useCallback(() => {
-    const s = selRef.current;
-    if (!s.kind || !s.id) return;
-    edit((p) => {
-      if (s.kind === "block") {
-        const h = locate(p, s.id);
-        if (!h) return;
-        const copy = reId(h.block);
-        h.col.blocks.splice(h.idx + 1, 0, copy);
-        return { kind: "block", id: copy.id };
-      }
-      if (s.kind === "column") {
-        const f = findColumn(p, s.id);
-        if (!f) return;
-        const copy = reId(f.col);
-        f.sec.columns.splice(f.ci + 1, 0, copy);
-        return { kind: "column", id: copy.id };
-      }
-      const f = findSection(p, s.id);
-      if (!f) return;
-      const copy = reId(f.sec);
-      p.sections.splice(f.si + 1, 0, copy);
-      return { kind: "section", id: copy.id };
-    });
-  }, [edit]);
-
-  const copyAction = useCallback(() => {
-    const s = selRef.current;
-    const d = docRef.current;
-    if (!d || !s.kind || !s.id) return;
-    const node =
-      s.kind === "block"
-        ? locate(d, s.id)?.block
-        : s.kind === "column"
-          ? findColumn(d, s.id)?.col
-          : findSection(d, s.id)?.sec;
-    if (node) clipboard.current = { kind: s.kind, node: structuredClone(node) };
-  }, []);
-
-  const cutAction = useCallback(() => {
-    copyAction();
-    deleteSel();
-  }, [copyAction, deleteSel]);
-
-  const pasteAction = useCallback(() => {
-    const clip = clipboard.current;
-    if (!clip) return;
-    edit((p) => {
-      const s = selRef.current;
-      if (clip.kind === "section") {
-        const sec = reId(clip.node as Section);
-        const anchor =
-          (s.kind === "block" ? locate(p, s.id)?.sec : null) ??
-          (s.kind === "column" ? findColumn(p, s.id)?.sec : null) ??
-          (s.kind === "section" ? findSection(p, s.id)?.sec : null);
-        const i = anchor ? p.sections.indexOf(anchor) + 1 : p.sections.length;
-        p.sections.splice(i, 0, sec);
-        return { kind: "section", id: sec.id };
-      }
-      if (clip.kind === "column") {
-        const col = reId(clip.node as Column);
-        const target =
-          (s.kind === "block" ? locate(p, s.id)?.sec : null) ??
-          (s.kind === "column" ? findColumn(p, s.id)?.sec : null) ??
-          (s.kind === "section" ? findSection(p, s.id)?.sec : null) ??
-          p.sections[p.sections.length - 1];
-        if (!target) return;
-        const after = s.kind === "column" ? findColumn(p, s.id)?.ci : undefined;
-        target.columns.splice(after !== undefined ? after + 1 : target.columns.length, 0, col);
-        return { kind: "column", id: col.id };
-      }
-      const b = reId(clip.node as Block);
-      const h = s.kind === "block" ? locate(p, s.id) : null;
-      if (h) {
-        h.col.blocks.splice(h.idx + 1, 0, b);
-        return { kind: "block", id: b.id };
-      }
-      const col =
-        (s.kind === "column" ? findColumn(p, s.id)?.col : null) ??
-        (s.kind === "section" ? findSection(p, s.id)?.sec.columns[0] : null) ??
-        p.sections[p.sections.length - 1]?.columns[0];
-      if (!col) return;
-      col.blocks.push(b);
-      return { kind: "block", id: b.id };
-    });
-  }, [edit]);
-
-  const moveBy = useCallback(
-    (delta: number) => {
-      const s = selRef.current;
-      if (!s.id) return;
-      edit((p) => {
-        const arrMove = <T,>(arr: T[], i: number) => {
-          const j = i + delta;
-          if (j < 0 || j >= arr.length) return;
-          [arr[i], arr[j]] = [arr[j], arr[i]];
-        };
-        if (s.kind === "block") {
-          const h = locate(p, s.id);
-          if (h) arrMove(h.col.blocks, h.idx);
-        } else if (s.kind === "column") {
-          const f = findColumn(p, s.id);
-          if (f) arrMove(f.sec.columns, f.ci);
-        } else if (s.kind === "section") {
-          const f = findSection(p, s.id);
-          if (f) arrMove(p.sections, f.si);
-        }
-      });
-    },
-    [edit],
-  );
-
-  const toggleNote = useCallback(() => {
-    patchBlock((b) => {
-      b.note = b.note ? null : "Needs review before handoff.";
-    });
-  }, [patchBlock]);
+  }, [role, send]);
 
   const zoomBy = useCallback((dir: number) => {
     setZoom((z) => {
@@ -978,28 +394,103 @@ export function App() {
     setZoom(DEVICES[d].zoom);
   }, []);
 
-  // Fetch prop specs for the selected component block.
+  // ------------------------------------------------------------------ harness messages
+
   useEffect(() => {
-    if (block?.type === "component" && !propSpecs[block.file]) {
-      void api<{ props: PropSpec[] }>(`/api/component?file=${encodeURIComponent(block.file)}`)
-        .then((d) => setPropSpecs((m) => ({ ...m, [block.file]: d.props })))
-        .catch(() => setPropSpecs((m) => ({ ...m, [block.file]: [] })));
-    }
-  }, [block, propSpecs]);
+    const onMessage = (e: MessageEvent<HarnessToEditor>) => {
+      const msg = e.data;
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "ready") {
+        harnessReady.current = true;
+        const fsNow = fileStateRef.current;
+        if (fsNow?.renderable) send({ type: "render", file: fsNow.canvasKey, props: fsNow.values });
+        send({ type: "set-device", width: DEVICES[device].width });
+        send({ type: "set-zoom", zoom });
+      } else if (msg.type === "selected") {
+        // Canvas click → resolve via the ancestor chain to the nearest
+        // element belonging to the open file.
+        const fsNow = fileStateRef.current;
+        if (fsNow) {
+          const prefix = `${fsNow.canvasKey}::`;
+          const own = msg.id?.startsWith(prefix)
+            ? msg.id
+            : (msg.chain ?? []).find((c) => c.startsWith(prefix));
+          if (own) {
+            setFileFocusId(own);
+            send({ type: "select", id: own });
+          }
+        }
+      } else if (msg.type === "open-component") {
+        // Double-click descend: into the clicked element's own source file,
+        // or the focused tag's import within this file.
+        const m = msg.id.match(/^app:(.+?)::\d+$/);
+        if (m) {
+          const file = m[1];
+          const fsNow = fileStateRef.current;
+          if (fsNow && fsNow.file === file) {
+            const node = findModelNode(fsNow.model, msg.id);
+            if (node?.componentSource) void openFileRef.current(node.componentSource);
+          } else {
+            void openFileRef.current(file);
+          }
+        }
+      } else if (msg.type === "context-menu") {
+        const fsNow = fileStateRef.current;
+        if (fsNow && msg.id) {
+          const prefix = `${fsNow.canvasKey}::`;
+          if (msg.id.startsWith(prefix)) setFileFocusId(msg.id);
+        }
+        const r = iframeRef.current?.getBoundingClientRect();
+        if (r) setCtxMenu({ x: r.left / appZoom + msg.x, y: r.top / appZoom + msg.y });
+      } else if (msg.type === "file-drop") {
+        const fsNow = fileStateRef.current;
+        if (!fsNow) return;
+        const target = findModelNode(fsNow.model, msg.targetId);
+        if (!target || !target.can.structural) return;
+        const parentIndex = parentIndexOf(target);
+        const childPos = msg.position === "before" ? target.slot : target.slot + 2;
+        const parentTag = findModelNode(fsNow.model, target.parentId)?.tag ?? "";
+        if (msg.moveId) {
+          const moved = findModelNode(fsNow.model, msg.moveId);
+          if (moved) {
+            void editFileRef.current(
+              { op: "move-element", index: moved.index, newParentIndex: parentIndex, childPos },
+              moved.tag,
+            );
+          }
+        } else if (msg.insert) {
+          void editFileRef.current(
+            { op: "insert-element", parentIndex, childPos, jsx: msg.insert.jsx, imports: msg.insert.imports },
+            parentTag,
+          );
+        }
+      } else if (msg.type === "zoom-wheel") {
+        zoomBy(msg.dir);
+      } else if (msg.type === "toggle-interact") {
+        setInteract((v) => !v);
+      } else if (msg.type === "escape") {
+        setCtxMenu(null);
+      } else if (msg.type === "key") {
+        handleChordRef.current({ key: msg.key, mod: msg.ctrl, shift: msg.shift, alt: msg.alt });
+      } else if (msg.type === "stage-metrics") {
+        stageXY.current = { x: msg.x, y: msg.y };
+        drawRulersRef.current();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [send, device, zoom, appZoom, zoomBy]);
 
   // ------------------------------------------------------------------ keyboard
 
-  /** One shortcut map for both key sources: the chrome's own keydown events
-   * and chords forwarded from the focused canvas iframe. Returns handled. */
   const handleChord = useCallback(
     (c: { key: string; mod: boolean; shift: boolean; alt: boolean }): boolean => {
       const k = c.key.toLowerCase();
-      // File mode captures structural keys for the focused JSX node.
       const fsNow = fileStateRef.current;
       const fileNode =
         fsNow && fileFocusRef.current ? findModelNode(fsNow.model, fileFocusRef.current) : null;
       if (fileNode) {
-        const parentIdx = Number(fileNode.parentId?.match(/::(\d+)$/)?.[1] ?? fileNode.index);
+        const parentIdx = parentIndexOf(fileNode);
         if (c.key === "Delete" && fileNode.can.structural) {
           void editFile({ op: "delete-element", index: fileNode.index }, fileNode.tag);
           return true;
@@ -1025,18 +516,8 @@ export function App() {
       }
       if (c.mod && !c.shift && k === "z") undoAction();
       else if (c.mod && c.shift && k === "z") redoAction();
-      else if (c.mod && k === "d") duplicateAction();
-      else if (c.mod && k === "c") { if (!window.getSelection()?.toString()) copyAction(); }
-      else if (c.mod && k === "x") cutAction();
-      else if (c.mod && k === "v") pasteAction();
       else if (c.key === "Tab" && workspace === "Layout") setInteract((v) => !v);
       else if (c.key === "Escape") setCtxMenu(null);
-      else if (c.key === "Delete") deleteSel();
-      else if (c.alt && c.key === "ArrowUp") moveBy(-1);
-      else if (c.alt && c.key === "ArrowDown") moveBy(1);
-      else if (c.key === "F2" && selRef.current.kind === "block" && selRef.current.id) {
-        send({ type: "begin-edit", id: selRef.current.id });
-      }
       // Application (chrome) zoom: Ctrl+Shift+± — canvas zoom: plain Ctrl+±.
       else if (c.mod && c.shift && (c.key === "+" || c.key === "=")) {
         setAppZoom((z) => Math.min(1.5, Math.round((z + 0.1) * 10) / 10));
@@ -1047,12 +528,10 @@ export function App() {
       else if (c.mod && c.key === "-") zoomBy(-1);
       else if (c.mod && c.key === "0") setZoom(DEVICES[device].zoom);
       else if (k === "p" && !c.mod && !c.alt) setPreviewOpen((v) => !v);
-      else if (c.alt && ["1", "2", "3", "4"].includes(c.key)) {
-        setCanvasState(CANVAS_STATES[Number(c.key) - 1]);
-      } else return false;
+      else return false;
       return true;
     },
-    [undoAction, redoAction, duplicateAction, copyAction, cutAction, pasteAction, deleteSel, moveBy, zoomBy, device, send, workspace, editFile],
+    [undoAction, redoAction, zoomBy, device, workspace, editFile],
   );
   handleChordRef.current = handleChord;
 
@@ -1068,8 +547,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [handleChord]);
 
-  // Ctrl+scroll over the chrome's canvas region (rulers, void margins) zooms
-  // the page; scrolls over the iframe itself arrive via the zoom-wheel message.
+  // Ctrl+scroll over the chrome's canvas region zooms the page.
   useEffect(() => {
     const el = canvasRegionRef.current;
     if (!el || workspace !== "Layout") return;
@@ -1084,12 +562,7 @@ export function App() {
 
   // ------------------------------------------------------------------ rulers
 
-  /** Draw both rulers: ticks in page units (px or rem) anchored to the page
-   * origin the harness reports, so they track pan and zoom exactly. */
   const drawRulers = useCallback(() => {
-    // App zoom scales the canvas bitmap after rasterization — bake it into
-    // the backing store (and align ticks to the device grid) so the rulers
-    // stay crisp at any chrome zoom.
     const dpr = (window.devicePixelRatio || 1) * appZoom;
     const unitPx = rulerUnit === "rem" ? 16 : 1;
     const pxPerUnit = unitPx * zoom;
@@ -1155,30 +628,21 @@ export function App() {
     };
   }, [drawRulers, rulersOn, workspace, device, appZoom]);
 
-  // ------------------------------------------------------------------ derived labels
+  // ------------------------------------------------------------------ derived
 
-  const canUp = !!sel.id;
-  const canDown = !!sel.id;
-  const deleteLabel =
-    sel.kind === "column" ? "Delete column" : sel.kind === "section" ? "Delete section" : "Delete";
+  const fileNode = fileState ? findModelNode(fileState.model, fileFocusId) : null;
   const crumb = (() => {
-    if (!doc) return "";
-    if (hit)
-      return `${doc.name}.json › ${hit.sec.label ?? hit.sec.id} › column ${hit.sec.columns.indexOf(hit.col) + 1} › ${blockTag(hit.block)}`;
-    if (colHit) return `${doc.name}.json › ${colHit.sec.label ?? colHit.sec.id} › column ${colHit.ci + 1}`;
-    if (secHit) return `${doc.name}.json › ${secHit.sec.label ?? secHit.sec.id}`;
-    return `${doc.name}.json`;
-  })();
-  const selPath = (() => {
-    if (!doc) return "";
-    if (hit) return `${doc.name}.json › ${hit.sec.id} › ${hit.col.id} › ${blockTag(hit.block)}`;
-    if (colHit) return `${doc.name}.json › ${colHit.sec.id} › ${colHit.col.id}`;
-    if (secHit) return `${doc.name}.json › ${secHit.sec.id}`;
-    return "";
+    if (!fileState) return targetLabel;
+    const base = fileState.file;
+    return fileNode ? `${base} › ${fileNode.tag}` : base;
   })();
   const selTitle = routeSel
     ? routeSel.urlPath
-    : block ? blockTitle(block) : colHit ? `Column ${colHit.ci + 1}` : secHit ? (secHit.sec.label ?? secHit.sec.id) : "Nothing selected";
+    : fileNode
+      ? `<${fileNode.tag}>`
+      : fileState
+        ? fileState.file.split("/").pop()!
+        : "Nothing open";
 
   // ------------------------------------------------------------------ menus
 
@@ -1190,13 +654,10 @@ export function App() {
   const menus: { label: string; width: number; items: MenuItem[] }[] = [
     {
       label: "File",
-      width: 224,
+      width: 244,
       items: [
-        { label: "New page", accel: "Ctrl+N", action: () => void newPage() },
-        { label: "Open page…", accel: "Ctrl+P", action: () => setOutlinerMode("Project") },
-        { sep: true },
-        { label: "Save to source", accel: "Ctrl+S", action: () => doc && void persist(doc) },
-        { label: "Regenerate components", action: () => doc && void persist(doc) },
+        { label: `Target: ${targetLabel}`, disabled: true },
+        { label: "Change target (uai.config.json)", disabled: true },
         { sep: true },
         { label: "Exit", accel: "Alt+F4", action: () => window.close() },
       ],
@@ -1208,51 +669,36 @@ export function App() {
         { label: "Undo", accel: "Ctrl+Z", disabled: !history.length, action: undoAction },
         { label: "Redo", accel: "Ctrl+Shift+Z", disabled: !future.length, action: redoAction },
         { sep: true },
-        { label: "Cut", accel: "Ctrl+X", disabled: !sel.id, action: cutAction },
-        { label: "Copy", accel: "Ctrl+C", disabled: !sel.id, action: copyAction },
-        { label: "Paste", accel: "Ctrl+V", disabled: !clipboard.current, action: pasteAction },
+        { label: "Duplicate", accel: "Ctrl+D", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "duplicate-element", index: fileNode.index }, fileNode.tag) },
+        { label: "Delete", accel: "Del", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "delete-element", index: fileNode.index }, fileNode.tag) },
         { sep: true },
-        { label: "Duplicate", accel: "Ctrl+D", disabled: !sel.id, action: duplicateAction },
-        { label: "Delete", accel: "Del", disabled: !sel.id, action: deleteSel },
-        { sep: true },
-        { label: "Move up", accel: "Alt+Up", disabled: !canUp, action: () => moveBy(-1) },
-        { label: "Move down", accel: "Alt+Down", disabled: !canDown, action: () => moveBy(1) },
-        { sep: true },
-        {
-          label: "Edit text in place",
-          accel: "F2",
-          disabled: !block || blockText(block) == null,
-          action: () => sel.id && send({ type: "begin-edit", id: sel.id }),
-        },
+        { label: "Move up", accel: "Alt+Up", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: Math.max(0, fileNode.slot - 2) }, fileNode.tag) },
+        { label: "Move down", accel: "Alt+Down", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: fileNode.slot + 2 }, fileNode.tag) },
       ],
     },
     {
       label: "Insert",
       width: 200,
-      items: [
-        { label: "Heading", action: () => insertBlock({ type: "heading" }) },
-        { label: "Paragraph", action: () => insertBlock({ type: "text" }) },
-        { label: "Button", action: () => insertBlock({ type: "button" }) },
-        { label: "Image", action: () => insertBlock({ type: "image" }) },
-        { label: "Spacer", action: () => insertBlock({ type: "spacer" }) },
-        { sep: true },
-        { label: "Section", action: addSection },
-        { label: "Column", action: addColumn },
-      ],
+      items: PRIMITIVES.map((p) => ({
+        label: p.label,
+        disabled: !fileState,
+        action: () => insertIntoFile(p.jsx),
+      })),
     },
     {
       label: "View",
       width: 244,
       items: [
-        { label: "Layout workspace", check: dot(workspace === "Layout"), action: () => setWorkspace("Layout") },
-        { label: "Style workspace", check: dot(workspace === "Style"), action: () => setWorkspace("Style") },
-        { label: "Workshop workspace", check: dot(workspace === "Workshop"), action: () => setWorkspace("Workshop") },
+        ...WORKSPACES.map((w) => ({
+          label: `${w.label} workspace`,
+          check: dot(workspace === w.label),
+          action: () => setWorkspace(w.label),
+        })),
         { sep: true },
-        { label: "Outliner: page tree", check: dot(outlinerMode === "Page"), action: () => setOutlinerMode("Page") },
-        { label: "Outliner: project", check: dot(outlinerMode === "Project"), action: () => setOutlinerMode("Project") },
+        { label: "Outliner: file", check: dot(outlinerMode === "File"), action: () => setOutlinerMode("File") },
+        { label: "Outliner: routes", check: dot(outlinerMode === "Routes"), action: () => setOutlinerMode("Routes") },
         { sep: true },
         { label: "Rulers", check: tick(rulersOn), action: () => setRulersOn((v) => !v) },
-        { label: "Dev notes", check: tick(notesOn), action: () => setNotesOn((v) => !v) },
         { sep: true },
         { label: "Zoom in", accel: "Ctrl+=", action: () => zoomBy(1) },
         { label: "Zoom out", accel: "Ctrl+-", action: () => zoomBy(-1) },
@@ -1269,15 +715,9 @@ export function App() {
           action: () => setDeviceAnd(d),
         })),
         { sep: true },
-        { label: "Preview context…", accel: "P", action: () => setPreviewOpen(true) },
-        ...CANVAS_STATES.map((cs, i) => ({
-          label: `${cs} state`,
-          accel: `Alt+${i + 1}`,
-          check: dot(canvasState === cs),
-          action: () => setCanvasState(cs),
-        })),
+        { label: "Context…", accel: "P", action: () => setPreviewOpen(true) },
         { sep: true },
-        { label: "Reload canvas", accel: "Ctrl+R", action: () => iframeRef.current?.contentWindow?.location.reload() },
+        { label: "Reload canvas", action: () => iframeRef.current?.contentWindow?.location.reload() },
       ],
     },
     {
@@ -1291,53 +731,6 @@ export function App() {
       ],
     },
   ];
-
-  // ------------------------------------------------------------------ insert groups
-
-  const insertGroups = useMemo(() => {
-    interface Item {
-      label: string;
-      icon: string;
-      data?: boolean;
-      spec?: NewSpec;
-      structural?: "section" | "column";
-    }
-    const groups: { name: string; note: string; items: Item[] }[] = [
-      { name: "Text", note: "headings and copy", items: [
-        { label: "Heading", icon: "H", spec: { type: "heading" } },
-        { label: "Paragraph", icon: "¶", spec: { type: "text" } },
-      ]},
-      { name: "Interaction", note: "buttons and links", items: [
-        { label: "Button", icon: "▭", spec: { type: "button" } },
-      ]},
-      { name: "Media", note: "images and space", items: [
-        { label: "Image", icon: "▨", spec: { type: "image" } },
-        { label: "Spacer", icon: "↕", spec: { type: "spacer" } },
-      ]},
-      { name: "Structure", note: "page structure", items: [
-        { label: "Section", icon: "▤", structural: "section" },
-        { label: "Column", icon: "▯", structural: "column" },
-      ]},
-      { name: "Data", note: "bound to sample data", items: [
-        { label: "Repeater", icon: "≡", data: true, spec: { type: "repeater" } },
-      ]},
-      { name: "Shell", note: "chrome components", items: ["SearchBar", "Navbar", "TabBar", "SubHeader"].map((n) => ({
-        label: n, icon: "⧉", spec: componentSpec(n),
-      }))},
-      { name: "Interface kit", note: `${UI_KIT.length} components`, items: UI_KIT.map((n) => ({
-        label: n, icon: "⧉", spec: componentSpec(n),
-      }))},
-      { name: "Residue", note: "secretless · not AA domain", items: [
-        { label: "ConfidenceBar", icon: "⧉", spec: componentSpec("ConfidenceBar") },
-        { label: "ResultCard", icon: "⧉", spec: componentSpec("ResultCard") },
-      ]},
-    ];
-    const q = search.trim().toLowerCase();
-    if (!q) return groups;
-    return groups
-      .map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(q)) }))
-      .filter((g) => g.items.length);
-  }, [search]);
 
   // ------------------------------------------------------------------ render
 
@@ -1402,13 +795,12 @@ export function App() {
 
       {/* ---------------------------------------------------------- DocumentRow */}
       <div style={{ flex: "0 0 34px", display: "flex", alignItems: "center", gap: 10, padding: "0 10px", background: C.panel, borderBottom: `1px solid ${C.border}`, minWidth: 0, whiteSpace: "nowrap" }}>
-        <button className="hv-ctl" style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 8px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, cursor: "pointer" }} onClick={() => setOutlinerMode("Project")}>
-          <span style={{ color: C.muted, fontSize: 11 }}>page</span>
-          {doc?.name ?? "…"}
-          <span style={{ color: C.muted }}>▾</span>
-        </button>
+        <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 8px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text }}>
+          <span style={{ color: C.muted, fontSize: 11 }}>app</span>
+          {targetLabel}
+        </span>
         <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, fontSize: 11, color: C.faint }}>
-          adventure-alerts / pages / {doc?.name ?? "…"}.json
+          {fileState ? fileState.file : "open a component or route to start editing"}
         </span>
         <div style={{ ...vdiv, height: 16 }} />
         <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 11, color: C.muted }}>
@@ -1421,9 +813,9 @@ export function App() {
         </div>
         <button
           className="hv-primary"
-          style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 10px", ...primaryBtn }}
-          title="Open this page in a new window — real size, fully interactive"
-          onClick={() => doc && window.open(`/harness.html?page=${encodeURIComponent(doc.name)}`, "_blank")}
+          style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 10px", ...primaryBtn, opacity: fileState?.renderable ? 1 : 0.5 }}
+          title="Open this component in a new window — real size, fully interactive"
+          onClick={() => fileState?.renderable && window.open(`/harness.html?file=${encodeURIComponent(fileState.canvasKey)}`, "_blank")}
         >
           <Sym name="open_in_new" size={13} />
           Preview
@@ -1444,11 +836,10 @@ export function App() {
             { label: "Abyss", active: themeDark, onClick: () => setThemeDark(true) },
           ]} />
           <div style={vdiv} />
-          <button className="hv-primary" style={primaryBtn} title="Token edits write to source when committed" onClick={() => setSavedAt(new Date().toLocaleTimeString())}>Write to theme.css</button>
-          <button className="hv-ctl" style={{ ...ctlBtn, color: styleEdits ? C.body : C.faint }} onClick={() => { send({ type: "token-clear" }); void styleTokens.refetch(); }}>Reset tokens</button>
+          <button className="hv-ctl" style={{ ...ctlBtn, color: styleEdits ? C.body : C.faint }} onClick={() => { send({ type: "token-clear" }); void styleTokens.refetch(); }}>Reset preview</button>
           <div style={{ flex: "1 1 0", minWidth: 8 }} />
           <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>
-            {styleEdits ? `${styleEdits} change${styleEdits === 1 ? "" : "s"} written · theme.css` : "in sync with theme.css"}
+            {styleEdits ? `${styleEdits} change${styleEdits === 1 ? "" : "s"} written to the app's css` : "in sync with the app's css"}
           </span>
         </div>
       )}
@@ -1488,7 +879,7 @@ export function App() {
             {Math.round(wsMat.graphZoom * 100)}%
           </button>
           <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>
-            {wsMat.matEdits ? `${wsMat.matEdits} unsaved change${wsMat.matEdits === 1 ? "" : "s"} · theme.css` : "in sync with theme.css"}
+            {wsMat.matEdits ? `${wsMat.matEdits} unsaved change${wsMat.matEdits === 1 ? "" : "s"} · globals.css` : "in sync with globals.css"}
           </span>
         </div>
       )}
@@ -1502,168 +893,106 @@ export function App() {
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 6px", whiteSpace: "nowrap" }}>
                 <h2 style={{ ...sectionHeader, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>Insert</h2>
                 <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint }}>
-                  {insertSource === "Demo kit" ? "drag or click" : "click to preview"}
+                  {fileState ? "drag or click" : "open a file first"}
                 </span>
               </div>
-              {routeTree && (
-                <div style={{ padding: "0 10px 6px" }}>
-                  <Seg grow items={(["Demo kit", "Adventure Alerts"] as const).map((s) => ({
-                    label: s === "Demo kit" ? "Demo" : "Adventure Alerts",
-                    active: insertSource === s,
-                    onClick: () => {
-                      setInsertSource(s);
-                      if (s === "Demo kit" && canvasProject === "aa") {
-                        setFileState(null);
-                        setFileFocusId(null);
-                        setCanvasProject("demo");
-                      }
-                      if (s === "Adventure Alerts" && !aaComponents) {
-                        void api<{ files: string[]; meta: Record<string, { serverOnly: boolean }> }>(
-                          "/api/components?project=aa",
-                        ).then(setAaComponents).catch(() => {});
-                      }
-                    },
-                  }))} />
-                </div>
-              )}
               <div style={{ padding: "0 10px 8px" }}>
-                <input className="fc" type="text" placeholder="Search blocks and components" value={search} onChange={(e) => setSearch(e.target.value)} style={inputStyle} />
+                <input className="fc" type="text" placeholder="Search components" value={search} onChange={(e) => setSearch(e.target.value)} style={inputStyle} />
               </div>
-              {insertSource === "Adventure Alerts" ? (
-                <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
-                  {fileState && (
-                    <div style={{ borderTop: `1px solid ${C.softDiv}` }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
-                        <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>Primitives</span>
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>
-                          insert into {fileState.file.split("/").pop()}
-                        </span>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 10px" }}>
-                        {[
-                          { label: "Container", icon: "▤", jsx: '<div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}></div>' },
-                          { label: "Heading", icon: "H", jsx: "<h2>Heading</h2>" },
-                          { label: "Paragraph", icon: "¶", jsx: "<p>New paragraph</p>" },
-                          { label: "Button", icon: "▭", jsx: '<button type="button">Button</button>' },
-                          { label: "Link", icon: "↗", jsx: '<a href="#">Link</a>' },
-                          { label: "Image", icon: "▨", jsx: '<img src="" alt="" style={{ width: "160px", height: "90px", background: "var(--muted, #ddd)" }} />' },
-                        ].map((p) => (
-                          <button
-                            key={p.label}
-                            className="hv-ctl-border"
-                            onClick={() => insertIntoFile(p.jsx)}
-                            style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.body, cursor: "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap" }}
-                          >
-                            <span style={{ flex: "0 0 auto", color: C.blueLight, width: 13, textAlign: "center" }}>{p.icon}</span>
-                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{p.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {(() => {
-                    if (!aaComponents) {
-                      return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
-                    }
-                    const q = search.trim().toLowerCase();
-                    const groups = new Map<string, string[]>();
-                    for (const f of aaComponents.files) {
-                      const short = f.replace(/^src\/components\//, "");
-                      if (q && !short.toLowerCase().includes(q)) continue;
-                      const dir = short.includes("/") ? short.split("/")[0] : "root";
-                      (groups.get(dir) ?? groups.set(dir, []).get(dir)!).push(f);
-                    }
-                    if (groups.size === 0) {
-                      return <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>;
-                    }
-                    return [...groups.entries()].map(([dir, files]) => (
-                      <div key={dir} style={{ borderTop: `1px solid ${C.softDiv}` }}>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
-                          <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>{dir}</span>
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>{files.length}</span>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px" }}>
-                          {files.map((f) => {
-                            const meta = aaComponents.meta[f];
-                            const serverOnly = meta?.serverOnly;
-                            const name = f.split("/").pop()!.replace(/\.tsx$/, "");
-                            const active = fileState?.canvasKey === `aa:${f}`;
-                            const insertable = !!fileState && !serverOnly && !!meta?.exportName;
-                            return (
-                              <div key={f} style={{ display: "flex", gap: 3 }}>
-                                <button
-                                  className={serverOnly ? undefined : "hv-ctl-border"}
-                                  disabled={serverOnly}
-                                  title={serverOnly ? "Server component — can't render in the canvas" : `Open ${f}`}
-                                  onClick={() => void openFile("aa", f)}
-                                  style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
-                                >
-                                  <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
-                                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-                                  {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
-                                </button>
-                                {insertable && (
-                                  <button
-                                    className="hv-ctl-border"
-                                    title={`Insert <${meta!.exportName} /> into ${fileState!.file.split("/").pop()}`}
-                                    onClick={() =>
-                                      insertIntoFile(`<${meta!.exportName} />`, [
-                                        { source: `@/${f.replace(/^src\//, "").replace(/\.tsx$/, "")}`, named: [meta!.exportName!] },
-                                      ])
-                                    }
-                                    style={{ flex: "0 0 22px", display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.blueLight, cursor: "pointer" }}
-                                  >
-                                    +
-                                  </button>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              ) : (
               <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
-                {insertGroups.map((g) => (
-                  <div key={g.name} style={{ borderTop: `1px solid ${C.softDiv}` }}>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
-                      <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>{g.name}</span>
-                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>{g.note}</span>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 10px" }}>
-                      {g.items.map((i) => (
-                        <button
-                          key={i.label}
-                          className="hv-ctl-border"
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = "copy";
-                            if (i.structural === "section") e.dataTransfer.setData(MIME_SECTION, "{}");
-                            else if (i.structural === "column") e.dataTransfer.setData(MIME_COLUMN, "{}");
-                            else if (i.spec) e.dataTransfer.setData(MIME_BLOCK, JSON.stringify(i.spec));
-                          }}
-                          onClick={() => {
-                            if (i.structural === "section") addSection();
-                            else if (i.structural === "column") addColumn();
-                            else if (i.spec) insertBlock(i.spec);
-                          }}
-                          style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.body, cursor: "grab", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap" }}
-                        >
-                          <span style={{ flex: "0 0 auto", color: C.blueLight, width: 13, textAlign: "center" }}>{i.icon}</span>
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{i.label}</span>
-                          {i.data && <span style={{ flex: "0 0 auto", width: 5, height: 5, borderRadius: 99, background: C.amber }} title="expects data" />}
-                        </button>
-                      ))}
-                    </div>
+                <div style={{ borderTop: `1px solid ${C.softDiv}` }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
+                    <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>Primitives</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>plain html</span>
                   </div>
-                ))}
-                {insertGroups.length === 0 && (
-                  <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>
-                )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 10px" }}>
+                    {PRIMITIVES.map((p) => (
+                      <button
+                        key={p.label}
+                        className="hv-ctl-border"
+                        draggable={!!fileState}
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = "copy";
+                          e.dataTransfer.setData(MIME_JSX, JSON.stringify({ jsx: p.jsx }));
+                        }}
+                        onClick={() => insertIntoFile(p.jsx)}
+                        disabled={!fileState}
+                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: fileState ? C.body : C.faint, cursor: fileState ? "grab" : "default", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap" }}
+                      >
+                        <span style={{ flex: "0 0 auto", color: C.blueLight, width: 13, textAlign: "center" }}>{p.icon}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{p.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {(() => {
+                  if (!components) {
+                    return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
+                  }
+                  const q = search.trim().toLowerCase();
+                  const groups = new Map<string, string[]>();
+                  for (const f of components.files) {
+                    const short = f.replace(/^src\/components\//, "");
+                    if (q && !short.toLowerCase().includes(q)) continue;
+                    const dir = short.includes("/") ? short.split("/")[0] : "root";
+                    (groups.get(dir) ?? groups.set(dir, []).get(dir)!).push(f);
+                  }
+                  if (groups.size === 0) {
+                    return <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>;
+                  }
+                  return [...groups.entries()].map(([dir, files]) => (
+                    <div key={dir} style={{ borderTop: `1px solid ${C.softDiv}` }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
+                        <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>{dir}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>{files.length}</span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px" }}>
+                        {files.map((f) => {
+                          const meta = components.meta[f];
+                          const serverOnly = meta?.serverOnly;
+                          const name = f.split("/").pop()!.replace(/\.tsx$/, "");
+                          const active = fileState?.file === f;
+                          const insertable = !!fileState && !serverOnly && !!meta?.exportName;
+                          const importSpec = meta?.exportName
+                            ? [{ source: `@/${f.replace(/^src\//, "").replace(/\.tsx$/, "")}`, named: [meta.exportName] }]
+                            : undefined;
+                          return (
+                            <div key={f} style={{ display: "flex", gap: 3 }}>
+                              <button
+                                className={serverOnly ? undefined : "hv-ctl-border"}
+                                disabled={serverOnly}
+                                draggable={insertable}
+                                onDragStart={(e) => {
+                                  if (!insertable) return;
+                                  e.dataTransfer.effectAllowed = "copy";
+                                  e.dataTransfer.setData(MIME_JSX, JSON.stringify({ jsx: `<${meta!.exportName} />`, imports: importSpec }));
+                                }}
+                                title={serverOnly ? "Server component — can't render in the canvas" : `Open ${f}`}
+                                onClick={() => void openFile(f)}
+                                style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
+                              >
+                                <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
+                                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                                {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
+                              </button>
+                              {insertable && (
+                                <button
+                                  className="hv-ctl-border"
+                                  title={`Insert <${meta!.exportName} /> into ${fileState!.file.split("/").pop()}`}
+                                  onClick={() => insertIntoFile(`<${meta!.exportName} />`, importSpec)}
+                                  style={{ flex: "0 0 22px", display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.blueLight, cursor: "pointer" }}
+                                >
+                                  +
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ));
+                })()}
               </div>
-              )}
             </div>
 
             {/* Canvas region */}
@@ -1677,20 +1006,19 @@ export function App() {
                     className="hv-ctl-border"
                     style={{ display: "flex", alignItems: "center", gap: 7, height: 22, padding: "0 8px", background: previewOpen ? C.ctl : "transparent", border: `1px solid ${previewOpen ? C.borderHover : C.border}`, borderRadius: 5, color: C.body, cursor: "pointer" }}
                     onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
-                    title="Preview context (P)"
+                    title="Canvas context (P)"
                   >
                     <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Context</span>
-                    <span style={{ fontFamily: MONO, fontSize: 11 }}>{role} · {canvasState} · {themeDark ? "Abyss" : "Parchment"}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 11 }}>{role} · {themeDark ? "Abyss" : "Parchment"}</span>
                     <span style={{ fontSize: 8, color: C.faint }}>▼</span>
                   </button>
                   {previewOpen && (
                     <div style={{ position: "absolute", top: 26, left: 0, minWidth: 230, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 30 }} onClick={(e) => e.stopPropagation()}>
                       {[
-                        { title: "Role", items: ROLES.map((r) => ({ label: r, on: role === r, accel: "", act: () => setRole(r) })) },
-                        { title: "State", items: CANVAS_STATES.map((cs, i) => ({ label: cs, on: canvasState === cs, accel: `Alt+${i + 1}`, act: () => setCanvasState(cs) })) },
+                        { title: "Session role", items: ROLES.map((r) => ({ label: r, on: role === r, act: () => setRole(r) })) },
                         { title: "Theme", items: [
-                          { label: "Parchment", on: !themeDark, accel: "", act: () => setThemeDark(false) },
-                          { label: "Abyss", on: themeDark, accel: "Z", act: () => setThemeDark(true) },
+                          { label: "Parchment", on: !themeDark, act: () => setThemeDark(false) },
+                          { label: "Abyss", on: themeDark, act: () => setThemeDark(true) },
                         ]},
                       ].map((g, gi) => (
                         <div key={g.title}>
@@ -1700,7 +1028,6 @@ export function App() {
                             <button key={it.label} className="hv-menu" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }} onClick={it.act}>
                               <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.on ? "•" : ""}</span>
                               <span style={{ flex: 1 }}>{it.label}</span>
-                              <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{it.accel}</span>
                             </button>
                           ))}
                         </div>
@@ -1710,7 +1037,7 @@ export function App() {
                 </div>
                 <div style={{ flex: "1 1 0", minWidth: 8 }} />
                 <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Mode</span>
-                <div title="Tab toggles between editing and using the page">
+                <div title="Tab toggles between editing and using the app">
                   <Seg items={[
                     { label: "Edit", active: !interact, onClick: () => setInteract(false) },
                     { label: "View", active: interact, onClick: () => setInteract(true) },
@@ -1734,13 +1061,7 @@ export function App() {
                 {rulersOn && (
                   <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
                 )}
-                <iframe
-                  key={canvasProject}
-                  ref={iframeRef}
-                  src={canvasProject === "aa" ? "/harness.html?project=aa" : "/harness.html"}
-                  title="canvas"
-                  style={{ flex: 1, border: "none", background: C.void }}
-                />
+                <iframe ref={iframeRef} src="/harness.html" title="canvas" style={{ flex: 1, border: "none", background: C.void }} />
                 {fileState && !fileState.renderable && !routeSel && (
                   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
                     <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1757,20 +1078,15 @@ export function App() {
                     <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
                       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
                         <span style={{ fontFamily: MONO, fontSize: 14, color: "#fff" }}>{routeSel.urlPath}</span>
-                        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: routeSel.ownership === "owned" ? C.orange : C.muted }}>
-                          {routeSel.files.page ? (routeSel.ownership ?? "coded") : "API route"}
+                        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: C.muted }}>
+                          {routeSel.files.page ? "page" : "API route"}
                         </span>
                       </div>
-                      {routeSel.files.page ? (
-                        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
-                          Hand-coded page — <span style={{ fontFamily: MONO, fontSize: 10.5 }}>{routeSel.files.page}</span>.
-                          Owned pages become editable on this canvas when u-and-i's Next write-side lands.
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
-                          Route handler — <span style={{ fontFamily: MONO, fontSize: 10.5 }}>{routeSel.files.route}</span>. Nothing to draw.
-                        </div>
-                      )}
+                      <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+                        {routeSel.files.page
+                          ? "Open the page's view or its code from the panel on the right."
+                          : "Route handler — nothing to draw."}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1786,14 +1102,14 @@ export function App() {
         {/* ---------------------------------------------------- Right column */}
         <div style={{ flex: "0 1 302px", minWidth: 230, display: "flex", flexDirection: "column", background: C.panel, borderLeft: `1px solid ${C.border}`, minHeight: 0 }}>
           {/* Outliner */}
-          <div style={{ flex: "0 0 38%", minHeight: 132, display: "flex", flexDirection: "column", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ flex: "0 0 44%", minHeight: 132, display: "flex", flexDirection: "column", borderBottom: `1px solid ${C.border}` }}>
             <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 6px", whiteSpace: "nowrap" }}>
               <h2 style={sectionHeader}>Outliner</h2>
               <div style={{ flex: "1 1 0", minWidth: 4 }} />
-              <Seg items={(["Page", "Project"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />
+              <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />
             </div>
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8 }}>
-              {outlinerMode === "Page" && fileState && (
+              {outlinerMode === "File" && fileState && (
                 <>
                   <div style={{ padding: "4px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileState.file}>
                     {fileState.file.split("/").pop()}
@@ -1817,115 +1133,54 @@ export function App() {
                   />
                 </>
               )}
-              {outlinerMode === "Page" && !fileState && doc && doc.sections.map((s, si) => (
-                <div key={s.id}>
-                  <OutlinerRow pad={10} glyph="▤" glyphColor={C.blueLight} label={s.label ?? `section ${si + 1}`} selected={sel.id === s.id} mark={SEL_COLOR.section}
-                    caret={collapsed[s.id] ? "▸" : "▾"}
-                    onToggle={() => setCollapsed((c) => ({ ...c, [s.id]: !c[s.id] }))}
-                    onClick={() => select("section", s.id)}
-                    onCtx={(e) => { e.preventDefault(); select("section", s.id); setCtxMenu({ x: e.clientX / appZoom, y: e.clientY / appZoom }); }} />
-                  {!collapsed[s.id] && s.columns.map((c, ci) => (
-                    <div key={c.id}>
-                      <OutlinerRow pad={23} glyph="▯" glyphColor={C.green} label={c.blocks.length ? `column ${ci + 1}` : `column ${ci + 1} · empty`} selected={sel.id === c.id} mark={SEL_COLOR.column}
-                        caret={collapsed[c.id] ? "▸" : "▾"}
-                        onToggle={() => setCollapsed((x) => ({ ...x, [c.id]: !x[c.id] }))}
-                        onClick={() => select("column", c.id)}
-                        onCtx={(e) => { e.preventDefault(); select("column", c.id); setCtxMenu({ x: e.clientX / appZoom, y: e.clientY / appZoom }); }} />
-                      {!collapsed[c.id] && c.blocks.map((b) => (
-                        <OutlinerRow key={b.id} pad={36} glyph={GLYPH_OF[b.type]} glyphColor={C.muted} label={blockTitle(b)} selected={sel.id === b.id} mark={SEL_COLOR.block}
-                          note={!!b.note} data={!!b.needsData}
-                          onClick={() => select("block", b.id)}
-                          onCtx={(e) => { e.preventDefault(); select("block", b.id); setCtxMenu({ x: e.clientX / appZoom, y: e.clientY / appZoom }); }} />
-                      ))}
-                    </div>
-                  ))}
+              {outlinerMode === "File" && !fileState && (
+                <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
+                  No file open. Pick a component from Insert or a route from the Routes tree.
                 </div>
-              ))}
-              {outlinerMode === "Project" && (
-                <>
-                  <div style={{ padding: "6px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>Pages</div>
-                  {pages.map((p) => (
-                    <OutlinerRow key={p} pad={10} glyph="▤" glyphColor={C.blueLight} label={p} selected={doc?.name === p} mark={C.blue}
-                      right={`/${p === "home" ? "" : p}`}
-                      onClick={() => void openPage(p)} />
-                  ))}
-                  <div className="hv-row" style={{ padding: "4px 10px", color: C.faint, cursor: "pointer" }} onClick={() => void newPage()}>+ New page</div>
-                  <div style={{ padding: "6px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>Project</div>
-                  <OutlinerRow pad={10} glyph="⌸" glyphColor={C.muted} label="Layouts" right="none yet" onClick={() => {}} />
-                  <OutlinerRow pad={10} glyph="⧉" glyphColor={C.muted} label="Components" right={`${UI_KIT.length + 2}`} onClick={() => {}} />
-                  <OutlinerRow pad={10} glyph="◈" glyphColor={C.muted} label="Sample data" right="0 collections" onClick={() => {}} />
-                  <OutlinerRow pad={10} glyph="▨" glyphColor={C.muted} label="Assets" right="none" onClick={() => {}} />
-                  {routeTree && (
-                    <>
-                      <div style={{ padding: "8px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>
-                        Adventure Alerts · routes
-                      </div>
-                      <RouteTree
-                        tree={routeTree}
-                        selectedId={routeSel ? routeId(routeSel) : null}
-                        onSelect={(n) => {
-                          setRouteSel(n);
-                          setSel({ kind: null, id: null });
-                        }}
-                      />
-                    </>
-                  )}
-                </>
+              )}
+              {outlinerMode === "Routes" && routeTree && (
+                <RouteTree
+                  tree={routeTree}
+                  selectedId={routeSel ? routeId(routeSel) : null}
+                  onSelect={(n) => {
+                    setRouteSel(n);
+                    setFileFocusId(null);
+                  }}
+                />
+              )}
+              {outlinerMode === "Routes" && !routeTree && (
+                <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
+                  No route tree — is the target folder a Next.js app?
+                </div>
               )}
             </div>
           </div>
 
           {/* Properties */}
-          <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-            <div style={{ flex: "0 0 30px", display: "flex", flexDirection: "column", background: C.win, borderRight: `1px solid ${C.border}`, paddingTop: 4, gap: 1 }}>
-              {PROP_TABS.map((p) => (
-                <button key={p.label} className="hv-ctl" title={p.label}
-                  style={{ height: 28, background: propTab === p.label ? C.ctlHover : "transparent", border: "none", borderLeft: `2px solid ${propTab === p.label ? C.blue : "transparent"}`, color: propTab === p.label ? "#fff" : C.muted, fontSize: 13, cursor: "pointer", lineHeight: 1 }}
-                  onClick={() => setPropTab(p.label)}>
-                  {p.glyph}
-                </button>
-              ))}
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+            <div style={{ flex: "0 0 auto", padding: "8px 10px 7px", borderBottom: `1px solid ${C.softDiv}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                <span style={{ flex: "0 0 auto", width: 7, height: 7, background: fileNode ? C.orange : routeSel ? C.blueLight : C.muted, borderRadius: 2 }} />
+                <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 12, color: "#fff", fontWeight: 600 }}>{selTitle}</span>
+              </div>
             </div>
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-              <div style={{ flex: "0 0 auto", padding: "8px 10px 7px", borderBottom: `1px solid ${C.softDiv}` }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                  <span style={{ flex: "0 0 auto", width: 7, height: 7, background: selAccent, borderRadius: 2 }} />
-                  <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 12, color: "#fff", fontWeight: 600 }}>{selTitle}</span>
-                  <span style={{ flex: "0 0 auto", fontSize: 11, color: C.muted }}>{sel.kind ? selKindLabel : ""}</span>
-                </div>
-                <div style={{ marginTop: 3, display: "flex", alignItems: "baseline", gap: 6, whiteSpace: "nowrap" }}>
-                  <span style={{ flex: "0 0 auto", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700 }}>{propTab}</span>
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{selPath}</span>
-                </div>
-              </div>
-              <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-                <Properties
-                  tab={propTab}
-                  routeSel={routeSel}
-                  routeShell={routeShell}
-                  fileState={fileState}
-                  fileFocus={fileState ? findModelNode(fileState.model, fileFocusId) : null}
-                  editFile={editFile}
-                  openFile={openFile}
-                  setSampleProp={setSampleProp}
-                  doc={doc}
-                  sel={sel}
-                  block={block}
-                  colHit={colHit}
-                  secHit={secHit}
-                  notes={notes}
-                  propSpecs={block?.type === "component" ? propSpecs[block.file] : undefined}
-                  edit={edit}
-                  patchBlock={patchBlock}
-                  select={select}
-                  toggleNote={toggleNote}
-                  addColumn={addColumn}
-                  moveBy={moveBy}
-                  setCanvasState={setCanvasState}
-                  canvasState={canvasState}
-                  gotoStyle={() => setWorkspace("Style")}
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+              {routeSel ? (
+                <RouteCard route={routeSel} shell={routeShell} openFile={(f) => void openFile(f)} />
+              ) : fileNode && fileState ? (
+                <FileNodeCard
+                  file={fileState.file}
+                  node={fileNode}
+                  onEdit={editFile}
+                  onOpenSource={(src) => void openFile(src)}
                 />
-              </div>
+              ) : fileState ? (
+                <SamplePropsCard state={fileState} setSampleProp={setSampleProp} />
+              ) : (
+                <div style={{ padding: "12px 10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
+                  Nothing open. The Routes tree shows the app's structure; Insert lists its components.
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1934,44 +1189,25 @@ export function App() {
       {/* ---------------------------------------------------------- Context menu */}
       {ctxMenu && (() => {
         const items: MenuItem[] = [];
-        if (block && blockText(block) != null)
-          items.push(
-            { label: "Edit text in place", accel: "F2", action: () => sel.id && send({ type: "begin-edit", id: sel.id }) },
-            { sep: true },
-          );
-        if (sel.kind)
-          items.push(
-            { label: "Cut", accel: "Ctrl+X", action: cutAction },
-            { label: "Copy", accel: "Ctrl+C", action: copyAction },
-          );
-        items.push({
-          label: clipboard.current ? `Paste ${clipboard.current.kind}` : "Paste",
-          accel: "Ctrl+V",
-          disabled: !clipboard.current,
-          action: pasteAction,
-        });
-        if (sel.kind)
-          items.push(
-            { label: "Duplicate", accel: "Ctrl+D", action: duplicateAction },
-            { label: deleteLabel, accel: "Del", action: deleteSel },
-            { sep: true },
-            { label: sel.kind === "column" ? "Move left" : "Move up", accel: "Alt+Up", action: () => moveBy(-1) },
-            { label: sel.kind === "column" ? "Move right" : "Move down", accel: "Alt+Down", action: () => moveBy(1) },
-          );
-        if (block)
-          items.push(
-            { sep: true },
-            { label: block.note ? "Remove dev note" : "Add dev note", action: toggleNote },
-            { label: "Needs data", check: tick(!!block.needsData), action: () => patchBlock((b) => { b.needsData = !b.needsData; }) },
-          );
-        if (secHit)
-          items.push(
-            { sep: true },
-            { label: "Card surface", check: tick(secHit.sec.background !== "none"), action: () => edit((p) => { const f = findSection(p, secHit.sec.id); if (f) f.sec.background = f.sec.background === "none" ? "card" : "none"; }) },
-            { label: "Add column", action: addColumn },
-          );
-        if (colHit) items.push({ sep: true }, { label: "Add column", action: addColumn });
-        if (!sel.kind) items.push({ sep: true }, { label: "Add section", action: addSection });
+        if (fileNode) {
+          if (fileNode.componentSource) {
+            items.push({ label: `Open ${fileNode.tag} source`, action: () => void openFile(fileNode.componentSource!) });
+          }
+          if (fileNode.can.structural) {
+            items.push(
+              { label: "Duplicate", accel: "Ctrl+D", action: () => void editFile({ op: "duplicate-element", index: fileNode.index }, fileNode.tag) },
+              { label: "Delete", accel: "Del", action: () => void editFile({ op: "delete-element", index: fileNode.index }, fileNode.tag) },
+              { sep: true },
+              { label: "Move up", accel: "Alt+Up", action: () => void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: Math.max(0, fileNode.slot - 2) }, fileNode.tag) },
+              { label: "Move down", accel: "Alt+Down", action: () => void editFile({ op: "move-element", index: fileNode.index, newParentIndex: parentIndexOf(fileNode), childPos: fileNode.slot + 2 }, fileNode.tag) },
+            );
+          }
+        }
+        if (fileState) {
+          if (items.length) items.push({ sep: true });
+          items.push({ label: "Copy file path", action: () => void navigator.clipboard.writeText(fileState.file) });
+        }
+        if (!items.length) return null;
         const left = Math.max(4, Math.min(ctxMenu.x, window.innerWidth / appZoom - 232));
         const top = Math.max(4, Math.min(ctxMenu.y, window.innerHeight / appZoom - items.length * 22 - 20));
         return (
@@ -2008,18 +1244,11 @@ export function App() {
         {touchedFiles.size > 0 && (
           <>
             <div style={{ ...vdiv, height: 14 }} />
-            <span
-              style={{ flex: "0 0 auto", color: C.amber, cursor: "help" }}
-              title={[...touchedFiles].join("\n")}
-            >
+            <span style={{ flex: "0 0 auto", color: C.amber, cursor: "help" }} title={[...touchedFiles].join("\n")}>
               {touchedFiles.size} file{touchedFiles.size === 1 ? "" : "s"} edited — review with git
             </span>
           </>
         )}
-        <div style={{ ...vdiv, height: 14 }} />
-        <span style={{ flex: "0 0 auto", color: C.muted }}>
-          {needsDataCount === 0 ? "all elements bound" : `${needsDataCount} element${needsDataCount === 1 ? "" : "s"} needs data`}
-        </span>
         <div style={{ ...vdiv, height: 14 }} />
         <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 4 }}>
           <button style={{ width: 19, height: 18, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 4, color: C.body, cursor: "pointer", lineHeight: 1 }} title="Zoom out" onClick={() => zoomBy(-1)}>−</button>
@@ -2032,534 +1261,131 @@ export function App() {
 }
 
 // ---------------------------------------------------------------------------
-// Properties body (per-tab)
+// Route card
 // ---------------------------------------------------------------------------
 
-function Properties(props: {
-  tab: PropTab;
-  routeSel?: RouteNode | null;
-  routeShell?: { viewFile: string | null; viewTag: string | null; contentNote: string | null } | null;
-  fileState?: {
-    project: "demo" | "aa";
-    file: string;
-    canvasKey: string;
-    model: JsxNodeModel[];
-    renderable: boolean;
-    specs: PropSpec[];
-    values: Record<string, unknown>;
-  } | null;
-  fileFocus?: JsxNodeModel | null;
-  editFile?: (edit: FileEdit, expectTag: string) => void;
-  openFile?: (project: "demo" | "aa", file: string) => Promise<void>;
-  setSampleProp?: (name: string, value: unknown) => void;
-  doc: PageDoc | null;
-  sel: Sel;
-  block: Block | null;
-  colHit: ReturnType<typeof findColumn>;
-  secHit: ReturnType<typeof findSection>;
-  notes: ReturnType<typeof noteEntries>;
-  propSpecs?: PropSpec[];
-  edit: (m: (d: PageDoc) => Partial<Sel> | void) => void;
-  patchBlock: (fn: (b: Block) => void) => void;
-  select: (kind: SelKind | null, id: string | null) => void;
-  toggleNote: () => void;
-  addColumn: () => void;
-  moveBy: (d: number) => void;
-  setCanvasState: (s: CanvasState) => void;
-  canvasState: CanvasState;
-  gotoStyle: () => void;
+function RouteCard({
+  route,
+  shell,
+  openFile,
+}: {
+  route: RouteNode;
+  shell: ShellInfo | null;
+  openFile: (file: string) => void;
 }) {
-  const { tab, doc, sel, block, colHit, secHit, notes, edit, patchBlock, select } = props;
   const pad: CSSProperties = { padding: "9px 10px 12px", display: "flex", flexDirection: "column", gap: 6 };
-
-  if (props.fileState && !props.routeSel) {
-    const p = props.fileState;
-    // A focused node → its code-editing card; otherwise the sample-props
-    // card for the file's root render.
-    if (props.fileFocus && props.editFile) {
-      return (
-        <FileNodeCard
-          file={p.file}
-          node={props.fileFocus}
-          onEdit={props.editFile}
-          onOpenSource={(src) => void props.openFile?.(p.project, src)}
-        />
-      );
-    }
-    return (
-      <div style={pad}>
-        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p.file}>{p.file}</div>
-        <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
-          {p.renderable
-            ? "Sample render props — preview only, never written to code. Click an element on the canvas or in the Outliner to edit its code."
-            : "Server component — no live preview. Pick elements in the Outliner to edit their code."}
-        </div>
-        {p.specs.map((s) => {
-          const raw = p.values[s.name];
-          if (s.control.kind === "boolean") {
-            return (
-              <Row key={s.name} label={s.name}>
-                <Seg grow items={[
-                  { label: "false", active: raw !== true, onClick: () => props.setSampleProp?.(s.name, false) },
-                  { label: "true", active: raw === true, onClick: () => props.setSampleProp?.(s.name, true) },
-                ]} />
-              </Row>
-            );
-          }
-          if (s.control.kind === "select" && s.control.options) {
-            return (
-              <Row key={s.name} label={s.name}>
-                <select className="fc" value={String(raw ?? "")} onChange={(e) => props.setSampleProp?.(s.name, e.target.value || undefined)} style={{ ...inputStyle, height: 22, padding: "0 5px", flex: 1, minWidth: 0 }}>
-                  <option value="">—</option>
-                  {s.control.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                </select>
-              </Row>
-            );
-          }
-          const display = typeof raw === "string" ? raw : raw === undefined ? "" : JSON.stringify(raw);
-          return (
-            <div key={s.name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ flex: "0 0 74px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: C.muted }} title={s.typeText}>{s.name}</span>
-              <Field value={display} onCommit={(v) => {
-                if (v === "") return props.setSampleProp?.(s.name, undefined);
-                if (s.control.kind === "number") return props.setSampleProp?.(s.name, Number(v) || 0);
-                let val: unknown = v;
-                if (s.control.kind === "json") { try { val = JSON.parse(v); } catch { /* keep string */ } }
-                props.setSampleProp?.(s.name, val);
-              }} style={{ flex: 1, minWidth: 0 }} />
-            </div>
-          );
-        })}
-        {p.specs.length === 0 && <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>No props interface found for this component.</div>}
-      </div>
-    );
-  }
-
-  if (props.routeSel) {
-    const r = props.routeSel;
-    const fileRows = (Object.entries(r.files) as [string, string | undefined][]).filter(
-      (e): e is [string, string] => !!e[1],
-    );
-    return (
-      <div style={pad}>
-        <Row label="URL">
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, color: C.text }}>{r.urlPath}</span>
-        </Row>
-        <Row label="Ownership">
-          <span style={{ flex: 1, color: r.ownership === "owned" ? C.orange : C.body }}>
-            {r.files.page ? (r.ownership === "owned" ? "u-and-i owned" : "hand-coded") : "route handler"}
-          </span>
-        </Row>
-        {r.isDynamic && (
-          <Row label="Dynamic">
-            <span style={{ flex: 1, fontFamily: MONO, color: C.body }}>{r.segment}</span>
-          </Row>
-        )}
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700, marginTop: 4 }}>Files</div>
-        {fileRows.map(([kind, file]) => (
-          <div key={kind} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-            <span style={{ flex: "0 0 62px", color: C.muted }}>{kind}</span>
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10.5, color: C.body }}>{file}</span>
-          </div>
-        ))}
-        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700, marginTop: 4 }}>Layout chain</div>
-        {r.layoutChain.length ? (
-          r.layoutChain.map((l, i) => (
-            <div key={l} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-              <span style={{ flex: "0 0 62px", color: C.faint }}>{i === 0 ? "root" : `level ${i}`}</span>
-              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10.5, color: C.body }}>{l}</span>
-            </div>
-          ))
-        ) : (
-          <div style={{ fontSize: 11, color: C.faint }}>none</div>
-        )}
-        {props.routeShell?.contentNote && (
-          <div style={{ padding: "6px 8px", background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 6, fontSize: 10.5, color: C.amber, lineHeight: 1.5 }}>
-            {props.routeShell.contentNote}
-          </div>
-        )}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
-          {props.routeShell?.viewFile && (
-            <button
-              className="hv-primary"
-              style={primaryBtn}
-              title={props.routeShell.viewFile}
-              onClick={() => void props.openFile?.("aa", props.routeShell!.viewFile!)}
-            >
-              Open {props.routeShell.viewTag} (the page's view)
-            </button>
-          )}
-          {r.files.page && (
-            <button className="hv-ctl" style={ctlBtn} onClick={() => void props.openFile?.("aa", r.files.page!)}>
-              Edit page code
-            </button>
-          )}
-        </div>
-        <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5, marginTop: 4 }}>
-          The route structure is interpreted from <span style={{ fontFamily: MONO }}>src/app</span>; opening a file edits the real code.
-        </div>
-      </div>
-    );
-  }
-
-  if (!doc) return null;
-  if (!sel.kind) {
-    return <div style={{ padding: "12px 10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>Nothing selected. Pick a row in the Outliner, or click something on the page.</div>;
-  }
-
-  const styleGet = (k: string) => block?.styles?.[k] ?? "";
-  const styleSet = (k: string) => (v: string) =>
-    patchBlock((b) => {
-      b.styles = { ...(b.styles ?? {}) };
-      const val = LENGTH_PROPS.has(k) ? normalizeLen(v) : v.trim();
-      if (val === "") delete b.styles[k];
-      else b.styles[k] = val;
-    });
-
-  if (tab === "Content") {
-    const text = block ? blockText(block) : null;
-    return (
-      <div style={pad}>
-        {block && text != null && (
-          <>
-            <Field value={text} onCommit={(v) => patchBlock((b) => setBlockTextValue(b, v))} />
-            <Row label="Reads as">
-              <span style={{ flex: 1, minWidth: 0, color: C.body }}>
-                {block.type === "heading" ? (block.level === 1 ? "Page title" : block.level === 2 ? "Section title" : "Sub-heading") : block.type === "button" ? "Action label" : "Body copy"}
-              </span>
-            </Row>
-            <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>Double-click the element on the page to edit in place.</div>
-          </>
-        )}
-        {secHit && (
-          <>
-            <Field value={secHit.sec.label ?? ""} placeholder="Section name" onCommit={(v) => edit((p) => { const f = findSection(p, secHit.sec.id); if (f) f.sec.label = v; })} />
-            <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>Section names are labels for you and for the Outliner. They don't render on the page.</div>
-          </>
-        )}
-        {block && text == null && (
-          <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>This element has no editable text. Its content comes from props or data.</div>
-        )}
-        {colHit && <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>Columns have no content of their own — select a block inside, or drag one in from Insert.</div>}
-      </div>
-    );
-  }
-
-  if (tab === "Placement") {
-    return (
-      <div style={pad}>
-        {block && (
-          <>
-            <Row label="In column">
-              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.body }}>
-                {(() => {
-                  const h = locate(doc, block.id);
-                  if (!h) return "";
-                  const total = h.sec.columns.reduce((a, c) => a + (parseInt(c.flex) || 1), 0);
-                  return `${h.col.id} · ${h.col.flex} of ${total} width`;
-                })()}
-              </span>
-            </Row>
-            {/* Margin / padding box model */}
-            <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, background: C.sunken, padding: "7px 8px 8px", display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 9.5, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Margin</span>
-                <span style={{ fontFamily: MONO, fontSize: 9.5, color: C.faint }}>any CSS length</span>
-              </div>
-              <BoxGrid
-                margin={parseBox(block.margin)}
-                padding={parseBox(styleGet("padding") || undefined)}
-                onMargin={(sides) => patchBlock((b) => { b.margin = joinBox(...sides); })}
-                onPadding={(sides) => styleSet("padding")(joinBox(...sides) === "0" ? "" : joinBox(...sides))}
-              />
-            </div>
-            {[
-              { label: "Width", a: ["width", "width"], b: ["maxWidth", "max-width"] },
-              { label: "Height", a: ["height", "height"], b: ["maxHeight", "max-height"] },
-              { label: "Min", a: ["minWidth", "min-width"], b: ["minHeight", "min-height"] },
-            ].map((r) => (
-              <Row key={r.label} label={r.label}>
-                <Field mono value={styleGet(r.a[0])} placeholder={r.a[1]} title={r.a[1]} style={{ flex: 1, minWidth: 0, height: 22 }} onCommit={styleSet(r.a[0])} />
-                <Field mono value={styleGet(r.b[0])} placeholder={r.b[1]} title={r.b[1]} style={{ flex: 1, minWidth: 0, height: 22 }} onCommit={styleSet(r.b[0])} />
-              </Row>
-            ))}
-            {[
-              { label: "Display", key: "display", options: ["", "block", "flex", "inline-flex", "grid", "none"] },
-              { label: "Position", key: "position", options: ["", "static", "relative", "absolute", "sticky", "fixed"] },
-              { label: "Align self", key: "alignSelf", options: ["", "flex-start", "center", "flex-end", "stretch"] },
-              { label: "Overflow", key: "overflow", options: ["", "visible", "hidden", "auto"] },
-            ].map((f) => (
-              <Row key={f.key} label={f.label}>
-                <select className="fc" value={styleGet(f.key)} onChange={(e) => styleSet(f.key)(e.target.value)} style={{ ...inputStyle, height: 22, padding: "0 5px", flex: 1, minWidth: 0 }}>
-                  {f.options.map((o) => <option key={o} value={o}>{o || "—"}</option>)}
-                </select>
-              </Row>
-            ))}
-            {["relative", "absolute", "sticky", "fixed"].includes(styleGet("position")) && (
-              <Row label="Inset">
-                <div style={{ flex: 1, minWidth: 0, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
-                  {(["top", "right", "bottom", "left"] as const).map((k) => (
-                    <Field key={k} mono value={styleGet(k)} placeholder={k} title={k} style={{ height: 22, padding: "0 5px", textAlign: "center", fontSize: 10 }} onCommit={styleSet(k)} />
-                  ))}
-                </div>
-              </Row>
-            )}
-            <Row label="Z-index">
-              <Field mono value={styleGet("zIndex")} placeholder="auto" style={{ flex: 1, minWidth: 0, height: 22 }} onCommit={styleSet("zIndex")} />
-            </Row>
-          </>
-        )}
-        {colHit && (
-          <>
-            <Row label="Width">
-              <Seg grow items={["1", "2", "3", "4", "5"].map((w) => ({ label: w, active: colHit.col.flex === w, onClick: () => edit((p) => { const f = findColumn(p, colHit.col.id); if (f) f.col.flex = w; }) }))} />
-            </Row>
-            <Row label="Share">
-              <span style={{ flex: 1, color: C.body }}>{colHit.col.flex} of {colHit.sec.columns.reduce((a, c) => a + (parseInt(c.flex) || 1), 0)}</span>
-            </Row>
-            <Row label="Contains">
-              <span style={{ flex: 1, color: C.body }}>{colHit.col.blocks.length} block{colHit.col.blocks.length === 1 ? "" : "s"}</span>
-            </Row>
-          </>
-        )}
-        {secHit && (
-          <Row label="Columns">
-            <span style={{ flex: 1, color: C.body }}>{secHit.sec.columns.length}</span>
-            <button className="hv-ctl" style={ctlBtn} onClick={props.addColumn}>Add</button>
-          </Row>
-        )}
-        <Row label="Order">
-          <div style={{ display: "flex", gap: 4 }}>
-            <button className="hv-ctl" style={ctlBtn} onClick={() => props.moveBy(-1)}>{sel.kind === "column" ? "Move left" : "Move up"}</button>
-            <button className="hv-ctl" style={ctlBtn} onClick={() => props.moveBy(1)}>{sel.kind === "column" ? "Move right" : "Move down"}</button>
-          </div>
-        </Row>
-        {colHit && <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>Drag blocks from Insert straight into this column, or drag existing blocks between columns.</div>}
-        {secHit && <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>A section is one flex row in {doc.name}.json. Click a column inside it to size that column.</div>}
-      </div>
-    );
-  }
-
-  if (tab === "Style") {
-    return (
-      <div style={pad}>
-        {block?.type === "heading" && (
-          <Row label="Level">
-            <Seg grow items={[1, 2, 3].map((l) => ({ label: `H${l}`, active: block.level === l, onClick: () => patchBlock((b) => { if (b.type === "heading") b.level = l as 1 | 2 | 3; }) }))} />
-          </Row>
-        )}
-        {(block?.type === "heading" || block?.type === "text") && (
-          <Row label="Align">
-            <Seg grow items={(["left", "center", "right"] as const).map((a) => ({
-              label: a[0].toUpperCase() + a.slice(1),
-              active: (block.textAlign ?? "left") === a,
-              onClick: () => patchBlock((b) => { if (b.type === "heading" || b.type === "text") b.textAlign = a === "left" ? undefined : a; }),
-            }))} />
-          </Row>
-        )}
-        {secHit && (
-          <Row label="Surface">
-            <Seg grow items={[{ l: "Card", v: "card" }, { l: "Plain", v: "none" }].map((m) => ({
-              label: m.l,
-              active: secHit.sec.background === m.v || (m.v === "card" && secHit.sec.background === "well"),
-              onClick: () => edit((p) => { const f = findSection(p, secHit.sec.id); if (f) f.sec.background = m.v as "card" | "none"; }),
-            }))} />
-          </Row>
-        )}
-        <Row label="Tokens">
-          <button className="hv-ctl" style={ctlBtn} onClick={props.gotoStyle}>Open Style workspace</button>
-        </Row>
-        {block && (
-          <div style={{ background: C.sunken, border: `1px solid ${C.border}`, borderRadius: 6, padding: "7px 8px", fontFamily: MONO, fontSize: 10.5, lineHeight: 1.6, color: C.muted }}>
-            {Object.entries(block.styles ?? {}).length
-              ? Object.entries(block.styles!).map(([k, v]) => `${k}: ${v};`).join(" ")
-              : "no CSS overrides on this element"}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (tab === "Props") {
-    return (
-      <div style={pad}>
-        {block?.type === "component" ? (
-          <>
-            <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{block.file}</div>
-            {(props.propSpecs ?? []).map((p) => {
-              const raw = block.props[p.name];
-              const display = typeof raw === "string" ? raw : raw === undefined ? "" : JSON.stringify(raw);
-              return (
-                <div key={p.name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <span style={{ flex: "0 0 74px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: C.muted }} title={p.typeText}>{p.name}</span>
-                  <Field value={display} onCommit={(v) => patchBlock((b) => {
-                    if (b.type !== "component") return;
-                    let val: unknown = v;
-                    if (v === "") { const { [p.name]: _, ...rest } = b.props; b.props = rest; return; }
-                    try { val = JSON.parse(v); } catch { /* keep string */ }
-                    b.props = { ...b.props, [p.name]: val };
-                  })} style={{ flex: 1, minWidth: 0 }} />
-                </div>
-              );
-            })}
-            {props.propSpecs?.length === 0 && <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>No props interface found for this component.</div>}
-            <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>Controls are derived from the component's TypeScript props interface. Values are written into the page document, not the component.</div>
-          </>
-        ) : (
-          <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>Props apply to component elements. Select a component on the page.</div>
-        )}
-      </div>
-    );
-  }
-
-  if (tab === "Data") {
-    return (
-      <div style={pad}>
-        {block && (
-          <>
-            <Row label="Value">
-              <Seg grow items={[
-                { label: "Static", active: !block.needsData, onClick: () => patchBlock((b) => { b.needsData = false; }) },
-                { label: "From data", active: !!block.needsData, onClick: () => patchBlock((b) => { b.needsData = true; b.binding = b.binding ?? `${b.type === "component" ? b.exportName : KIND_LABEL[b.type]} ← (data source)`; }) },
-              ]} />
-            </Row>
-            {block.needsData && (
-              <div style={{ padding: "8px 9px", background: C.sunken, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ flex: "0 0 auto", width: 5, height: 5, borderRadius: 99, background: C.amber }} />
-                  <span style={{ color: C.body }}>Awaiting data</span>
-                </div>
-                <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{block.binding}</div>
-                <div style={{ display: "flex", gap: 5 }}>
-                  <button className="hv-primary" style={{ ...primaryBtn, height: 22, padding: "0 8px" }} onClick={() => patchBlock((b) => { b.needsData = false; b.note = null; })}>Hook up…</button>
-                  <button className="hv-ctl" style={{ ...ctlBtn, height: 22, padding: "0 8px" }} onClick={() => patchBlock((b) => { b.needsData = false; })}>Keep mock</button>
-                </div>
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-              <span style={{ ...rowLabel, lineHeight: 1.4 }}>Show in</span>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: 1, minWidth: 0 }}>
-                {CANVAS_STATES.map((cs) => (
-                  <button key={cs} style={{ padding: "2px 7px", borderRadius: 999, background: props.canvasState === cs ? C.ctlHover : C.sunken, border: `1px solid ${props.canvasState === cs ? C.blue : C.border}`, color: props.canvasState === cs ? "#fff" : C.muted, cursor: "pointer" }} onClick={() => props.setCanvasState(cs)}>
-                    {cs}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-        <div style={{ paddingTop: 2, fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
-          Sample-data collections aren't built yet — "From data" marks the element as awaiting a real source, which travels as a dev note into generated code.
-        </div>
-      </div>
-    );
-  }
-
-  if (tab === "Notes") {
-    return (
-      <div style={pad}>
-        {block && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <Field value={block.note ?? ""} placeholder="No note on this element" onCommit={(v) => patchBlock((b) => { b.note = v || null; })} />
-            <button className="hv-amber" style={{ ...amberBtn, alignSelf: "flex-start" }} onClick={props.toggleNote}>
-              {block.note ? "Remove note" : "Add dev note"}
-            </button>
-          </div>
-        )}
-        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-            <span style={{ flex: 1, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700 }}>Open on this page</span>
-            <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint }}>{notes.length}</span>
-          </div>
-          {notes.map((n) => (
-            <div key={n.block.id} className="hv-card" style={{ padding: "7px 8px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", gap: 7, alignItems: "flex-start", cursor: "pointer" }} onClick={() => select("block", n.block.id)}>
-              <span style={{ flex: "0 0 auto", width: 16, height: 16, borderRadius: 99, background: C.amber, color: C.amberInk, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1 }}>{n.n}</span>
-              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.block.note}</span>
-                <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{blockTag(n.block)} · {n.col.id}</span>
-              </div>
-            </div>
-          ))}
-          {notes.length === 0 && (
-            <div style={{ padding: 9, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint, lineHeight: 1.5 }}>No open notes on this page.</div>
-          )}
-        </div>
-        <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
-          Notes travel with the element in <span style={{ fontFamily: MONO }}>{doc.name}.json</span> and surface as TODO comments in generated source.
-        </div>
-      </div>
-    );
-  }
-
-  // Source
+  const fileRows = (Object.entries(route.files) as [string, string | undefined][]).filter(
+    (e): e is [string, string] => !!e[1],
+  );
   return (
-    <div style={{ padding: "9px 10px 12px", display: "flex", flexDirection: "column", gap: 7 }}>
-      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, lineHeight: 1.6, overflow: "hidden", textOverflow: "ellipsis" }}>
-        pages/{doc.name}.json → src/pages-gen/{doc.name}.tsx
+    <div style={pad}>
+      <Row label="URL">
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, color: C.text }}>{route.urlPath}</span>
+      </Row>
+      {route.isDynamic && (
+        <Row label="Dynamic">
+          <span style={{ flex: 1, fontFamily: MONO, color: C.body }}>{route.segment}</span>
+        </Row>
+      )}
+      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700, marginTop: 4 }}>Files</div>
+      {fileRows.map(([kind, file]) => (
+        <div key={kind} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+          <span style={{ flex: "0 0 62px", color: C.muted }}>{kind}</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10.5, color: C.body }}>{file}</span>
+        </div>
+      ))}
+      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700, marginTop: 4 }}>Layout chain</div>
+      {route.layoutChain.length ? (
+        route.layoutChain.map((l, i) => (
+          <div key={l} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+            <span style={{ flex: "0 0 62px", color: C.faint }}>{i === 0 ? "root" : `level ${i}`}</span>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10.5, color: C.body }}>{l}</span>
+          </div>
+        ))
+      ) : (
+        <div style={{ fontSize: 11, color: C.faint }}>none</div>
+      )}
+      {shell?.contentNote && (
+        <div style={{ padding: "6px 8px", background: C.amberBg, border: `1px solid ${C.amberBorder}`, borderRadius: 6, fontSize: 10.5, color: C.amber, lineHeight: 1.5 }}>
+          {shell.contentNote}
+        </div>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+        {shell?.viewFile && (
+          <button className="hv-primary" style={primaryBtn} title={shell.viewFile} onClick={() => openFile(shell.viewFile!)}>
+            Open {shell.viewTag} (the page's view)
+          </button>
+        )}
+        {route.files.page && (
+          <button className="hv-ctl" style={ctlBtn} onClick={() => openFile(route.files.page!)}>
+            Edit page code
+          </button>
+        )}
       </div>
-      <div style={{ display: "flex", gap: 5 }}>
-        <button className="hv-ctl" style={ctlBtn} onClick={() => void navigator.clipboard.writeText(`fixtures/demo-project/src/pages-gen/${doc.name}.tsx`)}>Copy path</button>
-      </div>
-      <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
-        The editor writes JSON; the component is regenerated. Never edit <span style={{ fontFamily: MONO }}>pages-gen/</span> by hand.
+      <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5, marginTop: 4 }}>
+        The route structure is interpreted from <span style={{ fontFamily: MONO }}>src/app</span>; opening a file edits the real code.
       </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Box model grid (margin ring around padding ring)
+// Sample props card (render props for the open file's root — preview only)
 // ---------------------------------------------------------------------------
 
-function BoxGrid({
-  margin,
-  padding,
-  onMargin,
-  onPadding,
+function SamplePropsCard({
+  state,
+  setSampleProp,
 }: {
-  margin: [string, string, string, string];
-  padding: [string, string, string, string];
-  onMargin: (sides: [string, string, string, string]) => void;
-  onPadding: (sides: [string, string, string, string]) => void;
+  state: FileState;
+  setSampleProp: (name: string, value: unknown) => void;
 }) {
-  const cell = (
-    sides: [string, string, string, string],
-    i: 0 | 1 | 2 | 3,
-    commit: (s: [string, string, string, string]) => void,
-  ) => (
-    <Field
-      mono
-      value={sides[i] === "0" ? "" : sides[i]}
-      placeholder="0"
-      style={{ width: 44, height: 20, background: C.panel, borderRadius: 4, textAlign: "center", fontSize: 10, padding: "0 2px" }}
-      onCommit={(v) => {
-        const next = [...sides] as [string, string, string, string];
-        next[i] = normalizeLen(v) || "0";
-        commit(next);
-      }}
-    />
-  );
+  const pad: CSSProperties = { padding: "9px 10px 12px", display: "flex", flexDirection: "column", gap: 6 };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 44px", gap: 4, alignItems: "center", justifyItems: "center" }}>
-      <span />
-      {cell(margin, 0, onMargin)}
-      <span />
-      {cell(margin, 3, onMargin)}
-      <div style={{ width: "100%", border: `1px dashed ${C.borderHover}`, borderRadius: 5, padding: "6px 5px", display: "grid", gridTemplateColumns: "44px 1fr 44px", gap: 4, alignItems: "center", justifyItems: "center" }}>
-        <span />
-        {cell(padding, 0, onPadding)}
-        <span />
-        {cell(padding, 3, onPadding)}
-        <span style={{ fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.08em" }}>padding</span>
-        {cell(padding, 1, onPadding)}
-        <span />
-        {cell(padding, 2, onPadding)}
-        <span />
+    <div style={pad}>
+      <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={state.file}>{state.file}</div>
+      <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
+        {state.renderable
+          ? "Sample render props — preview only, never written to code. Click an element on the canvas or in the Outliner to edit its code."
+          : "Server component — no live preview. Pick elements in the Outliner to edit their code."}
       </div>
-      {cell(margin, 1, onMargin)}
-      <span />
-      {cell(margin, 2, onMargin)}
-      <span />
+      {state.specs.map((s) => {
+        const raw = state.values[s.name];
+        if (s.control.kind === "boolean") {
+          return (
+            <Row key={s.name} label={s.name}>
+              <Seg grow items={[
+                { label: "false", active: raw !== true, onClick: () => setSampleProp(s.name, false) },
+                { label: "true", active: raw === true, onClick: () => setSampleProp(s.name, true) },
+              ]} />
+            </Row>
+          );
+        }
+        if (s.control.kind === "select" && s.control.options) {
+          return (
+            <Row key={s.name} label={s.name}>
+              <select className="fc" value={String(raw ?? "")} onChange={(e) => setSampleProp(s.name, e.target.value || undefined)} style={{ ...inputStyle, height: 22, padding: "0 5px", flex: 1, minWidth: 0 }}>
+                <option value="">—</option>
+                {s.control.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </Row>
+          );
+        }
+        const display = typeof raw === "string" ? raw : raw === undefined ? "" : JSON.stringify(raw);
+        return (
+          <div key={s.name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ flex: "0 0 74px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: C.muted }} title={s.typeText}>{s.name}</span>
+            <Field value={display} onCommit={(v) => {
+              if (v === "") return setSampleProp(s.name, undefined);
+              if (s.control.kind === "number") return setSampleProp(s.name, Number(v) || 0);
+              let val: unknown = v;
+              if (s.control.kind === "json") { try { val = JSON.parse(v); } catch { /* keep string */ } }
+              setSampleProp(s.name, val);
+            }} style={{ flex: 1, minWidth: 0 }} />
+          </div>
+        );
+      })}
+      {state.specs.length === 0 && <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>No props interface found for this component.</div>}
     </div>
   );
 }

@@ -1,8 +1,0 @@
-/* Canvas CSS when the harness renders adventure-alerts components.
-   globals.css is itself a Tailwind v4 root (@import "tailwindcss"), but
-   source auto-detection is CWD-relative, so the AA trees must be declared
-   explicitly for utility generation. */
-@import "../../../../adventure-alerts/src/app/globals.css";
-@source "../../../../adventure-alerts/src/components";
-@source "../../../../adventure-alerts/src/app";
-@import "./aa/aa-fonts.css";

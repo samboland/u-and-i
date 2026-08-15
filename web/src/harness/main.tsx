@@ -1,9 +1,10 @@
 /**
- * Harness: renders the user's real generated page (or a component) and layers
- * the editor's canvas affordances over it — per-kind selection outlines and
- * badges, drop indicators, dev-note pins and callouts, empty-column wells,
- * device/zoom stage framing, canvas states. The page itself is always the
- * real code from pages-gen/ — affordances decorate, never re-draw.
+ * Harness: renders a real component from the target Next.js app on the
+ * canvas stage and layers the editor's affordances over it — hover/selection
+ * outlines, drag-and-drop that becomes AST edits, device/zoom framing, the
+ * void apron for panning. The rendered code is always the target's actual
+ * source (served through the next/* shims); affordances decorate, never
+ * re-draw.
  */
 import {
   Component as ReactComponent,
@@ -15,59 +16,44 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import "./harness.css";
-import { mocks } from "../../../fixtures/mocks";
-import { aaModules } from "./aa/modules";
-import type { CanvasState, EditorToHarness, HarnessToEditor } from "../shared/protocol";
+import "./target-canvas.css";
+import { SessionProvider } from "./next-shims/next-auth-react";
+import type { EditorToHarness, HarnessToEditor } from "../shared/protocol";
 
-// Which design system this canvas document runs: the editor mounts one
-// iframe per target ("/harness.html" fixture, "?project=aa" adventure-
-// alerts) because the two define colliding .ui-* classes.
-const bootParams = new URLSearchParams(location.search);
-const CANVAS_PROJECT = bootParams.get("project") === "aa" ? "aa" : "demo";
-
-// Load exactly one design system, and the AA provider chrome only when
-// this canvas is the adventure-alerts one.
-const aaChrome =
-  CANVAS_PROJECT === "aa"
-    ? await (async () => {
-        await import("./aa-canvas.css");
-        return import("./aa/chrome");
-      })()
-    : (await import("./fixture-canvas.css"), null);
-
-const modules = import.meta.glob(
-  "../../../fixtures/demo-project/src/components/**/*.tsx",
-);
-const pageModules = import.meta.glob(
-  "../../../fixtures/demo-project/src/pages-gen/*.tsx",
-);
-
-function relKey(globKey: string): string {
-  return globKey.replace(/^(\.\.\/)+/, "");
-}
-
-const byRel: Record<string, () => Promise<unknown>> = {};
-for (const [key, loader] of Object.entries(modules)) byRel[relKey(key)] = loader;
-for (const [key, loader] of Object.entries(aaModules)) byRel[key] = loader;
-
-const pageByName: Record<string, () => Promise<unknown>> = {};
-for (const [key, loader] of Object.entries(pageModules)) {
-  const name = key.split("/").pop()!.replace(/\.tsx$/, "");
-  pageByName[name] = loader;
-}
+const APP_PREFIX = "app:";
 
 function post(msg: HarnessToEditor) {
   window.parent.postMessage(msg, "*");
 }
 
-const KIND_BADGE_BG = { block: "#ff6b00", column: "#5fae6f", section: "#6fb8ea" } as const;
-const KIND_BADGE_FG = { block: "#ffffff", column: "#0d1a12", section: "#0d1a22" } as const;
+// ---------------------------------------------------------------------------
+// Boot: learn the target root, then module loading is plain dynamic import
+// through vite's /@fs/ bridge — no compile-time globs, any folder works.
+// ---------------------------------------------------------------------------
 
-const STATE_MESSAGE: Record<Exclude<CanvasState, "Default">, string> = {
-  Loading: "Loading…",
-  Empty: "No data yet",
-  Error: "Couldn't load",
-};
+const targetRoot: string | null = await fetch("/api/project")
+  .then((r) => r.json())
+  .then((d) => (d.project?.root as string | undefined)?.replaceAll("\\", "/") ?? null)
+  .catch(() => null);
+
+function loadModule(file: string): Promise<Record<string, unknown>> {
+  if (!targetRoot || !file.startsWith(APP_PREFIX)) {
+    return Promise.reject(new Error(`unknown component file: ${file}`));
+  }
+  const rel = file.slice(APP_PREFIX.length);
+  return import(/* @vite-ignore */ `/@fs/${targetRoot}/${rel}`) as Promise<Record<string, unknown>>;
+}
+
+// Target-specific canvas chrome (providers, svg defs). Generic fallback is
+// just the fake session provider.
+const appChrome =
+  targetRoot?.endsWith("/adventure-alerts")
+    ? await import("./aa/chrome").catch(() => null)
+    : null;
+function Providers({ children }: { children: ReactNode }) {
+  if (appChrome) return <appChrome.AAProviders>{children}</appChrome.AAProviders>;
+  return <SessionProvider>{children}</SessionProvider>;
+}
 
 /** One bad render must not kill the whole stage. */
 class Boundary extends ReactComponent<
@@ -89,15 +75,8 @@ class Boundary extends ReactComponent<
   }
 }
 
-interface SelMeta {
-  id: string | null;
-  kind: "section" | "column" | "block" | null;
-  badge: string | null;
-}
-
 function Stage() {
   const [stage, setStage] = useState<{
-    mode: "component" | "page";
     file: string;
     props: Record<string, unknown>;
     Component: ComponentType<Record<string, unknown>>;
@@ -107,133 +86,54 @@ function Stage() {
 
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selMeta, setSelMeta] = useState<SelMeta>({ id: null, kind: null, badge: null });
-  const selMetaRef = useRef(selMeta);
-  selMetaRef.current = selMeta;
   const [frame, setFrame] = useState({ width: 1100, zoom: 0.62 });
   const frameRef = useRef(frame);
   frameRef.current = frame;
   const zoomAnchor = useRef<{ x: number; y: number; zoom: number } | null>(null);
-  const [canvasState, setCanvasState] = useState<CanvasState>("Default");
-  const [showNotes, setShowNotes] = useState(true);
-  const [annotations, setAnnotations] = useState<{
-    notes: { id: string; n: number; text: string }[];
-    needsData: string[];
-  }>({ notes: [], needsData: [] });
   const loadSeq = useRef(0);
   const interact = useRef(false);
 
-  // Standalone preview: /harness.html?page=<name> renders the page plainly —
-  // no editor protocol, no void stage, everything interactive. This is what
-  // the editor's Preview button opens.
-  const previewName = useRef(new URLSearchParams(location.search).get("page")).current;
+  // Standalone preview: /harness.html?file=<app:key> renders the component
+  // plainly and interactive — no editor protocol, no stage framing. Sample
+  // props come from the editor's localStorage (same origin).
+  const previewFile = useRef(new URLSearchParams(location.search).get("file")).current;
   useEffect(() => {
-    if (!previewName) return;
+    if (!previewFile) return;
     interact.current = true;
-    document.title = `${previewName} — preview`;
+    document.title = `${previewFile.split("/").pop()} — preview`;
     document.documentElement.classList.add("uai-preview");
     document.body.classList.add("uai-preview");
-    void loadPage(previewName);
+    let props: Record<string, unknown> = {};
+    try {
+      const saved = localStorage.getItem(`uai:samples:app:${previewFile.slice(APP_PREFIX.length)}`);
+      if (saved) props = JSON.parse(saved) as Record<string, unknown>;
+    } catch {
+      /* defaults */
+    }
+    void load(previewFile, props);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function load(file: string, props: Record<string, unknown>) {
     const seq = ++loadSeq.current;
-    const loader = byRel[file];
-    if (!loader) {
-      setError(`unknown component file: ${file}`);
-      return;
-    }
     try {
-      const mod = (await loader()) as Record<string, unknown>;
+      const mod = await loadModule(file);
       if (seq !== loadSeq.current) return;
-      // Demo components have curated mocks entries; AA components resolve
-      // by convention: default export, else the single/first component-ish
-      // export.
       const isComp = (v: unknown) => typeof v === "function" || (typeof v === "object" && v !== null);
-      const exportName = mocks[file]?.exportName ?? "default";
-      let comp = mod[exportName];
-      if (!isComp(comp) && file.startsWith("aa:")) {
-        const named = Object.entries(mod).filter(([k, v]) => k !== "default" && isComp(v) && /^[A-Z]/.test(k));
+      let comp = mod.default;
+      if (!isComp(comp)) {
+        const named = Object.entries(mod).filter(([k, v]) => isComp(v) && /^[A-Z]/.test(k));
         comp = named[0]?.[1];
       }
       if (comp == null || !isComp(comp)) {
-        setError(`export ${exportName} not found in ${file}`);
+        setError(`no component export found in ${file}`);
         return;
       }
       setError(null);
-      setStage({
-        mode: "component",
-        file,
-        props,
-        Component: comp as ComponentType<Record<string, unknown>>,
-      });
+      setStage({ file, props, Component: comp as ComponentType<Record<string, unknown>> });
     } catch (err) {
       if (seq === loadSeq.current) setError(String(err));
     }
-  }
-
-  async function loadPage(name: string) {
-    const seq = ++loadSeq.current;
-    const loader = pageByName[name];
-    if (!loader) {
-      location.reload();
-      return;
-    }
-    try {
-      const mod = (await loader()) as { default?: unknown };
-      if (seq !== loadSeq.current) return;
-      if (typeof mod.default !== "function") {
-        setError(`page ${name} has no default export`);
-        return;
-      }
-      setError(null);
-      setStage({
-        mode: "page",
-        file: name,
-        props: {},
-        Component: mod.default as ComponentType<Record<string, unknown>>,
-      });
-    } catch (err) {
-      if (seq === loadSeq.current) setError(String(err));
-    }
-  }
-
-  // ------------------------------------------------------------------ inline edit
-
-  function startEdit(el: HTMLElement) {
-    el.draggable = false;
-    el.contentEditable = "true";
-    el.classList.add("uai-editing");
-    el.focus();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    const selection = getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-
-    const finish = (commit: boolean) => {
-      const text = el.innerText.trim();
-      el.contentEditable = "false";
-      el.classList.remove("uai-editing");
-      el.draggable = true;
-      el.removeEventListener("keydown", onKey);
-      el.removeEventListener("blur", onBlur);
-      if (commit) {
-        post({ type: "edit-text", blockId: el.getAttribute("data-uai-block")!, text });
-      }
-    };
-    const onKey = (ke: KeyboardEvent) => {
-      if (ke.key === "Enter") {
-        ke.preventDefault();
-        el.blur();
-      } else if (ke.key === "Escape") {
-        finish(false);
-      }
-    };
-    const onBlur = () => finish(true);
-    el.addEventListener("keydown", onKey);
-    el.addEventListener("blur", onBlur);
   }
 
   // ------------------------------------------------------------------ messages
@@ -245,12 +145,8 @@ function Stage() {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "render") {
         void load(msg.file, msg.props);
-      } else if (msg.type === "render-page") {
-        void loadPage(msg.name);
       } else if (msg.type === "select") {
         setSelectedId(msg.id);
-      } else if (msg.type === "select-block") {
-        setSelMeta({ id: msg.id, kind: msg.kind ?? "block", badge: msg.badge ?? null });
       } else if (msg.type === "set-session") {
         void import("./next-shims/next-auth-react").then((m) =>
           m.setCanvasSession(msg.session as never),
@@ -262,19 +158,8 @@ function Stage() {
         setFrame((f) => ({ ...f, width: msg.width }));
       } else if (msg.type === "set-zoom") {
         setFrame((f) => ({ ...f, zoom: msg.zoom }));
-      } else if (msg.type === "set-canvas-state") {
-        setCanvasState(msg.state);
-      } else if (msg.type === "set-show-notes") {
-        setShowNotes(msg.on);
       } else if (msg.type === "set-theme") {
         document.documentElement.classList.toggle("dark", msg.dark);
-      } else if (msg.type === "set-annotations") {
-        setAnnotations({ notes: msg.notes, needsData: msg.needsData });
-      } else if (msg.type === "begin-edit") {
-        const el = document.querySelector<HTMLElement>(
-          `[data-uai-block="${CSS.escape(msg.id)}"]`,
-        );
-        if (el && ["H1", "H2", "H3", "P", "BUTTON"].includes(el.tagName)) startEdit(el);
       } else if (msg.type === "token-preview") {
         tokenOverrides.add(msg.name);
         document.documentElement.style.setProperty(msg.name, msg.value);
@@ -291,11 +176,13 @@ function Stage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ------------------------------------------------------------------ stage navigation
+
   // Cursor-anchored zoom: when the zoom the editor sent back lands, shift
   // scroll so the content point under the cursor stays under the cursor.
   useEffect(() => {
     const anchor = zoomAnchor.current;
-    if (!anchor || stage?.mode !== "page" || frame.zoom === anchor.zoom) return;
+    if (!anchor || !stage || previewFile || frame.zoom === anchor.zoom) return;
     zoomAnchor.current = null;
     const el = document.querySelector<HTMLElement>("[data-uai-stage]");
     if (!el) return;
@@ -308,16 +195,13 @@ function Stage() {
       left: originX + cx * frame.zoom - anchor.x,
       top: originY + cy * frame.zoom - anchor.y,
     });
-  }, [frame.zoom, stage]);
+  }, [frame.zoom, stage, previewFile]);
 
-  // Center the page inside the void apron on load / page or device change
+  // Center the stage inside the void apron on load / file or device change
   // (not on zoom — zooming must not yank the pan position).
   const centeredFor = useRef<string | null>(null);
   useEffect(() => {
-    if (stage?.mode !== "page") {
-      centeredFor.current = null;
-      return;
-    }
+    if (!stage || previewFile) return;
     const key = `${stage.file}:${frame.width}`;
     if (centeredFor.current === key) return;
     centeredFor.current = key;
@@ -329,12 +213,12 @@ function Stage() {
       });
     });
     return () => cancelAnimationFrame(raf);
-  }, [stage, frame]);
+  }, [stage, frame, previewFile]);
 
-  // Report where the page origin sits in the viewport so the chrome's rulers
-  // can track pan and zoom. rAF-coalesced; fires on scroll, resize, zoom.
+  // Report where the stage origin sits in the viewport so the chrome's
+  // rulers can track pan and zoom. rAF-coalesced.
   useEffect(() => {
-    if (stage?.mode !== "page") return;
+    if (!stage || previewFile) return;
     let raf = 0;
     const report = () => {
       raf = 0;
@@ -354,10 +238,11 @@ function Stage() {
       window.removeEventListener("scroll", queue, true);
       window.removeEventListener("resize", queue);
     };
-  }, [stage, frame]);
+  }, [stage, frame, previewFile]);
 
   // Middle-mouse drag pans the canvas (suppresses the browser's autoscroll).
   useEffect(() => {
+    if (previewFile) return;
     let pan: { x: number; y: number } | null = null;
     const down = (e: MouseEvent) => {
       if (e.button !== 1) return;
@@ -383,27 +268,26 @@ function Stage() {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
-  }, []);
+  }, [previewFile]);
 
   // Ctrl+scroll zooms the canvas — forwarded to the editor, which owns zoom.
   useEffect(() => {
+    if (previewFile) return;
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey || stageRef.current?.mode !== "page") return;
+      if (!e.ctrlKey) return;
       e.preventDefault();
       zoomAnchor.current = { x: e.clientX, y: e.clientY, zoom: frameRef.current.zoom };
       post({ type: "zoom-wheel", dir: e.deltaY < 0 ? 1 : -1 });
     };
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => window.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [previewFile]);
 
   // Re-import on HMR so the stage picks up fresh implementations.
   useEffect(() => {
     if (!import.meta.hot) return;
     const handler = () => {
-      if (!stage) return;
-      if (stage.mode === "page") void loadPage(stage.file);
-      else void load(stage.file, stage.props);
+      if (stage) void load(stage.file, stage.props);
     };
     import.meta.hot.on("vite:afterUpdate", handler);
     return () => import.meta.hot?.off("vite:afterUpdate", handler);
@@ -411,208 +295,67 @@ function Stage() {
 
   // ------------------------------------------------------------------ decoration
 
-  // Component-mode selection highlight (legacy inspector flow).
+  // Selection highlight + draggability for the open file's own elements.
+  // Runs every render — HMR replaces the DOM under us.
   useEffect(() => {
     document
       .querySelectorAll(".uai-selected")
       .forEach((el) => el.classList.remove("uai-selected"));
-    if (stage?.mode === "component" && selectedId) {
+    if (selectedId) {
       document
         .querySelectorAll(`[data-uai="${CSS.escape(selectedId)}"]`)
         .forEach((el) => el.classList.add("uai-selected"));
     }
-    document.body.classList.toggle("uai-page-mode", stage?.mode === "page" && !previewName);
-    document.documentElement.classList.toggle("uai-page-mode", stage?.mode === "page" && !previewName);
-    if (stage?.mode === "page") {
-      document
-        .querySelectorAll<HTMLElement>('[data-uai-kind="block"], [data-uai-kind="section"]')
-        .forEach((el) => {
-          if (!el.classList.contains("uai-editing")) el.draggable = !previewName;
-        });
+    const file = stageRef.current?.file;
+    if (file && !previewFile) {
+      document.querySelectorAll<HTMLElement>("[data-uai]").forEach((el) => {
+        const id = el.getAttribute("data-uai")!;
+        el.draggable = id.startsWith(`${file}::`) && !interact.current;
+      });
     }
   });
 
-  // Page-mode decoration: selection outline + badge, note pins + callout,
-  // empty-column wells, state wells. Re-runs on every render (HMR replaces
-  // the DOM under us) plus scroll/resize for the positioned overlays.
-  useEffect(() => {
-    if (stage?.mode !== "page") return;
-    const overlays: HTMLElement[] = [];
-    const injected: HTMLElement[] = [];
-    const hidden: HTMLElement[] = [];
-    const outlined: HTMLElement[] = [];
-
-    const decorate = () => {
-      overlays.forEach((o) => o.remove());
-      overlays.length = 0;
-      injected.forEach((o) => o.remove());
-      injected.length = 0;
-      hidden.forEach((el) => (el.style.visibility = ""));
-      hidden.length = 0;
-      outlined.forEach((el) =>
-        el.classList.remove("uai-sel-block", "uai-sel-column", "uai-sel-section"),
-      );
-      outlined.length = 0;
-
-      const byId = (id: string) =>
-        document.querySelector<HTMLElement>(`[data-uai-block="${CSS.escape(id)}"]`);
-
-      // Selection outline + badge
-      const sm = selMetaRef.current;
-      if (sm.id && sm.kind) {
-        const el = byId(sm.id);
-        if (el) {
-          el.classList.add(`uai-sel-${sm.kind}`);
-          outlined.push(el);
-          if (sm.badge) {
-            const r = el.getBoundingClientRect();
-            const b = document.createElement("div");
-            b.className = "uai-badge";
-            b.textContent = sm.badge;
-            b.style.background = KIND_BADGE_BG[sm.kind];
-            b.style.color = KIND_BADGE_FG[sm.kind];
-            b.style.fontWeight = sm.kind === "block" ? "400" : "600";
-            b.style.left = `${r.left + window.scrollX - 3}px`;
-            b.style.top = `${r.top + window.scrollY - (sm.kind === "column" ? 24 : sm.kind === "section" ? 20 : 19)}px`;
-            document.body.appendChild(b);
-            overlays.push(b);
-          }
-        }
-      }
-
-      // Note pins (+ callout under the selected element)
-      if (showNotes) {
-        for (const note of annotations.notes) {
-          const el = byId(note.id);
-          if (!el) continue;
-          const r = el.getBoundingClientRect();
-          const pin = document.createElement("span");
-          pin.className = "uai-pin";
-          pin.textContent = String(note.n);
-          pin.style.left = `${r.right + window.scrollX - 5}px`;
-          pin.style.top = `${r.top + window.scrollY + 2}px`;
-          document.body.appendChild(pin);
-          overlays.push(pin);
-          if (sm.id === note.id) {
-            const callout = document.createElement("div");
-            callout.className = "uai-callout";
-            callout.innerHTML = `<span class="uai-callout-n">${note.n}</span><div>${note.text.replace(/</g, "&lt;")}</div>`;
-            el.insertAdjacentElement("afterend", callout);
-            injected.push(callout);
-          }
-        }
-      }
-
-      // Empty-column wells
-      document
-        .querySelectorAll<HTMLElement>('[data-uai-kind="column"]')
-        .forEach((col) => {
-          if (!col.querySelector('[data-uai-kind="block"]')) {
-            const well = document.createElement("div");
-            well.className = "uai-empty-well";
-            well.textContent = "empty column";
-            col.appendChild(well);
-            injected.push(well);
-          }
-        });
-
-      // Canvas-state wells over data-bound blocks
-      if (canvasState !== "Default") {
-        for (const id of annotations.needsData) {
-          const el = byId(id);
-          if (!el) continue;
-          el.style.visibility = "hidden";
-          hidden.push(el);
-          const well = document.createElement("div");
-          well.className = "uai-state-well";
-          well.textContent = STATE_MESSAGE[canvasState];
-          const r = el.getBoundingClientRect();
-          well.style.left = `${r.left + window.scrollX}px`;
-          well.style.top = `${r.top + window.scrollY}px`;
-          well.style.width = `${Math.max(180, r.width)}px`;
-          well.style.height = `${Math.max(40, r.height)}px`;
-          document.body.appendChild(well);
-          overlays.push(well);
-        }
-      }
-    };
-
-    decorate();
-    const raf = requestAnimationFrame(decorate);
-    window.addEventListener("scroll", decorate, true);
-    window.addEventListener("resize", decorate);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("scroll", decorate, true);
-      window.removeEventListener("resize", decorate);
-      overlays.forEach((o) => o.remove());
-      injected.forEach((o) => o.remove());
-      hidden.forEach((el) => (el.style.visibility = ""));
-      outlined.forEach((el) =>
-        el.classList.remove("uai-sel-block", "uai-sel-column", "uai-sel-section"),
-      );
-    };
-  }, [stage, selMeta, annotations, canvasState, showNotes, frame]);
-
-  // ------------------------------------------------------------------ hover + click selection
+  // ------------------------------------------------------------------ hover / click / keys
 
   useEffect(() => {
-    const selector = () =>
-      stageRef.current?.mode === "page" ? "[data-uai-block]" : "[data-uai]";
     const over = (e: Event) => {
       if (interact.current) return;
-      const el = (e.target as Element).closest?.(selector());
+      const el = (e.target as Element).closest?.("[data-uai]");
       document
         .querySelectorAll(".uai-hover")
         .forEach((n) => n.classList.remove("uai-hover"));
       if (el) el.classList.add("uai-hover");
     };
+    const chainOf = (el: Element): string[] => {
+      const chain: string[] = [];
+      let cur: Element | null = el;
+      while (cur) {
+        const v = cur.getAttribute?.("data-uai");
+        if (v) chain.push(v);
+        cur = cur.parentElement;
+      }
+      return chain;
+    };
     const click = (e: MouseEvent) => {
       if (interact.current) return;
-      if ((e.target as Element).closest?.(".uai-editing")) return;
-      const el = (e.target as Element).closest?.(selector());
-      if (!el) {
-        if (stageRef.current?.mode === "page") {
-          setSelMeta({ id: null, kind: null, badge: null });
-          post({ type: "selected-block", id: "" });
-        }
-        return;
-      }
+      const el = (e.target as Element).closest?.("[data-uai]");
+      if (!el) return;
       e.preventDefault();
       e.stopPropagation();
-      if (stageRef.current?.mode === "page") {
-        const id = el.getAttribute("data-uai-block")!;
-        post({ type: "selected-block", id });
-      } else {
-        const id = el.getAttribute("data-uai")!;
-        // The innermost hit may belong to a nested component's file; the
-        // ancestor chain lets the editor resolve to the file it has open.
-        const chain: string[] = [];
-        let cur: Element | null = el;
-        while (cur) {
-          const v = cur.getAttribute?.("data-uai");
-          if (v) chain.push(v);
-          cur = cur.parentElement;
-        }
-        setSelectedId(id);
-        post({ type: "selected", id, chain });
-      }
+      const id = el.getAttribute("data-uai")!;
+      setSelectedId(id);
+      post({ type: "selected", id, chain: chainOf(el) });
     };
     const ctx = (e: MouseEvent) => {
       if (interact.current) return;
-      if (stageRef.current?.mode !== "page") return;
-      if ((e.target as Element).closest?.(".uai-editing")) return;
       e.preventDefault();
-      const el = (e.target as Element).closest?.("[data-uai-block]");
-      const id = el?.getAttribute("data-uai-block") ?? null;
-      post({ type: "context-menu", id, x: e.clientX, y: e.clientY });
+      const el = (e.target as Element).closest?.("[data-uai]");
+      post({ type: "context-menu", id: el?.getAttribute("data-uai") ?? null, x: e.clientX, y: e.clientY });
     };
-    // The editor's shortcuts must keep working while the page has focus:
+    // The editor's shortcuts must keep working while the canvas has focus:
     // Tab and Escape always forward; in Edit mode every shortcut chord
-    // (modifier combos, Delete, F2) forwards too. View mode leaves the
-    // keyboard to the page itself.
+    // forwards too. View mode leaves the keyboard to the app itself.
     const key = (e: KeyboardEvent) => {
-      if (stageRef.current?.mode !== "page") return;
       const t = e.target as HTMLElement;
       if (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
       if (e.key === "Tab") {
@@ -629,14 +372,15 @@ function Stage() {
       e.preventDefault();
       post({ type: "key", key: e.key, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey });
     };
-    // Component mode: double-click descends into the element's source file.
+    // Double-click descends into the element's source file.
     const dbl = (e: MouseEvent) => {
-      if (interact.current || stageRef.current?.mode !== "component") return;
+      if (interact.current) return;
       const el = (e.target as Element).closest?.("[data-uai]");
       if (!el) return;
       e.preventDefault();
       post({ type: "open-component", id: el.getAttribute("data-uai")! });
     };
+    if (previewFile) return; // preview is plain interaction, no affordances
     document.addEventListener("mouseover", over);
     document.addEventListener("click", click, true);
     document.addEventListener("contextmenu", ctx);
@@ -649,245 +393,79 @@ function Stage() {
       document.removeEventListener("keydown", key);
       document.removeEventListener("dblclick", dbl);
     };
-  }, []);
+  }, [previewFile]);
 
-  // ------------------------------------------------------------------ drag & drop + dblclick
+  // ------------------------------------------------------------------ drag & drop → AST edits
 
   useEffect(() => {
-    if (stage?.mode !== "page") return;
+    if (previewFile) return;
+    const MIME_JSX = "application/x-uai-jsx";
     const indicator = document.createElement("div");
     indicator.className = "uai-drop-indicator";
     document.body.appendChild(indicator);
-    let dragging: { id: string; kind: "block" | "section" } | null = null;
-    let dropTarget:
-      | { columnId: string; index: number }
-      | { sectionIndex: number }
-      | null = null;
+    let moveId: string | null = null;
+    let target: { id: string; position: "before" | "after" } | null = null;
 
-    const MIME_BLOCK = "application/x-uai-new-block";
-    const MIME_SECTION = "application/x-uai-new-section";
-    const MIME_COLUMN = "application/x-uai-new-column";
-    const externalKind = (e: DragEvent): "block" | "section" | "column" | null => {
-      const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
-      if (types.includes(MIME_BLOCK)) return "block";
-      if (types.includes(MIME_SECTION)) return "section";
-      if (types.includes(MIME_COLUMN)) return "column";
+    /** Nearest ancestor element that belongs to the open file. */
+    const ownTarget = (from: Element | null): HTMLElement | null => {
+      const file = stageRef.current?.file;
+      if (!file) return null;
+      let el = from?.closest?.("[data-uai]") as HTMLElement | null;
+      while (el) {
+        if (el.getAttribute("data-uai")!.startsWith(`${file}::`)) return el;
+        el = el.parentElement?.closest?.("[data-uai]") as HTMLElement | null;
+      }
       return null;
     };
-    let columnTarget: { sectionId: string; index: number } | null = null;
-    let sectionOnlyTarget: string | null = null;
 
     const onDragStart = (e: DragEvent) => {
       if (interact.current) return;
-      const el = (e.target as Element).closest?.(
-        '[data-uai-kind="block"], [data-uai-kind="section"]',
-      ) as HTMLElement | null;
-      if (!el || el.classList.contains("uai-editing")) return;
-      dragging = {
-        id: el.getAttribute("data-uai-block")!,
-        kind: el.getAttribute("data-uai-kind") as "block" | "section",
-      };
+      const el = ownTarget(e.target as Element);
+      if (!el) return;
+      moveId = el.getAttribute("data-uai")!;
       e.dataTransfer!.effectAllowed = "move";
-      e.dataTransfer!.setData("text/plain", dragging.id);
+      e.dataTransfer!.setData("text/plain", moveId);
     };
 
     const onDragOver = (e: DragEvent) => {
-      const external = externalKind(e);
-      const kind = dragging?.kind ?? external;
-      if (!kind) return;
+      const external = e.dataTransfer ? Array.from(e.dataTransfer.types).includes(MIME_JSX) : false;
+      if (!moveId && !external) return;
       e.preventDefault();
-      e.dataTransfer!.dropEffect = dragging ? "move" : "copy";
-      columnTarget = null;
-      sectionOnlyTarget = null;
-
-      if (kind === "column") {
-        const section = (e.target as Element).closest?.(
-          '[data-uai-kind="section"]',
-        ) as HTMLElement | null;
-        if (!section) {
-          indicator.style.display = "none";
-          return;
-        }
-        const cols = Array.from(
-          section.querySelectorAll<HTMLElement>('[data-uai-kind="column"]'),
-        );
-        let index = cols.length;
-        for (let i = 0; i < cols.length; i++) {
-          const r = cols[i].getBoundingClientRect();
-          if (e.clientX < r.left + r.width / 2) {
-            index = i;
-            break;
-          }
-        }
-        columnTarget = { sectionId: section.getAttribute("data-uai-block")!, index };
-        const sr = section.getBoundingClientRect();
-        const x =
-          cols.length === 0
-            ? sr.left + 8
-            : index === cols.length
-              ? cols[cols.length - 1].getBoundingClientRect().right + 2
-              : cols[index].getBoundingClientRect().left - 4;
-        Object.assign(indicator.style, {
-          display: "block",
-          left: `${x + window.scrollX}px`,
-          width: "3px",
-          top: `${sr.top + window.scrollY}px`,
-          height: `${sr.height}px`,
-        });
+      e.dataTransfer!.dropEffect = moveId ? "move" : "copy";
+      const el = ownTarget(e.target as Element);
+      if (!el || el.getAttribute("data-uai") === moveId) {
+        indicator.style.display = "none";
+        target = null;
         return;
       }
-      indicator.style.height = "3px";
-
-      if (kind === "block") {
-        const col = (e.target as Element).closest?.(
-          '[data-uai-kind="column"]',
-        ) as HTMLElement | null;
-        if (!col) {
-          const section = (e.target as Element).closest?.(
-            '[data-uai-kind="section"]',
-          ) as HTMLElement | null;
-          if (external && section && !section.querySelector('[data-uai-kind="column"]')) {
-            sectionOnlyTarget = section.getAttribute("data-uai-block")!;
-            const sr = section.getBoundingClientRect();
-            Object.assign(indicator.style, {
-              display: "block",
-              left: `${sr.left + window.scrollX}px`,
-              width: `${sr.width}px`,
-              top: `${sr.top + sr.height / 2 + window.scrollY}px`,
-            });
-            return;
-          }
-          indicator.style.display = "none";
-          dropTarget = null;
-          return;
-        }
-        const blocks = Array.from(
-          col.querySelectorAll<HTMLElement>(':scope > [data-uai-kind="block"]'),
-        ).filter((b) => b.getAttribute("data-uai-block") !== dragging?.id);
-        let index = blocks.length;
-        for (let i = 0; i < blocks.length; i++) {
-          const r = blocks[i].getBoundingClientRect();
-          if (e.clientY < r.top + r.height / 2) {
-            index = i;
-            break;
-          }
-        }
-        dropTarget = { columnId: col.getAttribute("data-uai-block")!, index };
-        const colRect = col.getBoundingClientRect();
-        const y =
-          blocks.length === 0
-            ? colRect.top + 4
-            : index === blocks.length
-              ? blocks[blocks.length - 1].getBoundingClientRect().bottom + 2
-              : blocks[index].getBoundingClientRect().top - 9;
-        Object.assign(indicator.style, {
-          display: "block",
-          left: `${colRect.left + window.scrollX}px`,
-          width: `${colRect.width}px`,
-          top: `${y + window.scrollY}px`,
-        });
-      } else {
-        const main = document.querySelector("main");
-        if (!main) return;
-        const sections = Array.from(
-          main.querySelectorAll<HTMLElement>(':scope > [data-uai-kind="section"]'),
-        ).filter((s) => s.getAttribute("data-uai-block") !== dragging?.id);
-        let index = sections.length;
-        for (let i = 0; i < sections.length; i++) {
-          const r = sections[i].getBoundingClientRect();
-          if (e.clientY < r.top + r.height / 2) {
-            index = i;
-            break;
-          }
-        }
-        dropTarget = { sectionIndex: index };
-        const mainRect = main.getBoundingClientRect();
-        const y =
-          sections.length === 0
-            ? mainRect.top
-            : index === sections.length
-              ? sections[sections.length - 1].getBoundingClientRect().bottom + 4
-              : sections[index].getBoundingClientRect().top - 4;
-        Object.assign(indicator.style, {
-          display: "block",
-          left: `${mainRect.left + window.scrollX}px`,
-          width: `${mainRect.width}px`,
-          top: `${y + window.scrollY}px`,
-        });
-      }
+      const r = el.getBoundingClientRect();
+      const before = e.clientY < r.top + r.height / 2;
+      target = { id: el.getAttribute("data-uai")!, position: before ? "before" : "after" };
+      Object.assign(indicator.style, {
+        display: "block",
+        left: `${r.left + window.scrollX}px`,
+        width: `${r.width}px`,
+        top: `${(before ? r.top - 3 : r.bottom + 1) + window.scrollY}px`,
+      });
     };
 
     const onDrop = (e: DragEvent) => {
-      const external = externalKind(e);
-      if (external) {
-        e.preventDefault();
-        if (external === "block" && dropTarget && "columnId" in dropTarget) {
-          post({
-            type: "insert-block",
-            item: JSON.parse(e.dataTransfer!.getData(MIME_BLOCK) || "{}"),
-            targetColumnId: dropTarget.columnId,
-            targetSectionId: null,
-            index: dropTarget.index,
-          });
-        } else if (external === "block" && sectionOnlyTarget) {
-          post({
-            type: "insert-block",
-            item: JSON.parse(e.dataTransfer!.getData(MIME_BLOCK) || "{}"),
-            targetColumnId: null,
-            targetSectionId: sectionOnlyTarget,
-            index: 0,
-          });
-        } else if (external === "section" && dropTarget && "sectionIndex" in dropTarget) {
-          post({ type: "insert-section", index: dropTarget.sectionIndex });
-        } else if (external === "column" && columnTarget) {
-          post({
-            type: "insert-column",
-            sectionId: columnTarget.sectionId,
-            index: columnTarget.index,
-          });
-        }
-        onDragEnd();
-        return;
-      }
-      if (!dragging || !dropTarget) return;
+      const payload = e.dataTransfer?.getData(MIME_JSX);
+      if (!target) return;
       e.preventDefault();
-      if (dragging.kind === "block" && "columnId" in dropTarget) {
-        post({
-          type: "move-block",
-          blockId: dragging.id,
-          targetColumnId: dropTarget.columnId,
-          index: dropTarget.index,
-        });
-      } else if (dragging.kind === "section" && "sectionIndex" in dropTarget) {
-        post({
-          type: "move-section",
-          sectionId: dragging.id,
-          index: dropTarget.sectionIndex,
-        });
+      if (payload) {
+        post({ type: "file-drop", targetId: target.id, position: target.position, insert: JSON.parse(payload) });
+      } else if (moveId) {
+        post({ type: "file-drop", targetId: target.id, position: target.position, moveId });
       }
+      onDragEnd();
     };
 
     const onDragEnd = () => {
-      dragging = null;
-      dropTarget = null;
-      columnTarget = null;
-      sectionOnlyTarget = null;
+      moveId = null;
+      target = null;
       indicator.style.display = "none";
-      indicator.style.height = "3px";
     };
-
-    const onDblClick = (e: MouseEvent) => {
-      if (interact.current) return;
-      const el = (e.target as Element).closest?.(
-        '[data-uai-kind="block"]',
-      ) as HTMLElement | null;
-      if (!el) return;
-      const tag = el.tagName.toLowerCase();
-      if (!["h1", "h2", "h3", "p", "button"].includes(tag)) return;
-      e.preventDefault();
-      startEdit(el);
-    };
-
     const onDragLeave = (e: DragEvent) => {
       if (!(e.relatedTarget instanceof Node)) indicator.style.display = "none";
     };
@@ -897,58 +475,42 @@ function Stage() {
     document.addEventListener("drop", onDrop);
     document.addEventListener("dragend", onDragEnd);
     document.addEventListener("dragleave", onDragLeave);
-    document.addEventListener("dblclick", onDblClick);
     return () => {
       document.removeEventListener("dragstart", onDragStart);
       document.removeEventListener("dragover", onDragOver);
       document.removeEventListener("drop", onDrop);
       document.removeEventListener("dragend", onDragEnd);
       document.removeEventListener("dragleave", onDragLeave);
-      document.removeEventListener("dblclick", onDblClick);
       indicator.remove();
     };
-  }, [stage?.mode]);
+  }, [previewFile]);
 
   // ------------------------------------------------------------------ render
 
   if (error) return <pre className="uai-error">{error}</pre>;
   if (!stage) return null;
 
-  if (stage.mode === "page" && previewName) {
-    return (
-      <Boundary resetKey={stage.file}>
-        <stage.Component />
+  const component = (
+    <Providers>
+      <Boundary resetKey={stage.file + JSON.stringify(stage.props)}>
+        <stage.Component {...stage.props} />
       </Boundary>
-    );
-  }
+    </Providers>
+  );
 
-  if (stage.mode === "page") {
-    // The void apron around the page lets you pan past the content edges in
-    // every direction; a centering scroll on load puts the page in view.
-    return (
-      <div style={{ padding: "85vh 85vw", width: "max-content" }}>
-        <div style={{ width: frame.width * frame.zoom }}>
-          <div data-uai-stage style={{ width: frame.width, transform: `scale(${frame.zoom})`, transformOrigin: "top left" }}>
-            <div className="uai-page-surface">
-              <Boundary resetKey={stage.file}>
-                <stage.Component />
-              </Boundary>
-            </div>
-          </div>
+  if (previewFile) return component;
+
+  // The void apron around the stage lets you pan past the content edges in
+  // every direction; a centering scroll on load puts it in view.
+  return (
+    <div style={{ padding: "85vh 85vw", width: "max-content" }}>
+      <div style={{ width: frame.width * frame.zoom }}>
+        <div data-uai-stage style={{ width: frame.width, transform: `scale(${frame.zoom})`, transformOrigin: "top left" }}>
+          <div className="uai-page-surface">{component}</div>
         </div>
       </div>
-    );
-  }
-
-  const component = (
-    <Boundary resetKey={stage.file + JSON.stringify(stage.props)}>
-      <stage.Component {...stage.props} />
-    </Boundary>
+    </div>
   );
-  if (aaChrome && stage.file.startsWith("aa:")) {
-    return <aaChrome.AAProviders>{component}</aaChrome.AAProviders>;
-  }
-  return component;
 }
 
 createRoot(document.getElementById("root")!).render(<Stage />);
