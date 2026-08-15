@@ -2,6 +2,7 @@
  * Prop-control extraction: find the `*Props` interface in a component file and
  * derive editor controls from member types via ts-morph.
  */
+import path from "node:path";
 import { Project, SyntaxKind, type InterfaceDeclaration } from "ts-morph";
 
 export interface PropSpec {
@@ -18,15 +19,24 @@ export interface PropSpec {
 
 const projectCache = new Map<string, Project>();
 
-function getProject(root: string): Project {
-  let p = projectCache.get(root);
+function getProject(root: string, useTsconfig: boolean): Project {
+  const key = `${root}:${useTsconfig}`;
+  let p = projectCache.get(key);
   if (!p) {
-    p = new Project({
-      useInMemoryFileSystem: false,
-      compilerOptions: { allowJs: false, strict: true },
-      skipAddingFilesFromTsConfig: true,
-    });
-    projectCache.set(root, p);
+    // Wiring the target repo's tsconfig gives ts-morph its "@/*" path
+    // mapping — without it, prop extraction in a Next repo can't resolve
+    // imported types.
+    p = useTsconfig
+      ? new Project({
+          tsConfigFilePath: path.join(root, "tsconfig.json"),
+          skipAddingFilesFromTsConfig: true,
+        })
+      : new Project({
+          useInMemoryFileSystem: false,
+          compilerOptions: { allowJs: false, strict: true },
+          skipAddingFilesFromTsConfig: true,
+        });
+    projectCache.set(key, p);
   }
   return p;
 }
@@ -50,8 +60,12 @@ function controlFor(typeText: string): PropSpec["control"] {
   return { kind: "json" };
 }
 
-export function extractProps(root: string, absFile: string): PropSpec[] {
-  const project = getProject(root);
+export function extractProps(
+  root: string,
+  absFile: string,
+  opts?: { tsconfig?: boolean },
+): PropSpec[] {
+  const project = getProject(root, opts?.tsconfig ?? false);
   const source =
     project.getSourceFile(absFile) ?? project.addSourceFileAtPath(absFile);
   source.refreshFromFileSystemSync();

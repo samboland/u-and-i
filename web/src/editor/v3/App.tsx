@@ -39,6 +39,8 @@ import {
   vdiv,
   type DeviceName,
 } from "./chrome";
+import { OutlinerRow } from "./OutlinerRow";
+import { RouteTree, routeId, type RouteNode } from "./RouteTree";
 import { StyleBody, useStyleTokens } from "./StyleWorkspace";
 import {
   WS_INITIAL,
@@ -279,6 +281,10 @@ export function App() {
   const stageXY = useRef({ x: 0, y: 0 });
   const drawRulersRef = useRef<() => void>(() => {});
   const [rulerUnit, setRulerUnit] = useState<"px" | "rem">("px");
+  // Next-project (adventure-alerts) route tree — read-only this iteration.
+  const [routeTree, setRouteTree] = useState<RouteNode | null>(null);
+  const routesFetched = useRef(false);
+  const [routeSel, setRouteSel] = useState<RouteNode | null>(null);
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -348,6 +354,7 @@ export function App() {
     const data = await api<{ doc: PageDoc }>(`/api/page?name=${encodeURIComponent(name)}`);
     setDoc(data.doc);
     setSel({ kind: null, id: null });
+    setRouteSel(null);
     setHistory([]);
     setFuture([]);
     if (harnessReady.current) {
@@ -376,6 +383,19 @@ export function App() {
       if (first) await openPage(first);
     });
   }, [openPage]);
+
+  // Load the Next-project route tree the first time Project mode opens.
+  useEffect(() => {
+    if (outlinerMode !== "Project" || routesFetched.current) return;
+    routesFetched.current = true;
+    void api<{ projects: { id: string }[] }>("/api/projects")
+      .then((d) =>
+        d.projects.some((p) => p.id === "aa")
+          ? api<{ tree: RouteNode }>("/api/routes?project=aa").then((r) => setRouteTree(r.tree))
+          : undefined,
+      )
+      .catch(() => {});
+  }, [outlinerMode]);
 
   // ------------------------------------------------------------------ selection helpers
 
@@ -414,6 +434,7 @@ export function App() {
 
   const select = useCallback((kind: SelKind | null, id: string | null) => {
     setSel({ kind, id });
+    if (kind) setRouteSel(null);
   }, []);
 
   // ------------------------------------------------------------------ canvas sync
@@ -941,7 +962,9 @@ export function App() {
     if (secHit) return `${doc.name}.json › ${secHit.sec.id}`;
     return "";
   })();
-  const selTitle = block ? blockTitle(block) : colHit ? `Column ${colHit.ci + 1}` : secHit ? (secHit.sec.label ?? secHit.sec.id) : "Nothing selected";
+  const selTitle = routeSel
+    ? routeSel.urlPath
+    : block ? blockTitle(block) : colHit ? `Column ${colHit.ci + 1}` : secHit ? (secHit.sec.label ?? secHit.sec.id) : "Nothing selected";
 
   // ------------------------------------------------------------------ menus
 
@@ -1373,11 +1396,33 @@ export function App() {
                   <canvas ref={hRuler} style={{ flex: 1, minWidth: 0, height: 16 }} />
                 </div>
               )}
-              <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}>
+              <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative" }}>
                 {rulersOn && (
                   <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
                 )}
                 <iframe ref={iframeRef} src="/harness.html" title="canvas" style={{ flex: 1, border: "none", background: C.void }} />
+                {routeSel && (
+                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
+                    <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                        <span style={{ fontFamily: MONO, fontSize: 14, color: "#fff" }}>{routeSel.urlPath}</span>
+                        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: routeSel.ownership === "owned" ? C.orange : C.muted }}>
+                          {routeSel.files.page ? (routeSel.ownership ?? "coded") : "API route"}
+                        </span>
+                      </div>
+                      {routeSel.files.page ? (
+                        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+                          Hand-coded page — <span style={{ fontFamily: MONO, fontSize: 10.5 }}>{routeSel.files.page}</span>.
+                          Owned pages become editable on this canvas when u-and-i's Next write-side lands.
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+                          Route handler — <span style={{ fontFamily: MONO, fontSize: 10.5 }}>{routeSel.files.route}</span>. Nothing to draw.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -1435,6 +1480,21 @@ export function App() {
                   <OutlinerRow pad={10} glyph="⧉" glyphColor={C.muted} label="Components" right={`${UI_KIT.length + 2}`} onClick={() => {}} />
                   <OutlinerRow pad={10} glyph="◈" glyphColor={C.muted} label="Sample data" right="0 collections" onClick={() => {}} />
                   <OutlinerRow pad={10} glyph="▨" glyphColor={C.muted} label="Assets" right="none" onClick={() => {}} />
+                  {routeTree && (
+                    <>
+                      <div style={{ padding: "8px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>
+                        Adventure Alerts · routes
+                      </div>
+                      <RouteTree
+                        tree={routeTree}
+                        selectedId={routeSel ? routeId(routeSel) : null}
+                        onSelect={(n) => {
+                          setRouteSel(n);
+                          setSel({ kind: null, id: null });
+                        }}
+                      />
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -1466,6 +1526,7 @@ export function App() {
               <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
                 <Properties
                   tab={propTab}
+                  routeSel={routeSel}
                   doc={doc}
                   sel={sel}
                   block={block}
@@ -1579,66 +1640,12 @@ export function App() {
 }
 
 // ---------------------------------------------------------------------------
-// Outliner row
-// ---------------------------------------------------------------------------
-
-function OutlinerRow({
-  pad,
-  glyph,
-  glyphColor,
-  label,
-  selected,
-  mark,
-  caret,
-  note,
-  data,
-  right,
-  onToggle,
-  onClick,
-  onCtx,
-}: {
-  pad: number;
-  glyph: string;
-  glyphColor: string;
-  label: string;
-  selected?: boolean;
-  mark?: string;
-  caret?: string;
-  note?: boolean;
-  data?: boolean;
-  right?: string;
-  onToggle?: () => void;
-  onClick: () => void;
-  onCtx?: (e: { preventDefault(): void; clientX: number; clientY: number }) => void;
-}) {
-  return (
-    <div
-      className="hv-row"
-      style={{ display: "flex", alignItems: "center", gap: 5, height: 20, paddingRight: 8, paddingLeft: pad, background: selected ? C.ctlHover : "transparent", borderLeft: `2px solid ${selected && mark ? mark : "transparent"}`, cursor: "pointer" }}
-      onClick={onClick}
-      onContextMenu={onCtx}
-    >
-      <button
-        style={{ flex: "0 0 11px", width: 11, background: "none", border: "none", padding: 0, color: C.faint, fontSize: 9, cursor: "pointer", lineHeight: 1 }}
-        onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
-      >
-        {caret ?? ""}
-      </button>
-      <span style={{ flex: "0 0 auto", width: 12, textAlign: "center", color: glyphColor, fontSize: 11 }}>{glyph}</span>
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: selected ? "#fff" : C.body }}>{label}</span>
-      {right && <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 10, color: C.faint }}>{right}</span>}
-      {note && <span style={{ flex: "0 0 auto", color: C.amber, fontSize: 10 }}>✎</span>}
-      {data && <span style={{ flex: "0 0 auto", width: 5, height: 5, borderRadius: 99, background: C.amber }} />}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Properties body (per-tab)
 // ---------------------------------------------------------------------------
 
 function Properties(props: {
   tab: PropTab;
+  routeSel?: RouteNode | null;
   doc: PageDoc | null;
   sel: Sel;
   block: Block | null;
@@ -1658,6 +1665,51 @@ function Properties(props: {
 }) {
   const { tab, doc, sel, block, colHit, secHit, notes, edit, patchBlock, select } = props;
   const pad: CSSProperties = { padding: "9px 10px 12px", display: "flex", flexDirection: "column", gap: 6 };
+
+  if (props.routeSel) {
+    const r = props.routeSel;
+    const fileRows = (Object.entries(r.files) as [string, string | undefined][]).filter(
+      (e): e is [string, string] => !!e[1],
+    );
+    return (
+      <div style={pad}>
+        <Row label="URL">
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, color: C.text }}>{r.urlPath}</span>
+        </Row>
+        <Row label="Ownership">
+          <span style={{ flex: 1, color: r.ownership === "owned" ? C.orange : C.body }}>
+            {r.files.page ? (r.ownership === "owned" ? "u-and-i owned" : "hand-coded") : "route handler"}
+          </span>
+        </Row>
+        {r.isDynamic && (
+          <Row label="Dynamic">
+            <span style={{ flex: 1, fontFamily: MONO, color: C.body }}>{r.segment}</span>
+          </Row>
+        )}
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700, marginTop: 4 }}>Files</div>
+        {fileRows.map(([kind, file]) => (
+          <div key={kind} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+            <span style={{ flex: "0 0 62px", color: C.muted }}>{kind}</span>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10.5, color: C.body }}>{file}</span>
+          </div>
+        ))}
+        <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: C.muted, fontWeight: 700, marginTop: 4 }}>Layout chain</div>
+        {r.layoutChain.length ? (
+          r.layoutChain.map((l, i) => (
+            <div key={l} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+              <span style={{ flex: "0 0 62px", color: C.faint }}>{i === 0 ? "root" : `level ${i}`}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 10.5, color: C.body }}>{l}</span>
+            </div>
+          ))
+        ) : (
+          <div style={{ fontSize: 11, color: C.faint }}>none</div>
+        )}
+        <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5, marginTop: 4 }}>
+          Read-only: adventure-alerts routes are interpreted from <span style={{ fontFamily: MONO }}>src/app</span>, never modified.
+        </div>
+      </div>
+    );
+  }
 
   if (!doc) return null;
   if (!sel.kind) {
