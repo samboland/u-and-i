@@ -94,6 +94,18 @@ const PROP_TABS = [
 ] as const;
 type PropTab = (typeof PROP_TABS)[number]["label"];
 
+/** "24" → "24px": bare numbers in length fields mean pixels, like every
+ * design tool. Keeps calc()/var()/keywords untouched. */
+function normalizeLen(v: string): string {
+  const t = v.trim();
+  return /^-?\d+(\.\d+)?$/.test(t) && t !== "0" ? `${t}px` : t;
+}
+
+const LENGTH_PROPS = new Set([
+  "width", "maxWidth", "minWidth", "height", "maxHeight", "minHeight",
+  "top", "right", "bottom", "left", "padding", "gap",
+]);
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   const body = await res.json();
@@ -211,6 +223,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 export function App() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const canvasRegionRef = useRef<HTMLDivElement>(null);
   const harnessReady = useRef(false);
 
   const [pages, setPages] = useState<string[]>([]);
@@ -244,6 +257,7 @@ export function App() {
   const [propSpecs, setPropSpecs] = useState<Record<string, PropSpec[]>>({});
   const [styleEdits, setStyleEdits] = useState(0);
   const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
+  const [appZoom, setAppZoom] = useState(1);
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -492,6 +506,8 @@ export function App() {
           const h = locate(p, msg.blockId);
           if (h) setBlockTextValue(h.block, msg.text);
         });
+      } else if (msg.type === "zoom-wheel") {
+        zoomBy(msg.dir);
       }
     };
     window.addEventListener("message", onMessage);
@@ -662,6 +678,17 @@ export function App() {
       else if (e.altKey && e.key === "ArrowDown") { e.preventDefault(); moveBy(1); }
       else if (e.key === "F2" && selRef.current.kind === "block" && selRef.current.id) {
         send({ type: "begin-edit", id: selRef.current.id });
+      }
+      // Application (chrome) zoom: Ctrl+Shift+± — canvas zoom: plain Ctrl+±.
+      else if (mod && e.shiftKey && (e.key === "+" || e.key === "=")) {
+        e.preventDefault();
+        setAppZoom((z) => Math.min(1.5, Math.round((z + 0.1) * 10) / 10));
+      } else if (mod && e.shiftKey && (e.key === "_" || e.key === "-")) {
+        e.preventDefault();
+        setAppZoom((z) => Math.max(0.7, Math.round((z - 0.1) * 10) / 10));
+      } else if (mod && e.shiftKey && e.key === ")") {
+        e.preventDefault();
+        setAppZoom(1);
       } else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoomBy(1); }
       else if (mod && e.key === "-") { e.preventDefault(); zoomBy(-1); }
       else if (mod && e.key === "0") { e.preventDefault(); setZoom(DEVICES[device].zoom); }
@@ -673,6 +700,20 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [undoAction, redoAction, duplicateAction, deleteSel, moveBy, zoomBy, device, send]);
+
+  // Ctrl+scroll over the chrome's canvas region (rulers, void margins) zooms
+  // the page; scrolls over the iframe itself arrive via the zoom-wheel message.
+  useEffect(() => {
+    const el = canvasRegionRef.current;
+    if (!el || workspace !== "Layout") return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? 1 : -1);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [workspace, zoomBy]);
 
   // ------------------------------------------------------------------ derived labels
 
@@ -866,7 +907,7 @@ export function App() {
 
   return (
     <div
-      style={{ display: "flex", flexDirection: "column", height: "100vh", background: C.win, color: C.body, fontFamily: "system-ui, sans-serif", fontSize: 12, overflow: "hidden" }}
+      style={{ display: "flex", flexDirection: "column", height: `${100 / appZoom}vh`, zoom: appZoom, background: C.win, color: C.body, fontFamily: "system-ui, sans-serif", fontSize: 12, overflow: "hidden" }}
       onClick={() => { if (openMenu) setOpenMenu(null); if (previewOpen) setPreviewOpen(false); }}
     >
       {/* ---------------------------------------------------------- TopBar */}
@@ -1129,7 +1170,7 @@ export function App() {
             </div>
 
             {/* Canvas region */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 240, background: C.void }}>
+            <div ref={canvasRegionRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 240, background: C.void }}>
               <div style={{ flex: "0 0 auto", minHeight: 30, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: `1px solid ${C.canvasEdge}`, background: C.canvasBar, minWidth: 0, position: "relative", zIndex: 25 }}>
                 <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
                 <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>{DEVICES[device].width}px</span>
@@ -1405,8 +1446,9 @@ function Properties(props: {
   const styleSet = (k: string) => (v: string) =>
     patchBlock((b) => {
       b.styles = { ...(b.styles ?? {}) };
-      if (v.trim() === "") delete b.styles[k];
-      else b.styles[k] = v.trim();
+      const val = LENGTH_PROPS.has(k) ? normalizeLen(v) : v.trim();
+      if (val === "") delete b.styles[k];
+      else b.styles[k] = val;
     });
 
   if (tab === "Content") {
@@ -1727,7 +1769,7 @@ function BoxGrid({
       style={{ width: 44, height: 20, background: C.panel, borderRadius: 4, textAlign: "center", fontSize: 10, padding: "0 2px" }}
       onCommit={(v) => {
         const next = [...sides] as [string, string, string, string];
-        next[i] = v.trim() || "0";
+        next[i] = normalizeLen(v) || "0";
         commit(next);
       }}
     />

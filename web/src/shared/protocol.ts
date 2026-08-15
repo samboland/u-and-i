@@ -43,4 +43,5 @@ export type HarnessToEditor =
   | { type: "insert-section"; index: number }
   | { type: "insert-column"; sectionId: string; index: number }
   | { type: "edit-text"; blockId: string; text: string }
+  | { type: "zoom-wheel"; dir: 1 | -1 }
   | { type: "render-error"; message: string };

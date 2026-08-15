@@ -244,6 +244,17 @@ function Stage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Ctrl+scroll zooms the canvas — forwarded to the editor, which owns zoom.
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || stageRef.current?.mode !== "page") return;
+      e.preventDefault();
+      post({ type: "zoom-wheel", dir: e.deltaY < 0 ? 1 : -1 });
+    };
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => window.removeEventListener("wheel", onWheel);
+  }, []);
+
   // Re-import on HMR so the stage picks up fresh implementations.
   useEffect(() => {
     if (!import.meta.hot) return;
