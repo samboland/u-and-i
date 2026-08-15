@@ -5,6 +5,7 @@ export type EditorToHarness =
   | { type: "render-page"; name: string }
   | { type: "select"; id: string | null }
   | { type: "select-block"; id: string | null }
+  | { type: "set-interact"; on: boolean }
   | { type: "token-preview"; name: string; value: string }
   | { type: "token-clear" };
 

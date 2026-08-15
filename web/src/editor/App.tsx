@@ -212,6 +212,7 @@ export function App() {
   const [tab, setTab] = useState<"insert" | "style" | "props" | "tokens">("style");
   const [tokens, setTokens] = useState<TokenFile[]>([]);
   const [tokenFilter, setTokenFilter] = useState("--ui-card");
+  const [interact, setInteract] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const harnessReady = useRef(false);
 
@@ -459,6 +460,17 @@ export function App() {
       {/* ------------------------------------------------ center: canvas */}
       <div className="canvas">
         <iframe ref={iframeRef} src="/harness.html" title="canvas" />
+        <button
+          className={`interact-btn${interact ? " on" : ""}`}
+          title="Toggle interact mode — clicks go to the component instead of selecting"
+          onClick={() => {
+            const next = !interact;
+            setInteract(next);
+            send({ type: "set-interact", on: next });
+          }}
+        >
+          {interact ? "⦿ interacting" : "◎ select"}
+        </button>
       </div>
 
       {/* ------------------------------------------------ right: inspector */}

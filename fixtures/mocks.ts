@@ -169,4 +169,76 @@ export const mocks: Record<string, ComponentMock> = {
     exportName: "Input",
     props: { placeholder: "Plain input" },
   },
+  [`${UI}/ProConCard.tsx`]: {
+    exportName: "ProConCard",
+    props: { type: "pro", text: "Opens reliably at the stated instant", defaultOpen: true },
+  },
+  [`${UI}/InfoHint.tsx`]: {
+    exportName: "InfoHint",
+    props: { label: "Times shown in your home timezone." },
+  },
+  [`${UI}/Modal.tsx`]: {
+    exportName: "Modal",
+    props: { open: true, title: "Confirm alert", subtitle: "Uses 1 credit", children: "Modal body content" },
+  },
+  [`${UI}/SubPanel.tsx`]: {
+    exportName: "SubPanel",
+    props: { label: "Details", children: "Sub panel content" },
+  },
+  [`${UI}/SidePanel.tsx`]: {
+    exportName: "SidePanel",
+    props: {
+      items: [
+        { id: "home", label: "Home" },
+        { id: "alerts", label: "Alerts" },
+        { id: "settings", label: "Settings", pinBottom: true },
+      ],
+      value: "home",
+    },
+  },
+  [`${UI}/DropdownMenu.tsx`]: {
+    exportName: "DropdownMenu",
+    props: {
+      items: [
+        { id: "newest", label: "Newest" },
+        { id: "oldest", label: "Oldest" },
+      ],
+    },
+  },
+  [`${UI}/DropdownButton.tsx`]: {
+    exportName: "DropdownButton",
+    props: {
+      label: "Sort: Newest",
+      items: [
+        { id: "newest", label: "Newest" },
+        { id: "oldest", label: "Oldest" },
+      ],
+    },
+  },
+  [`${UI}/NavCardStack.tsx`]: {
+    exportName: "NavCardStack",
+    props: {
+      levels: [
+        { key: "domain", label: "Domain", width: 180, children: "Level content" },
+        { key: "detail", label: "Detail", children: "Detail content" },
+      ],
+    },
+  },
+  [`${UI}/Grainient.tsx`]: { exportName: "Grainient", props: {} },
+  [`${UI}/tooltip.tsx`]: {
+    exportName: "TooltipProvider",
+    props: { children: "Tooltip primitives (see InfoHint for usage)" },
+  },
+  [`${UI}/icons.tsx`]: { exportName: "IconHome", props: {} },
+
+  // The full /dev/ui playground from adventure-alerts — the design system's
+  // living catalog, rendered verbatim.
+  "fixtures/demo-project/src/components/playground/playground.tsx": {
+    exportName: "UIPlayground",
+    props: {},
+  },
+  "fixtures/demo-project/src/components/playground/palette-reference.tsx": {
+    exportName: "PaletteReference",
+    props: {},
+  },
 };

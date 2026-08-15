@@ -76,6 +76,8 @@ function Stage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const loadSeq = useRef(0);
+  // Interact mode: clicks pass through to the component instead of selecting.
+  const interact = useRef(false);
 
   async function load(file: string, props: Record<string, unknown>) {
     const seq = ++loadSeq.current;
@@ -147,6 +149,9 @@ function Stage() {
         setSelectedId(msg.id);
       } else if (msg.type === "select-block") {
         setSelectedBlockId(msg.id);
+      } else if (msg.type === "set-interact") {
+        interact.current = msg.on;
+        document.body.classList.toggle("uai-interact", msg.on);
       } else if (msg.type === "token-preview") {
         tokenOverrides.add(msg.name);
         document.documentElement.style.setProperty(msg.name, msg.value);
@@ -262,6 +267,7 @@ function Stage() {
       | null = null;
 
     const onDragStart = (e: DragEvent) => {
+      if (interact.current) return;
       const el = (e.target as Element).closest?.(
         '[data-uai-kind="block"], [data-uai-kind="section"]',
       ) as HTMLElement | null;
@@ -487,6 +493,7 @@ function Stage() {
     };
 
     const onDblClick = (e: MouseEvent) => {
+      if (interact.current) return;
       const el = (e.target as Element).closest?.(
         '[data-uai-kind="block"]',
       ) as HTMLElement | null;
@@ -560,6 +567,7 @@ function Stage() {
     const selector = () =>
       stageRef.current?.mode === "page" ? "[data-uai-block]" : "[data-uai]";
     const over = (e: Event) => {
+      if (interact.current) return;
       const el = (e.target as Element).closest?.(selector());
       document
         .querySelectorAll(".uai-hover")
@@ -567,6 +575,7 @@ function Stage() {
       if (el) el.classList.add("uai-hover");
     };
     const click = (e: MouseEvent) => {
+      if (interact.current) return;
       if ((e.target as Element).closest?.(".uai-editing")) return;
       const el = (e.target as Element).closest?.(selector());
       if (!el) return;
