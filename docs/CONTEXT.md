@@ -94,11 +94,56 @@ Canonical AA docs (in the adventure-alerts repo): `README.md`, `CLAUDE.md`
 `.../ux-designs/ux-adventure-alerts-2026-06-22/DESIGN.md`,
 `.../seven-seas-token-migration.md`.
 
+## Capability map — everything AA's frontend has, and how u-and-i builds it
+
+This is the tool's requirements document. The editor shell must anticipate ALL
+of it — panels designed only for today's features will be obsolete in weeks.
+
+| AA has | u-and-i answer | Status |
+|---|---|---|
+| Shell chrome (sticky header, 158px collapsible rail, content offset, footer) | Page composition + a **generic style map** on every section/column/block (`position: sticky`, `calc()` heights, z-index, px widths, colors, typography) | Next build |
+| ~43 design-system components | Code-is-truth workbench + drag-from-toolbox | ✅ Built (31 imported) |
+| Layouts & route groups (`(main)`, `(auth)` chrome) | **Layout documents** — shared shell with a content slot; pages assign to a layout; codegen emits `layout.tsx` | Planned |
+| Navigation between pages, role-gated rail items | Link wiring between u-and-i pages; gating is a context (below) + dev note | Planned |
+| Data-driven lists (alerts list, search results, client kanban) | **Repeater block** bound to a *sample-data collection* — design the item once, see N rendered; real data source = dev note at the binding | Planned |
+| Forms (signin, alert setup, client create) | Form components exist; submit/validation logic = dev note | Mostly covered |
+| Loading / empty / error / role / tier variants; focus mode | **Context picker** — render the canvas under a chosen context (role=advisor, state=loading, alert-close). Every state designable; the logic that selects it = dev note | Planned (key concept) |
+| Light/dark (abyss) themes, reduced effects | Token editor ✅ + **canvas theme toggle** | Toggle pending |
+| Live elements (clocks, countdowns, streaming badges, beacon slam) | Real components run live on the canvas | ✅ Inherent |
+| Modals, dropdowns, tooltips (open states) | Context picker ("render with this open") | Same as variants |
+| Motion (GSAP, press states) | Press/hover live in tokens/CSS ✅; scripted motion = dev note | Acceptable |
+| Assets (logos, fonts, images) | **Asset drawer** — drop files in, correct paths in codegen | Planned, small |
+| Dynamic routes (`/product/[slug]`) | Page templates with sample params; data = dev note | Follows repeater |
+| The actual app tree | **Real-repo targeting** — generate into AA's `app/` structure, edit AA's own components in place | The graduation step |
+
+**Dev notes** thread through everything: an annotation attached to any
+element/page marking where real coded behavior begins ("posts to
+/api/waitlist", "fed by Meilisearch"). They render as badges on canvas, emit
+`@dev-note` comments in generated code, and aggregate into a project-wide
+Notes panel — the integration worklist handed to a developer or AI.
+
+Build order: style map → dev notes → context picker → repeater/sample data →
+layouts/nav → real-repo targeting; theme toggle + asset drawer as small wins.
+
 ## Note for editor-UI design specifically
 
 The u-and-i editor's own chrome is a **tool**, not an AA surface — it should
-look like a professional editor (think Figma/Blender panel discipline), stay
-out of the canvas's way, and support: Pages/Components lists, Layers tree,
-insert/toolbox (drag onto canvas), style inspector (layout, box-model margins,
-classes, text), props, design tokens, and (planned) Dev notes and a material
-studio for sculpting the neumorphic token system. Dark, quiet, dense.
+look like a professional editor (Figma/Blender panel discipline), dark, quiet,
+dense, out of the canvas's way. Design the shell to accommodate the FULL
+capability map above, not just what exists today. Concretely that means homes
+(panels, tabs, drawers, or modes) for:
+
+- Pages list · Layouts list · Components list · Layers tree
+- Insert/toolbox (drag onto canvas) — blocks, structure, components
+- Inspector: generic style editing (layout, box-model, typography, arbitrary
+  properties), classes, text, props
+- **Dev notes**: per-element note editor + a project-wide notes/worklist panel
+- **Context picker**: a canvas-level control choosing role/state/theme/breakpoint
+  the page renders under (think: a bar above the canvas, not buried)
+- **Sample data**: manage named collections; bind repeaters to them
+- Design tokens browser + the future **material studio** (sculpting neumorphic
+  surface recipes — gradients, shadow stacks, depth tiers — with live preview)
+- Asset drawer
+- Canvas chrome: zoom/width presets, theme toggle, current layout indicator
+- Kernel rule for implementers: every panel talks to the daemon API /
+  postMessage protocol only — no editor logic inside panel components.
