@@ -6,6 +6,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { uaiApi, uaiTagger } from "./server/api.ts";
 import { uaiResolver } from "./server/aa-resolve.ts";
+import { uaiLiveProxy } from "./server/live-proxy.ts";
 import { targetRootPath } from "./server/projects.ts";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     uaiApi(repoRoot),
+    uaiLiveProxy(repoRoot),
   ],
   resolve: {
     // Two React copies (ours + the target's) would break hooks.

@@ -928,8 +928,15 @@ export function App() {
         </div>
         <button
           className="hv-primary"
-          style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 10px", ...primaryBtn, opacity: fileState?.renderable ? 1 : 0.5 }}
-          title="Open this component in a new window — real size, fully interactive"
+          style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 10px", ...primaryBtn, opacity: fileState?.renderable ? 1 : 0.5, cursor: fileState?.renderable ? "pointer" : "not-allowed" }}
+          disabled={!fileState?.renderable}
+          title={
+            !fileState
+              ? "Nothing open — open a component (or a page's view) first"
+              : fileState.renderable
+                ? "Open this component in a new window — real size, fully interactive"
+                : `${fileState.file.split("/").pop()} is a server component — it can't render on the canvas`
+          }
           onClick={() => fileState?.renderable && window.open(`/harness.html?file=${encodeURIComponent(fileState.canvasKey)}`, "_blank")}
         >
           <Sym name="open_in_new" size={13} />

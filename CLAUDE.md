@@ -45,7 +45,8 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   F2 / Alt+dbl-click = in-place text editing (contentEditable) for elements
   whose whole content is one text child; the editor vets the request against
   the model, the canvas posts `set-text` back on Enter/blur.
-  Async server components aren't rendered (assisted mode: outliner-only).
+  Async server components aren't rendered yet (outliner-only) — a gap being
+  closed by "Render the real app" in `ROADMAP.md`, not a design rule.
 - `electron/main.mjs` — shell; vite runs as an `ELECTRON_RUN_AS_NODE`
   child (`server.mjs`) — moving it into the GUI process makes Windows play
   an error sound on failed DLL probes.

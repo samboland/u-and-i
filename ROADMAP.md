@@ -14,6 +14,11 @@ in-place text editing on the canvas, byte-perfect undo, per-project session
 
 ## Next (near-term, high value)
 
+- **Render the real app** — the headline gap. Pages that load data (e.g.
+  `/account`) show nothing today. Target: the canvas shows the target's
+  own running `next dev`, with real data and the real layout chrome, and
+  every element still maps back to source. Supersedes both "compose views
+  in their shells" and the assisted-mode compromise.
 - **Editing dynamic regions** — the biggest editability gap. Map callbacks,
   ternary branches, expression props, dynamic `style`/`className` are
   read-only pseudo-content today. Start with the safest slices: editing
@@ -55,5 +60,10 @@ in-place text editing on the canvas, byte-perfect undo, per-project session
 ## Standing constraints
 
 No save format ever; no git operations in the target; fidelity guard stays
-mandatory for every new edit op; async server components don't render
-(assisted mode) — no await-stripping magic.
+mandatory for every new edit op.
+
+Not a constraint — a gap: today's canvas can't show pages that load real
+data, because the harness aliases `@/db`, `@/auth` and `next/headers` to
+stubs that raise an error on any access. `npm run dev` eats real data, so
+this should too. See "Render the real app" above; the old "assisted mode"
+wording made a workaround sound permanent.
