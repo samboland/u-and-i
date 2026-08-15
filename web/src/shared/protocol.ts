@@ -43,5 +43,8 @@ export type HarnessToEditor =
   | { type: "insert-section"; index: number }
   | { type: "insert-column"; sectionId: string; index: number }
   | { type: "edit-text"; blockId: string; text: string }
+  | { type: "context-menu"; id: string | null; x: number; y: number }
+  | { type: "toggle-interact" }
+  | { type: "escape" }
   | { type: "zoom-wheel"; dir: 1 | -1 }
   | { type: "render-error"; message: string };

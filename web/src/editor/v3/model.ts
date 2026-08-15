@@ -53,6 +53,19 @@ export interface Sel {
 
 export const uid = () => Math.random().toString(36).slice(2, 9);
 
+/** Deep-copy a section/column/block with fresh ids throughout — for paste
+ * and duplicate, where reusing ids would break selection and codegen. */
+export function reId<T extends Section | Column | Block>(node: T): T {
+  const copy = structuredClone(node);
+  const walk = (n: { id: string; columns?: Column[]; blocks?: Block[] }) => {
+    n.id = uid();
+    n.columns?.forEach(walk);
+    n.blocks?.forEach(walk);
+  };
+  walk(copy);
+  return copy;
+}
+
 export const KIND_LABEL: Record<Block["type"], string> = {
   heading: "Heading",
   text: "Paragraph",

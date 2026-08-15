@@ -520,11 +520,36 @@ function Stage() {
         post({ type: "selected", id });
       }
     };
+    const ctx = (e: MouseEvent) => {
+      if (interact.current) return;
+      if (stageRef.current?.mode !== "page") return;
+      if ((e.target as Element).closest?.(".uai-editing")) return;
+      e.preventDefault();
+      const el = (e.target as Element).closest?.("[data-uai-block]");
+      const id = el?.getAttribute("data-uai-block") ?? null;
+      post({ type: "context-menu", id, x: e.clientX, y: e.clientY });
+    };
+    // Tab flips the editor's Edit/View mode even while the page has focus.
+    const key = (e: KeyboardEvent) => {
+      if (stageRef.current?.mode !== "page") return;
+      const t = e.target as HTMLElement;
+      if (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+      if (e.key === "Tab") {
+        e.preventDefault();
+        post({ type: "toggle-interact" });
+      } else if (e.key === "Escape") {
+        post({ type: "escape" });
+      }
+    };
     document.addEventListener("mouseover", over);
     document.addEventListener("click", click, true);
+    document.addEventListener("contextmenu", ctx);
+    document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("mouseover", over);
       document.removeEventListener("click", click, true);
+      document.removeEventListener("contextmenu", ctx);
+      document.removeEventListener("keydown", key);
     };
   }, []);
 

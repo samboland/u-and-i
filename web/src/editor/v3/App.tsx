@@ -63,11 +63,14 @@ import {
   makeBlock,
   noteEntries,
   parseBox,
+  reId,
   setBlockTextValue,
   uid,
   type Block,
+  type Column,
   type NewSpec,
   type PageDoc,
+  type Section,
   type Sel,
   type SelKind,
 } from "./model";
@@ -258,6 +261,8 @@ export function App() {
   const [styleEdits, setStyleEdits] = useState(0);
   const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
   const [appZoom, setAppZoom] = useState(1);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const clipboard = useRef<{ kind: SelKind; node: Section | Column | Block } | null>(null);
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -442,6 +447,7 @@ export function App() {
           send({ type: "set-zoom", zoom });
         }
       } else if (msg.type === "selected-block") {
+        setCtxMenu(null);
         if (!d) return;
         if (locate(d, msg.id)) select("block", msg.id);
         else if (findColumn(d, msg.id)) select("column", msg.id);
@@ -508,11 +514,27 @@ export function App() {
         });
       } else if (msg.type === "zoom-wheel") {
         zoomBy(msg.dir);
+      } else if (msg.type === "context-menu") {
+        if (d && msg.id) {
+          if (locate(d, msg.id)) select("block", msg.id);
+          else if (findColumn(d, msg.id)) select("column", msg.id);
+          else if (findSection(d, msg.id)) select("section", msg.id);
+        } else {
+          select(null, null);
+        }
+        // Iframe coords → chrome coords. The rect is in visual (app-zoomed)
+        // pixels; the fixed-position menu lives in the zoomed coordinate space.
+        const r = iframeRef.current?.getBoundingClientRect();
+        if (r) setCtxMenu({ x: r.left / appZoom + msg.x, y: r.top / appZoom + msg.y });
+      } else if (msg.type === "toggle-interact") {
+        setInteract((v) => !v);
+      } else if (msg.type === "escape") {
+        setCtxMenu(null);
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [edit, select, send, device, zoom]);
+  }, [edit, select, send, device, zoom, appZoom]);
 
   // ------------------------------------------------------------------ operations
 
@@ -599,14 +621,88 @@ export function App() {
 
   const duplicateAction = useCallback(() => {
     const s = selRef.current;
-    if (s.kind !== "block" || !s.id) return;
+    if (!s.kind || !s.id) return;
     edit((p) => {
-      const h = locate(p, s.id);
-      if (!h) return;
-      const copy = structuredClone(h.block);
-      copy.id = uid();
-      h.col.blocks.splice(h.idx + 1, 0, copy);
-      return { kind: "block", id: copy.id };
+      if (s.kind === "block") {
+        const h = locate(p, s.id);
+        if (!h) return;
+        const copy = reId(h.block);
+        h.col.blocks.splice(h.idx + 1, 0, copy);
+        return { kind: "block", id: copy.id };
+      }
+      if (s.kind === "column") {
+        const f = findColumn(p, s.id);
+        if (!f) return;
+        const copy = reId(f.col);
+        f.sec.columns.splice(f.ci + 1, 0, copy);
+        return { kind: "column", id: copy.id };
+      }
+      const f = findSection(p, s.id);
+      if (!f) return;
+      const copy = reId(f.sec);
+      p.sections.splice(f.si + 1, 0, copy);
+      return { kind: "section", id: copy.id };
+    });
+  }, [edit]);
+
+  const copyAction = useCallback(() => {
+    const s = selRef.current;
+    const d = docRef.current;
+    if (!d || !s.kind || !s.id) return;
+    const node =
+      s.kind === "block"
+        ? locate(d, s.id)?.block
+        : s.kind === "column"
+          ? findColumn(d, s.id)?.col
+          : findSection(d, s.id)?.sec;
+    if (node) clipboard.current = { kind: s.kind, node: structuredClone(node) };
+  }, []);
+
+  const cutAction = useCallback(() => {
+    copyAction();
+    deleteSel();
+  }, [copyAction, deleteSel]);
+
+  const pasteAction = useCallback(() => {
+    const clip = clipboard.current;
+    if (!clip) return;
+    edit((p) => {
+      const s = selRef.current;
+      if (clip.kind === "section") {
+        const sec = reId(clip.node as Section);
+        const anchor =
+          (s.kind === "block" ? locate(p, s.id)?.sec : null) ??
+          (s.kind === "column" ? findColumn(p, s.id)?.sec : null) ??
+          (s.kind === "section" ? findSection(p, s.id)?.sec : null);
+        const i = anchor ? p.sections.indexOf(anchor) + 1 : p.sections.length;
+        p.sections.splice(i, 0, sec);
+        return { kind: "section", id: sec.id };
+      }
+      if (clip.kind === "column") {
+        const col = reId(clip.node as Column);
+        const target =
+          (s.kind === "block" ? locate(p, s.id)?.sec : null) ??
+          (s.kind === "column" ? findColumn(p, s.id)?.sec : null) ??
+          (s.kind === "section" ? findSection(p, s.id)?.sec : null) ??
+          p.sections[p.sections.length - 1];
+        if (!target) return;
+        const after = s.kind === "column" ? findColumn(p, s.id)?.ci : undefined;
+        target.columns.splice(after !== undefined ? after + 1 : target.columns.length, 0, col);
+        return { kind: "column", id: col.id };
+      }
+      const b = reId(clip.node as Block);
+      const h = s.kind === "block" ? locate(p, s.id) : null;
+      if (h) {
+        h.col.blocks.splice(h.idx + 1, 0, b);
+        return { kind: "block", id: b.id };
+      }
+      const col =
+        (s.kind === "column" ? findColumn(p, s.id)?.col : null) ??
+        (s.kind === "section" ? findSection(p, s.id)?.sec.columns[0] : null) ??
+        p.sections[p.sections.length - 1]?.columns[0];
+      if (!col) return;
+      col.blocks.push(b);
+      return { kind: "block", id: b.id };
     });
   }, [edit]);
 
@@ -673,6 +769,11 @@ export function App() {
       if (mod && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); undoAction(); }
       else if (mod && e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); redoAction(); }
       else if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateAction(); }
+      else if (mod && e.key.toLowerCase() === "c" && !window.getSelection()?.toString()) copyAction();
+      else if (mod && e.key.toLowerCase() === "x") { e.preventDefault(); cutAction(); }
+      else if (mod && e.key.toLowerCase() === "v") { e.preventDefault(); pasteAction(); }
+      else if (e.key === "Tab" && workspace === "Layout") { e.preventDefault(); setInteract((v) => !v); }
+      else if (e.key === "Escape") setCtxMenu(null);
       else if (e.key === "Delete") deleteSel();
       else if (e.altKey && e.key === "ArrowUp") { e.preventDefault(); moveBy(-1); }
       else if (e.altKey && e.key === "ArrowDown") { e.preventDefault(); moveBy(1); }
@@ -699,7 +800,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undoAction, redoAction, duplicateAction, deleteSel, moveBy, zoomBy, device, send]);
+  }, [undoAction, redoAction, duplicateAction, copyAction, cutAction, pasteAction, deleteSel, moveBy, zoomBy, device, send, workspace]);
 
   // Ctrl+scroll over the chrome's canvas region (rulers, void margins) zooms
   // the page; scrolls over the iframe itself arrive via the zoom-wheel message.
@@ -719,13 +820,6 @@ export function App() {
 
   const canUp = !!sel.id;
   const canDown = !!sel.id;
-  const hintLine = block
-    ? "double-click to edit text · drag to move"
-    : colHit
-      ? "drag blocks into this column"
-      : secHit
-        ? `sections are flex rows in ${doc?.name ?? "page"}.json`
-        : "click an element, column, or section";
   const deleteLabel =
     sel.kind === "column" ? "Delete column" : sel.kind === "section" ? "Delete section" : "Delete";
   const crumb = (() => {
@@ -773,7 +867,11 @@ export function App() {
         { label: "Undo", accel: "Ctrl+Z", disabled: !history.length, action: undoAction },
         { label: "Redo", accel: "Ctrl+Shift+Z", disabled: !future.length, action: redoAction },
         { sep: true },
-        { label: "Duplicate", accel: "Ctrl+D", disabled: !block, action: duplicateAction },
+        { label: "Cut", accel: "Ctrl+X", disabled: !sel.id, action: cutAction },
+        { label: "Copy", accel: "Ctrl+C", disabled: !sel.id, action: copyAction },
+        { label: "Paste", accel: "Ctrl+V", disabled: !clipboard.current, action: pasteAction },
+        { sep: true },
+        { label: "Duplicate", accel: "Ctrl+D", disabled: !sel.id, action: duplicateAction },
         { label: "Delete", accel: "Del", disabled: !sel.id, action: deleteSel },
         { sep: true },
         { label: "Move up", accel: "Alt+Up", disabled: !canUp, action: () => moveBy(-1) },
@@ -908,7 +1006,7 @@ export function App() {
   return (
     <div
       style={{ display: "flex", flexDirection: "column", height: `${100 / appZoom}vh`, zoom: appZoom, background: C.win, color: C.body, fontFamily: "system-ui, sans-serif", fontSize: 12, overflow: "hidden" }}
-      onClick={() => { if (openMenu) setOpenMenu(null); if (previewOpen) setPreviewOpen(false); }}
+      onClick={() => { if (openMenu) setOpenMenu(null); if (previewOpen) setPreviewOpen(false); if (ctxMenu) setCtxMenu(null); }}
     >
       {/* ---------------------------------------------------------- TopBar */}
       <div style={{ flex: "0 0 auto", minHeight: 32, display: "flex", flexWrap: "wrap", alignItems: "stretch", background: C.sunken, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", position: "relative", zIndex: 20 }}>
@@ -991,69 +1089,7 @@ export function App() {
         <button className="hv-primary" style={{ flex: "0 0 auto", height: 24, padding: "0 10px", ...primaryBtn }} title="Not built yet" >Preview</button>
       </div>
 
-      {/* ---------------------------------------------------------- Workspace toolbar */}
-      {workspace === "Layout" && (
-        <div style={{ flex: "0 0 auto", minHeight: 34, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", background: C.panel, borderBottom: `1px solid ${C.border}`, minWidth: 0 }}>
-          <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
-            <span style={{ width: 7, height: 7, background: selAccent, borderRadius: 2 }} />
-            {selKindLabel}
-          </span>
-          <div style={vdiv} />
-          {block?.type === "heading" && (
-            <Seg items={[1, 2, 3].map((l) => ({ label: `H${l}`, active: block.level === l, onClick: () => patchBlock((b) => { if (b.type === "heading") b.level = l as 1 | 2 | 3; }) }))} />
-          )}
-          {(block?.type === "heading" || block?.type === "text") && (
-            <Seg items={(["left", "center", "right"] as const).map((a) => ({
-              label: a[0].toUpperCase() + a.slice(1),
-              active: (block.textAlign ?? "left") === a,
-              onClick: () => patchBlock((b) => { if (b.type === "heading" || b.type === "text") b.textAlign = a === "left" ? undefined : a; }),
-            }))} />
-          )}
-          {block && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
-              <span style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Space</span>
-              <Seg items={["None", "1rem", "2rem"].map((sp) => {
-                const [t, r, b0, l] = parseBox(block.margin);
-                const cur = t === "0" ? "None" : t;
-                return {
-                  label: sp,
-                  active: cur === sp,
-                  onClick: () => patchBlock((b) => { const [, rr, bb, ll] = parseBox(b.margin); b.margin = joinBox(sp === "None" ? "0" : sp, rr ?? r, bb ?? b0, ll ?? l); }),
-                };
-              })} />
-            </div>
-          )}
-          {colHit && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
-              <span style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Width</span>
-              <Seg items={["1", "2", "3", "4", "5"].map((w) => ({ label: w, active: colHit.col.flex === w, onClick: () => edit((p) => { const f = findColumn(p, colHit.col.id); if (f) f.col.flex = w; }) }))} />
-              <button className="hv-ctl" style={ctlBtn} onClick={addColumn}>Add column</button>
-            </div>
-          )}
-          {secHit && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
-              <span style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Surface</span>
-              <Seg items={[{ l: "Card", v: "card" }, { l: "Plain", v: "none" }].map((m) => ({
-                label: m.l,
-                active: secHit.sec.background === m.v || (m.v === "card" && secHit.sec.background === "well"),
-                onClick: () => edit((p) => { const f = findSection(p, secHit.sec.id); if (f) f.sec.background = m.v as "card" | "none"; }),
-              }))} />
-              <button className="hv-ctl" style={ctlBtn} onClick={addColumn}>Add column</button>
-            </div>
-          )}
-          <div style={vdiv} />
-          {block && (
-            <button className="hv-amber" style={amberBtn} onClick={toggleNote}>
-              {block.note ? "Remove note" : "Add dev note"}
-            </button>
-          )}
-          {sel.id && (
-            <button className="hv-danger" style={ctlBtn} onClick={deleteSel}>{deleteLabel}</button>
-          )}
-          <div style={{ flex: "1 1 0", minWidth: 8 }} />
-          <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>{hintLine}</span>
-        </div>
-      )}
+      {/* ------------------------------------------------ Workspace toolbar */}
       {workspace === "Style" && (
         <div style={{ flex: "0 0 auto", minHeight: 34, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", background: C.panel, borderBottom: `1px solid ${C.border}`, minWidth: 0 }}>
           <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
@@ -1212,10 +1248,13 @@ export function App() {
                   )}
                 </div>
                 <div style={{ flex: "1 1 0", minWidth: 8 }} />
-                <button style={{ ...ctlBtn, height: 20, color: interact ? "#fff" : C.muted, borderColor: interact ? C.blue : C.border }} onClick={() => setInteract((v) => !v)} title="Clicks go to the page instead of selecting">
-                  {interact ? "interacting" : "select"}
-                </button>
-                <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>layout none</span>
+                <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Mode</span>
+                <div title="Tab toggles between editing and using the page">
+                  <Seg items={[
+                    { label: "Edit", active: !interact, onClick: () => setInteract(false) },
+                    { label: "View", active: interact, onClick: () => setInteract(true) },
+                  ]} />
+                </div>
               </div>
 
               {rulersOn && (
@@ -1253,17 +1292,20 @@ export function App() {
                   <OutlinerRow pad={10} glyph="▤" glyphColor={C.blueLight} label={s.label ?? `section ${si + 1}`} selected={sel.id === s.id} mark={SEL_COLOR.section}
                     caret={collapsed[s.id] ? "▸" : "▾"}
                     onToggle={() => setCollapsed((c) => ({ ...c, [s.id]: !c[s.id] }))}
-                    onClick={() => select("section", s.id)} />
+                    onClick={() => select("section", s.id)}
+                    onCtx={(e) => { e.preventDefault(); select("section", s.id); setCtxMenu({ x: e.clientX / appZoom, y: e.clientY / appZoom }); }} />
                   {!collapsed[s.id] && s.columns.map((c, ci) => (
                     <div key={c.id}>
                       <OutlinerRow pad={23} glyph="▯" glyphColor={C.green} label={c.blocks.length ? `column ${ci + 1}` : `column ${ci + 1} · empty`} selected={sel.id === c.id} mark={SEL_COLOR.column}
                         caret={collapsed[c.id] ? "▸" : "▾"}
                         onToggle={() => setCollapsed((x) => ({ ...x, [c.id]: !x[c.id] }))}
-                        onClick={() => select("column", c.id)} />
+                        onClick={() => select("column", c.id)}
+                        onCtx={(e) => { e.preventDefault(); select("column", c.id); setCtxMenu({ x: e.clientX / appZoom, y: e.clientY / appZoom }); }} />
                       {!collapsed[c.id] && c.blocks.map((b) => (
                         <OutlinerRow key={b.id} pad={36} glyph={GLYPH_OF[b.type]} glyphColor={C.muted} label={blockTitle(b)} selected={sel.id === b.id} mark={SEL_COLOR.block}
                           note={!!b.note} data={!!b.needsData}
-                          onClick={() => select("block", b.id)} />
+                          onClick={() => select("block", b.id)}
+                          onCtx={(e) => { e.preventDefault(); select("block", b.id); setCtxMenu({ x: e.clientX / appZoom, y: e.clientY / appZoom }); }} />
                       ))}
                     </div>
                   ))}
@@ -1337,6 +1379,75 @@ export function App() {
         </div>
       </div>
 
+      {/* ---------------------------------------------------------- Context menu */}
+      {ctxMenu && (() => {
+        const items: MenuItem[] = [];
+        if (block && blockText(block) != null)
+          items.push(
+            { label: "Edit text in place", accel: "F2", action: () => sel.id && send({ type: "begin-edit", id: sel.id }) },
+            { sep: true },
+          );
+        if (sel.kind)
+          items.push(
+            { label: "Cut", accel: "Ctrl+X", action: cutAction },
+            { label: "Copy", accel: "Ctrl+C", action: copyAction },
+          );
+        items.push({
+          label: clipboard.current ? `Paste ${clipboard.current.kind}` : "Paste",
+          accel: "Ctrl+V",
+          disabled: !clipboard.current,
+          action: pasteAction,
+        });
+        if (sel.kind)
+          items.push(
+            { label: "Duplicate", accel: "Ctrl+D", action: duplicateAction },
+            { label: deleteLabel, accel: "Del", action: deleteSel },
+            { sep: true },
+            { label: sel.kind === "column" ? "Move left" : "Move up", accel: "Alt+Up", action: () => moveBy(-1) },
+            { label: sel.kind === "column" ? "Move right" : "Move down", accel: "Alt+Down", action: () => moveBy(1) },
+          );
+        if (block)
+          items.push(
+            { sep: true },
+            { label: block.note ? "Remove dev note" : "Add dev note", action: toggleNote },
+            { label: "Needs data", check: tick(!!block.needsData), action: () => patchBlock((b) => { b.needsData = !b.needsData; }) },
+          );
+        if (secHit)
+          items.push(
+            { sep: true },
+            { label: "Card surface", check: tick(secHit.sec.background !== "none"), action: () => edit((p) => { const f = findSection(p, secHit.sec.id); if (f) f.sec.background = f.sec.background === "none" ? "card" : "none"; }) },
+            { label: "Add column", action: addColumn },
+          );
+        if (colHit) items.push({ sep: true }, { label: "Add column", action: addColumn });
+        if (!sel.kind) items.push({ sep: true }, { label: "Add section", action: addSection });
+        const left = Math.max(4, Math.min(ctxMenu.x, window.innerWidth / appZoom - 232));
+        const top = Math.max(4, Math.min(ctxMenu.y, window.innerHeight / appZoom - items.length * 22 - 20));
+        return (
+          <div
+            style={{ position: "fixed", left, top, minWidth: 218, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 60 }}
+            onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            {items.map((it, i) =>
+              it.sep ? (
+                <div key={i} style={{ height: 1, background: C.border, margin: "4px 0" }} />
+              ) : (
+                <button
+                  key={i}
+                  className={it.disabled ? undefined : "hv-menu"}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: it.disabled ? C.faint : C.body, cursor: it.disabled ? "default" : "pointer", textAlign: "left" }}
+                  onClick={() => { if (it.disabled) return; setCtxMenu(null); it.action?.(); }}
+                >
+                  <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.check ?? ""}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{it.label}</span>
+                  <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{it.accel ?? ""}</span>
+                </button>
+              ),
+            )}
+          </div>
+        );
+      })()}
+
       {/* ---------------------------------------------------------- StatusBar */}
       <div style={{ flex: "0 0 26px", display: "flex", alignItems: "center", gap: 10, padding: "0 10px", background: C.panel, borderTop: `1px solid ${C.border}`, fontSize: 11, minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
         <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, color: C.muted }}>{crumb}</span>
@@ -1346,8 +1457,6 @@ export function App() {
         <span style={{ flex: "0 0 auto", color: C.muted }}>
           {needsDataCount === 0 ? "all elements bound" : `${needsDataCount} element${needsDataCount === 1 ? "" : "s"} needs data`}
         </span>
-        <div style={{ ...vdiv, height: 14 }} />
-        <span style={{ flex: "0 0 auto", fontFamily: MONO, color: C.muted }}>layout none</span>
         <div style={{ ...vdiv, height: 14 }} />
         <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 4 }}>
           <button style={{ width: 19, height: 18, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 4, color: C.body, cursor: "pointer", lineHeight: 1 }} title="Zoom out" onClick={() => zoomBy(-1)}>−</button>
@@ -1376,6 +1485,7 @@ function OutlinerRow({
   right,
   onToggle,
   onClick,
+  onCtx,
 }: {
   pad: number;
   glyph: string;
@@ -1389,12 +1499,14 @@ function OutlinerRow({
   right?: string;
   onToggle?: () => void;
   onClick: () => void;
+  onCtx?: (e: { preventDefault(): void; clientX: number; clientY: number }) => void;
 }) {
   return (
     <div
       className="hv-row"
       style={{ display: "flex", alignItems: "center", gap: 5, height: 20, paddingRight: 8, paddingLeft: pad, background: selected ? C.ctlHover : "transparent", borderLeft: `2px solid ${selected && mark ? mark : "transparent"}`, cursor: "pointer" }}
       onClick={onClick}
+      onContextMenu={onCtx}
     >
       <button
         style={{ flex: "0 0 11px", width: 11, background: "none", border: "none", padding: 0, color: C.faint, fontSize: 9, cursor: "pointer", lineHeight: 1 }}
