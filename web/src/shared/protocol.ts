@@ -9,7 +9,9 @@ export type EditorToHarness =
   | { type: "set-theme"; dark: boolean }
   | { type: "set-session"; session: unknown }
   | { type: "token-preview"; name: string; value: string }
-  | { type: "token-clear" };
+  | { type: "token-clear" }
+  /** Start in-place text editing on the canvas element with this id. */
+  | { type: "edit-text"; id: string };
 
 export type HarnessToEditor =
   | { type: "ready" }
@@ -30,5 +32,10 @@ export type HarnessToEditor =
   | { type: "toggle-interact" }
   | { type: "escape" }
   | { type: "key"; key: string; ctrl: boolean; shift: boolean; alt: boolean }
+  /** Canvas asks to start in-place editing (Alt+dblclick on a text element);
+   * the editor validates against the model and answers with `edit-text`. */
+  | { type: "request-text-edit"; id: string }
+  /** In-place edit committed — the editor maps the id to its text slot. */
+  | { type: "set-text"; id: string; value: string }
   | { type: "stage-metrics"; x: number; y: number }
   | { type: "render-error"; message: string };

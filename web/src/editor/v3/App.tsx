@@ -105,6 +105,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** The one text slot an element can be edited in place through, or null when
+ * its content is richer than a single JSXText child. */
+function inlineTextSlot(node: JsxNodeModel | null): number | null {
+  if (!node || node.textChildren.length !== 1 || node.children.length > 0) return null;
+  return node.textChildren[0].slot;
+}
+
 function parentIndexOf(node: JsxNodeModel): number {
   const m = node.parentId?.match(/::(\d+)$/);
   return m ? Number(m[1]) : node.index;
@@ -393,6 +400,22 @@ export function App() {
     [],
   );
 
+  /** Elements whose entire content is a single text child can be edited in
+   * place on the canvas — anything richer (siblings, expressions, nested
+   * elements) keeps to the Properties card, where slots are explicit. */
+  const beginTextEdit = useCallback(
+    (id?: string | null) => {
+      const fs = fileStateRef.current;
+      const target = id ?? fileFocusRef.current;
+      if (!fs || !target || !target.startsWith(`${fs.canvasKey}::`)) return;
+      if (inlineTextSlot(findModelNode(fs.model, target)) == null) return;
+      setFileFocusId(target);
+      send({ type: "select", id: target });
+      send({ type: "edit-text", id: target });
+    },
+    [send],
+  );
+
   /** Undo a file edit: write the exact prior bytes back, then re-sync. */
   const restoreFile = useCallback(
     async (entry: HistoryEntry, direction: "undo" | "redo") => {
@@ -534,6 +557,18 @@ export function App() {
             parentTag,
           );
         }
+      } else if (msg.type === "request-text-edit") {
+        beginTextEdit(msg.id);
+      } else if (msg.type === "set-text") {
+        const fsNow = fileStateRef.current;
+        const node = fsNow ? findModelNode(fsNow.model, msg.id) : null;
+        const slot = inlineTextSlot(node);
+        if (node && slot != null) {
+          void editFileRef.current(
+            { op: "set-text", index: node.index, slot, value: msg.value },
+            node.tag,
+          );
+        }
       } else if (msg.type === "zoom-wheel") {
         zoomBy(msg.dir);
       } else if (msg.type === "toggle-interact") {
@@ -549,7 +584,7 @@ export function App() {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [send, device, zoom, appZoom, zoomBy]);
+  }, [send, device, zoom, appZoom, zoomBy, beginTextEdit]);
 
   // ------------------------------------------------------------------ keyboard
 
@@ -561,6 +596,10 @@ export function App() {
         fsNow && fileFocusRef.current ? findModelNode(fsNow.model, fileFocusRef.current) : null;
       if (fileNode) {
         const parentIdx = parentIndexOf(fileNode);
+        if (c.key === "F2" && inlineTextSlot(fileNode) != null) {
+          beginTextEdit(fileNode.id);
+          return true;
+        }
         if (c.key === "Delete" && fileNode.can.structural) {
           void editFile({ op: "delete-element", index: fileNode.index }, fileNode.tag);
           return true;
@@ -601,7 +640,7 @@ export function App() {
       else return false;
       return true;
     },
-    [undoAction, redoAction, zoomBy, device, workspace, editFile],
+    [undoAction, redoAction, zoomBy, device, workspace, editFile, beginTextEdit],
   );
   handleChordRef.current = handleChord;
 
@@ -740,6 +779,8 @@ export function App() {
         { sep: true },
         { label: "Undo", accel: "Ctrl+Z", disabled: !history.length, action: undoAction },
         { label: "Redo", accel: "Ctrl+Shift+Z", disabled: !future.length, action: redoAction },
+        { sep: true },
+        { label: "Edit text", accel: "F2", disabled: inlineTextSlot(fileNode) == null, action: () => beginTextEdit(fileNode?.id) },
         { sep: true },
         { label: "Duplicate", accel: "Ctrl+D", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "duplicate-element", index: fileNode.index }, fileNode.tag) },
         { label: "Delete", accel: "Del", disabled: !fileNode?.can.structural, action: () => fileNode && void editFile({ op: "delete-element", index: fileNode.index }, fileNode.tag) },
@@ -1266,6 +1307,9 @@ export function App() {
         if (fileNode) {
           if (fileNode.componentSource) {
             items.push({ label: `Open ${fileNode.tag} source`, action: () => void openFile(fileNode.componentSource!) });
+          }
+          if (inlineTextSlot(fileNode) != null) {
+            items.push({ label: "Edit text", accel: "F2", action: () => beginTextEdit(fileNode.id) });
           }
           if (fileNode.can.structural) {
             items.push(

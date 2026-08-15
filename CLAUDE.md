@@ -42,6 +42,9 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   `/@fs/` imports (no compile-time globs). Clicks post `selected` with the
   **ancestor id chain** (nested components carry their own file's ids);
   dbl-click = descend into source; drag/drop posts `file-drop` → AST edit.
+  F2 / Alt+dbl-click = in-place text editing (contentEditable) for elements
+  whose whole content is one text child; the editor vets the request against
+  the model, the canvas posts `set-text` back on Enter/blur.
   Async server components aren't rendered (assisted mode: outliner-only).
 - `electron/main.mjs` — shell; vite runs as an `ELECTRON_RUN_AS_NODE`
   child (`server.mjs`) — moving it into the GUI process makes Windows play
@@ -50,8 +53,12 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
 ## Gotchas (learned the hard way)
 
 - recast: pass `lineTerminator: "\n"` explicitly (defaults to os.EOL →
-  CRLF rewrite of whole files); quote style detected per file; JSXText
-  edits collapse adjacent whitespace.
+  CRLF rewrite of whole files); quote style detected per file. A reprinted
+  element is re-indented from scratch, so `set-text` splices the JSXText
+  span in the source string instead of printing the AST.
+- JSXText entities decode into `node.value` and recast prints `value`
+  verbatim — `print()` re-escapes `<>{}` so `&lt;` survives a reprint, and
+  `set-text` escapes what the user types (`&<>{}`) on the way in.
 - Rollup's `resolve` won't extension-infer absolute paths — do it manually.
 - Two React copies break hooks: `resolve.dedupe` react/react-dom;
   react-query aliases to the *target's* node_modules copy.

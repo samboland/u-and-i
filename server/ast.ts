@@ -28,11 +28,33 @@ export function parse(code: string) {
   return recast.parse(code, { parser: babelTs });
 }
 
+/** The parser decodes JSXText entities into `value`, and recast prints
+ * `value` verbatim for any text it reprints — so `&lt;` would come back as a
+ * bare `<` and no longer parse. Re-escape (only) the characters JSX reads as
+ * syntax; text without them is left untouched so recast keeps reusing the
+ * original source for it. */
+function reescapeJsxText(ast: unknown): void {
+  recast.types.visit(ast as recast.types.ASTNode, {
+    visitJSXText(path) {
+      const node = path.node as unknown as { value: string };
+      if (/[<>{}]/.test(node.value)) {
+        node.value = node.value
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\{/g, "&#123;")
+          .replace(/\}/g, "&#125;");
+      }
+      return false;
+    },
+  });
+}
+
 export function print(
   ast: unknown,
   lineTerminator = "\n",
   quote: "single" | "double" = "double",
 ): string {
+  reescapeJsxText(ast);
   // recast defaults lineTerminator to os.EOL, which silently rewrites every
   // line of an LF file as CRLF on Windows — always pass it explicitly.
   return recast.print(ast as recast.types.ASTNode, {
@@ -496,6 +518,18 @@ export interface EditResult {
   focusIndex: number | null;
 }
 
+/** JSXText is printed verbatim, so anything the user types that JSX reads as
+ * syntax has to go back as an entity — it renders identically and re-parses
+ * to the same characters, so the model round-trips. */
+function escapeJsxText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\{/g, "&#123;")
+    .replace(/\}/g, "&#125;");
+}
+
 function cssValueToNode(value: string) {
   if (/^-?\d+(\.\d+)?$/.test(value)) return b.numericLiteral(Number(value));
   return b.stringLiteral(value);
@@ -598,6 +632,24 @@ function assertLocalChange(
   }
 }
 
+/** Character offsets of a parsed node in the original source, from its
+ * line/column loc (recast's locs point at the source it parsed). */
+function sourceSpan(code: string, node: unknown): { start: number; end: number } | null {
+  const l = (node as { loc?: { start: { line: number; column: number }; end: { line: number; column: number } } }).loc;
+  if (!l) return null;
+  const lineStart: number[] = [0];
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === "\n") lineStart.push(i + 1);
+  }
+  const at = (p: { line: number; column: number }) => {
+    const base = lineStart[p.line - 1];
+    return base == null ? null : base + p.column;
+  };
+  const start = at(l.start);
+  const end = at(l.end);
+  return start == null || end == null || end < start ? null : { start, end };
+}
+
 function loc(node: unknown): { start: number; end: number } | null {
   const l = (node as { loc?: { start: { line: number }; end: { line: number } } }).loc;
   return l ? { start: l.start.line, end: l.end.line } : null;
@@ -686,8 +738,22 @@ export function applyEdit(code: string, edit: Edit): EditResult {
     const children = (el.children ?? []) as unknown[];
     const child = children[edit.slot];
     if (!n.JSXText.check(child)) throw new Error(`child ${edit.slot} is not text`);
-    (child as { value: string }).value = edit.value;
-    return finish(el, loc(el), "text edit");
+    // Text is spliced into the source directly rather than reprinted: recast
+    // re-indents a reprinted element from scratch, which moves lines the user
+    // never touched. Splicing keeps the original padding (indentation, the
+    // space before a sibling) exactly as it was.
+    const span = sourceSpan(code, child);
+    if (!span) throw new Error("text child has no source location");
+    const [, lead, , trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(code.slice(span.start, span.end))!;
+    const next =
+      code.slice(0, span.start) +
+      lead +
+      escapeJsxText(edit.value.trim()) +
+      trail +
+      code.slice(span.end);
+    const range = loc(el);
+    if (range) assertLocalChange(code, next, Math.max(1, range.start - 1), range.end + 1, "text edit");
+    return { code: next, focusIndex: edit.index }; // no structural change → indices hold
   }
 
   if (edit.op === "set-prop") {

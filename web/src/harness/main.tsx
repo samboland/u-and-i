@@ -92,6 +92,13 @@ function Stage() {
   const zoomAnchor = useRef<{ x: number; y: number; zoom: number } | null>(null);
   const loadSeq = useRef(0);
   const interact = useRef(false);
+  /** In-place text edit in flight (contentEditable on a canvas element). */
+  const editing = useRef<{
+    el: HTMLElement;
+    id: string;
+    original: string;
+    detach: () => void;
+  } | null>(null);
 
   // Standalone preview: /harness.html?file=<app:key> renders the component
   // plainly and interactive — no editor protocol, no stage framing. Sample
@@ -136,6 +143,77 @@ function Stage() {
     }
   }
 
+  // ------------------------------------------------------------------ in-place text editing
+
+  /** Finish an in-place edit. Committing posts the trimmed text back to the
+   * editor, which owns the AST write; cancelling restores the original DOM
+   * text (the file was never touched). */
+  function endTextEdit(commit: boolean) {
+    const cur = editing.current;
+    if (!cur) return;
+    editing.current = null;
+    const { el, id, original, detach } = cur;
+    detach();
+    if (!el.isConnected) return; // re-rendered under us — nothing to restore
+    const value = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+    el.contentEditable = "false";
+    el.classList.remove("uai-editing");
+    el.blur();
+    if (!commit || value === original.trim() || !value) {
+      el.textContent = original;
+      return;
+    }
+    post({ type: "set-text", id, value });
+  }
+
+  /** Turn a canvas element into a caret. Only elements whose entire content
+   * is one text node qualify — anything else and the DOM text no longer maps
+   * to a single JSXText child. */
+  function startTextEdit(id: string) {
+    endTextEdit(true);
+    const el = document.querySelector<HTMLElement>(`[data-uai="${CSS.escape(id)}"]`);
+    if (!el) return;
+    const kids = Array.from(el.childNodes);
+    if (kids.length !== 1 || kids[0].nodeType !== Node.TEXT_NODE) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        endTextEdit(false);
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        endTextEdit(true);
+      }
+    };
+    const onBlur = () => endTextEdit(true);
+    el.addEventListener("keydown", onKey);
+    el.addEventListener("blur", onBlur);
+    editing.current = {
+      el,
+      id,
+      original: el.textContent ?? "",
+      detach: () => {
+        el.removeEventListener("keydown", onKey);
+        el.removeEventListener("blur", onBlur);
+      },
+    };
+    el.contentEditable = "true";
+    el.spellcheck = false;
+    el.draggable = false;
+    el.classList.add("uai-editing");
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+
+  /** True while the event is happening inside the element being edited. */
+  const inEditor = (target: EventTarget | null) =>
+    !!editing.current && target instanceof Node && editing.current.el.contains(target);
+
   // ------------------------------------------------------------------ messages
 
   useEffect(() => {
@@ -147,6 +225,8 @@ function Stage() {
         void load(msg.file, msg.props);
       } else if (msg.type === "select") {
         setSelectedId(msg.id);
+      } else if (msg.type === "edit-text") {
+        startTextEdit(msg.id);
       } else if (msg.type === "set-session") {
         void import("./next-shims/next-auth-react").then((m) =>
           m.setCanvasSession(msg.session as never),
@@ -310,7 +390,8 @@ function Stage() {
     if (file && !previewFile) {
       document.querySelectorAll<HTMLElement>("[data-uai]").forEach((el) => {
         const id = el.getAttribute("data-uai")!;
-        el.draggable = id.startsWith(`${file}::`) && !interact.current;
+        el.draggable =
+          id.startsWith(`${file}::`) && !interact.current && el !== editing.current?.el;
       });
     }
   });
@@ -319,7 +400,7 @@ function Stage() {
 
   useEffect(() => {
     const over = (e: Event) => {
-      if (interact.current) return;
+      if (interact.current || inEditor(e.target)) return;
       const el = (e.target as Element).closest?.("[data-uai]");
       document
         .querySelectorAll(".uai-hover")
@@ -338,6 +419,7 @@ function Stage() {
     };
     const click = (e: MouseEvent) => {
       if (interact.current) return;
+      if (inEditor(e.target)) return; // let the caret land where it was clicked
       const el = (e.target as Element).closest?.("[data-uai]");
       if (!el) return;
       e.preventDefault();
@@ -347,7 +429,7 @@ function Stage() {
       post({ type: "selected", id, chain: chainOf(el) });
     };
     const ctx = (e: MouseEvent) => {
-      if (interact.current) return;
+      if (interact.current || inEditor(e.target)) return;
       e.preventDefault();
       const el = (e.target as Element).closest?.("[data-uai]");
       post({ type: "context-menu", id: el?.getAttribute("data-uai") ?? null, x: e.clientX, y: e.clientY });
@@ -372,13 +454,16 @@ function Stage() {
       e.preventDefault();
       post({ type: "key", key: e.key, ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey });
     };
-    // Double-click descends into the element's source file.
+    // Double-click descends into the element's source file; Alt+double-click
+    // asks for in-place text editing instead (the editor vets the request
+    // against the model before answering with `edit-text`).
     const dbl = (e: MouseEvent) => {
-      if (interact.current) return;
+      if (interact.current || inEditor(e.target)) return;
       const el = (e.target as Element).closest?.("[data-uai]");
       if (!el) return;
       e.preventDefault();
-      post({ type: "open-component", id: el.getAttribute("data-uai")! });
+      const id = el.getAttribute("data-uai")!;
+      post(e.altKey ? { type: "request-text-edit", id } : { type: "open-component", id });
     };
     if (previewFile) return; // preview is plain interaction, no affordances
     document.addEventListener("mouseover", over);

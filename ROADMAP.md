@@ -9,14 +9,11 @@ Code-is-truth editor serving one real Next.js app (adventure-alerts).
 Working today: route interpretation + follow-the-shell, live rendering of
 client components with sample props, full structural AST editing (insert/
 delete/move/duplicate/drag-drop with import management + fidelity guard),
-byte-perfect undo, per-project session + preferences, Style/Workshop
-writing to the app's real globals.css.
+in-place text editing on the canvas, byte-perfect undo, per-project session
++ preferences, Style/Workshop writing to the app's real globals.css.
 
 ## Next (near-term, high value)
 
-- **Inline text editing on the canvas** — dblclick currently descends into
-  the component; text edits go through the Properties card. Bring back
-  in-place editing (F2 or a modifier-dblclick) emitting `set-text`.
 - **Editing dynamic regions** — the biggest editability gap. Map callbacks,
   ternary branches, expression props, dynamic `style`/`className` are
   read-only pseudo-content today. Start with the safest slices: editing

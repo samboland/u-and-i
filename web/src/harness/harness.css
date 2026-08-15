@@ -44,6 +44,12 @@ body.uai-preview {
 [data-uai].uai-selected {
   outline: 2px solid #ff6b00;
 }
+/* In-place text editing: a caret, not a selection. */
+[data-uai].uai-editing {
+  outline: 2px solid #2f9e6a;
+  cursor: text;
+  min-width: 1ch;
+}
 
 /* Drag & drop */
 .uai-drop-indicator {
