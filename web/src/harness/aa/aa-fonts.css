@@ -1,0 +1,32 @@
+/* Stand-in for adventure-alerts' next/font/local wiring (src/app/layout.tsx):
+   same --font-* variable names, our own @font-face over the same ttf files. */
+@font-face {
+  font-family: "AA Goudy Old Style";
+  src: url("../../../../../adventure-alerts/src/fonts/goudy-old-style.ttf") format("truetype");
+  font-display: swap;
+}
+@font-face {
+  font-family: "AA Cabin";
+  src: url("../../../../../adventure-alerts/src/fonts/cabin-variable.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "AA Cabin";
+  src: url("../../../../../adventure-alerts/src/fonts/cabin-italic-variable.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "AA Inconsolata";
+  src: url("../../../../../adventure-alerts/src/fonts/inconsolata-variable.ttf") format("truetype");
+  font-weight: 200 900;
+  font-display: swap;
+}
+:root {
+  --font-display: "AA Goudy Old Style", serif;
+  --font-body: "AA Cabin", sans-serif;
+  --font-mono: "AA Inconsolata", monospace;
+}

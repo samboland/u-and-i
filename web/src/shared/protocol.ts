@@ -25,7 +25,8 @@ export type EditorToHarness =
       needsData: string[];
     }
   | { type: "token-preview"; name: string; value: string }
-  | { type: "token-clear" };
+  | { type: "token-clear" }
+  | { type: "set-session"; session: unknown };
 
 export type HarnessToEditor =
   | { type: "ready" }

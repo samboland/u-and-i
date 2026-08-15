@@ -16,7 +16,24 @@ import {
 import { createRoot } from "react-dom/client";
 import "./harness.css";
 import { mocks } from "../../../fixtures/mocks";
+import { aaModules } from "./aa/modules";
 import type { CanvasState, EditorToHarness, HarnessToEditor } from "../shared/protocol";
+
+// Which design system this canvas document runs: the editor mounts one
+// iframe per target ("/harness.html" fixture, "?project=aa" adventure-
+// alerts) because the two define colliding .ui-* classes.
+const bootParams = new URLSearchParams(location.search);
+const CANVAS_PROJECT = bootParams.get("project") === "aa" ? "aa" : "demo";
+
+// Load exactly one design system, and the AA provider chrome only when
+// this canvas is the adventure-alerts one.
+const aaChrome =
+  CANVAS_PROJECT === "aa"
+    ? await (async () => {
+        await import("./aa-canvas.css");
+        return import("./aa/chrome");
+      })()
+    : (await import("./fixture-canvas.css"), null);
 
 const modules = import.meta.glob(
   "../../../fixtures/demo-project/src/components/**/*.tsx",
@@ -31,6 +48,7 @@ function relKey(globKey: string): string {
 
 const byRel: Record<string, () => Promise<unknown>> = {};
 for (const [key, loader] of Object.entries(modules)) byRel[relKey(key)] = loader;
+for (const [key, loader] of Object.entries(aaModules)) byRel[key] = loader;
 
 const pageByName: Record<string, () => Promise<unknown>> = {};
 for (const [key, loader] of Object.entries(pageModules)) {
@@ -129,9 +147,17 @@ function Stage() {
     try {
       const mod = (await loader()) as Record<string, unknown>;
       if (seq !== loadSeq.current) return;
+      // Demo components have curated mocks entries; AA components resolve
+      // by convention: default export, else the single/first component-ish
+      // export.
+      const isComp = (v: unknown) => typeof v === "function" || (typeof v === "object" && v !== null);
       const exportName = mocks[file]?.exportName ?? "default";
-      const comp = mod[exportName];
-      if (comp == null || (typeof comp !== "function" && typeof comp !== "object")) {
+      let comp = mod[exportName];
+      if (!isComp(comp) && file.startsWith("aa:")) {
+        const named = Object.entries(mod).filter(([k, v]) => k !== "default" && isComp(v) && /^[A-Z]/.test(k));
+        comp = named[0]?.[1];
+      }
+      if (comp == null || !isComp(comp)) {
         setError(`export ${exportName} not found in ${file}`);
         return;
       }
@@ -225,6 +251,10 @@ function Stage() {
         setSelectedId(msg.id);
       } else if (msg.type === "select-block") {
         setSelMeta({ id: msg.id, kind: msg.kind ?? "block", badge: msg.badge ?? null });
+      } else if (msg.type === "set-session") {
+        void import("./next-shims/next-auth-react").then((m) =>
+          m.setCanvasSession(msg.session as never),
+        );
       } else if (msg.type === "set-interact") {
         interact.current = msg.on;
         document.body.classList.toggle("uai-interact", msg.on);
@@ -891,11 +921,15 @@ function Stage() {
     );
   }
 
-  return (
+  const component = (
     <Boundary resetKey={stage.file + JSON.stringify(stage.props)}>
       <stage.Component {...stage.props} />
     </Boundary>
   );
+  if (aaChrome && stage.file.startsWith("aa:")) {
+    return <aaChrome.AAProviders>{component}</aaChrome.AAProviders>;
+  }
+  return component;
 }
 
 createRoot(document.getElementById("root")!).render(<Stage />);

@@ -1,11 +1,6 @@
-@import "tailwindcss";
-/* Scan only real source for class names — the page-document JSONs under
-   the fixture pages dir must stay out of the watch scope, or every builder
-   save full-reloads both the editor and the canvas. */
-@source "../../../fixtures/demo-project/src";
-@import "../../../fixtures/demo-project/src/fonts.css";
-@import "../../../fixtures/demo-project/src/theme.css";
-@import "../../../fixtures/demo-project/src/components/ui/ui.css";
+/* Editor affordances only. The canvas design-system CSS (fixture theme OR
+   adventure-alerts globals) is chosen at boot by main.tsx — the two design
+   systems both define .ui-* classes and must never coexist in a document. */
 
 body {
   margin: 0;
