@@ -40,6 +40,18 @@ async function start() {
       win.webContents.reloadIgnoringCache();
     }
   });
+  // Self-heal: if the renderer fails to load (vite restarting underneath us,
+  // a mid-reload hiccup), retry instead of sitting on a blank window.
+  win.webContents.on("did-fail-load", (_e, code, desc) => {
+    console.warn(`load failed (${code} ${desc}) — retrying in 1s`);
+    setTimeout(() => {
+      if (!win.isDestroyed()) void win.loadURL(`http://localhost:${port}/`);
+    }, 1000);
+  });
+  win.webContents.on("render-process-gone", (_e, details) => {
+    console.warn(`renderer gone (${details.reason}) — reloading`);
+    if (!win.isDestroyed()) void win.loadURL(`http://localhost:${port}/`);
+  });
   await win.loadURL(`http://localhost:${port}/`);
 }
 
