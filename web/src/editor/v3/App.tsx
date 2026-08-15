@@ -144,6 +144,7 @@ const UI_KIT = Object.keys(mocks)
 interface PropSpec {
   name: string;
   typeText: string;
+  optional?: boolean;
   control: { kind: string; options?: string[] };
 }
 
@@ -285,6 +286,21 @@ export function App() {
   const [routeTree, setRouteTree] = useState<RouteNode | null>(null);
   const routesFetched = useRef(false);
   const [routeSel, setRouteSel] = useState<RouteNode | null>(null);
+  // Which design system the canvas iframe runs; AA components preview in a
+  // dedicated ?project=aa document so the two .ui-* systems never mix.
+  const [canvasProject, setCanvasProject] = useState<"demo" | "aa">("demo");
+  const [insertSource, setInsertSource] = useState<"Demo kit" | "Adventure Alerts">("Demo kit");
+  const [aaComponents, setAaComponents] = useState<{
+    files: string[];
+    meta: Record<string, { serverOnly: boolean }>;
+  } | null>(null);
+  const [aaPreview, setAaPreview] = useState<{
+    file: string;
+    specs: PropSpec[];
+    values: Record<string, unknown>;
+  } | null>(null);
+  const aaPreviewRef = useRef(aaPreview);
+  aaPreviewRef.current = aaPreview;
 
   const send = useCallback((msg: EditorToHarness) => {
     iframeRef.current?.contentWindow?.postMessage(msg, "*");
@@ -355,6 +371,8 @@ export function App() {
     setDoc(data.doc);
     setSel({ kind: null, id: null });
     setRouteSel(null);
+    setAaPreview(null);
+    setCanvasProject("demo");
     setHistory([]);
     setFuture([]);
     if (harnessReady.current) {
@@ -477,7 +495,10 @@ export function App() {
       const d = docRef.current;
       if (msg.type === "ready") {
         harnessReady.current = true;
-        if (d) {
+        const preview = aaPreviewRef.current;
+        if (canvasProject === "aa" && preview) {
+          send({ type: "render", file: preview.file, props: preview.values });
+        } else if (d) {
           iframeRef.current?.contentWindow?.postMessage({ type: "render-page", name: d.name }, "*");
           send({ type: "set-device", width: DEVICES[device].width });
           send({ type: "set-zoom", zoom });
@@ -577,7 +598,52 @@ export function App() {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [edit, select, send, device, zoom, appZoom]);
+  }, [edit, select, send, device, zoom, appZoom, canvasProject]);
+
+  // ------------------------------------------------------------------ AA component preview
+
+  /** Open an adventure-alerts component in the AA canvas: fetch its prop
+   * specs, derive safe defaults, remount the iframe in ?project=aa mode. */
+  const openAaComponent = useCallback(async (file: string) => {
+    setRouteSel(null);
+    setSel({ kind: null, id: null });
+    let specs: PropSpec[] = [];
+    try {
+      const d = await api<{ props: PropSpec[] }>(
+        `/api/component?project=aa&file=${encodeURIComponent(file)}`,
+      );
+      specs = d.props;
+    } catch {
+      /* prop extraction is best-effort */
+    }
+    const values: Record<string, unknown> = {};
+    for (const s of specs) {
+      if (s.optional) continue;
+      if (s.control.kind === "string") values[s.name] = s.name;
+      else if (s.control.kind === "number") values[s.name] = 0;
+      else if (s.control.kind === "boolean") values[s.name] = false;
+      else if (s.control.kind === "select") values[s.name] = s.control.options?.[0];
+    }
+    const preview = { file: `aa:${file}`, specs, values };
+    setAaPreview(preview);
+    if (canvasProject !== "aa") {
+      setCanvasProject("aa"); // remount → ready handler sends the render
+    } else {
+      send({ type: "render", file: preview.file, props: values });
+    }
+  }, [canvasProject, send]);
+
+  const setAaProp = useCallback((name: string, value: unknown) => {
+    setAaPreview((p) => {
+      if (!p) return p;
+      const values = { ...p.values };
+      if (value === undefined || value === "") delete values[name];
+      else values[name] = value;
+      const next = { ...p, values };
+      send({ type: "render", file: p.file, props: values });
+      return next;
+    });
+  }, [send]);
 
   // ------------------------------------------------------------------ operations
 
@@ -1287,11 +1353,82 @@ export function App() {
             <div style={{ flex: "0 1 236px", minWidth: 180, display: "flex", flexDirection: "column", background: C.panel, borderRight: `1px solid ${C.border}`, minHeight: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 6px", whiteSpace: "nowrap" }}>
                 <h2 style={{ ...sectionHeader, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>Insert</h2>
-                <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint }}>drag or click</span>
+                <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint }}>
+                  {insertSource === "Demo kit" ? "drag or click" : "click to preview"}
+                </span>
               </div>
+              {routeTree && (
+                <div style={{ padding: "0 10px 6px" }}>
+                  <Seg grow items={(["Demo kit", "Adventure Alerts"] as const).map((s) => ({
+                    label: s === "Demo kit" ? "Demo" : "Adventure Alerts",
+                    active: insertSource === s,
+                    onClick: () => {
+                      setInsertSource(s);
+                      if (s === "Demo kit" && canvasProject === "aa") {
+                        setAaPreview(null);
+                        setCanvasProject("demo");
+                      }
+                      if (s === "Adventure Alerts" && !aaComponents) {
+                        void api<{ files: string[]; meta: Record<string, { serverOnly: boolean }> }>(
+                          "/api/components?project=aa",
+                        ).then(setAaComponents).catch(() => {});
+                      }
+                    },
+                  }))} />
+                </div>
+              )}
               <div style={{ padding: "0 10px 8px" }}>
                 <input className="fc" type="text" placeholder="Search blocks and components" value={search} onChange={(e) => setSearch(e.target.value)} style={inputStyle} />
               </div>
+              {insertSource === "Adventure Alerts" ? (
+                <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
+                  {(() => {
+                    if (!aaComponents) {
+                      return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
+                    }
+                    const q = search.trim().toLowerCase();
+                    const groups = new Map<string, string[]>();
+                    for (const f of aaComponents.files) {
+                      const short = f.replace(/^src\/components\//, "");
+                      if (q && !short.toLowerCase().includes(q)) continue;
+                      const dir = short.includes("/") ? short.split("/")[0] : "root";
+                      (groups.get(dir) ?? groups.set(dir, []).get(dir)!).push(f);
+                    }
+                    if (groups.size === 0) {
+                      return <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>;
+                    }
+                    return [...groups.entries()].map(([dir, files]) => (
+                      <div key={dir} style={{ borderTop: `1px solid ${C.softDiv}` }}>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
+                          <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>{dir}</span>
+                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>{files.length}</span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px" }}>
+                          {files.map((f) => {
+                            const serverOnly = aaComponents.meta[f]?.serverOnly;
+                            const name = f.split("/").pop()!.replace(/\.tsx$/, "");
+                            const active = aaPreview?.file === `aa:${f}`;
+                            return (
+                              <button
+                                key={f}
+                                className={serverOnly ? undefined : "hv-ctl-border"}
+                                disabled={serverOnly}
+                                title={serverOnly ? "Server component — can't render in the canvas" : f}
+                                onClick={() => void openAaComponent(f)}
+                                style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
+                              >
+                                <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
+                                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                                {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              ) : (
               <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
                 {insertGroups.map((g) => (
                   <div key={g.name} style={{ borderTop: `1px solid ${C.softDiv}` }}>
@@ -1330,6 +1467,7 @@ export function App() {
                   <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>
                 )}
               </div>
+              )}
             </div>
 
             {/* Canvas region */}
@@ -1400,7 +1538,13 @@ export function App() {
                 {rulersOn && (
                   <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
                 )}
-                <iframe ref={iframeRef} src="/harness.html" title="canvas" style={{ flex: 1, border: "none", background: C.void }} />
+                <iframe
+                  key={canvasProject}
+                  ref={iframeRef}
+                  src={canvasProject === "aa" ? "/harness.html?project=aa" : "/harness.html"}
+                  title="canvas"
+                  style={{ flex: 1, border: "none", background: C.void }}
+                />
                 {routeSel && (
                   <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
                     <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1527,6 +1671,8 @@ export function App() {
                 <Properties
                   tab={propTab}
                   routeSel={routeSel}
+                  aaPreview={canvasProject === "aa" ? aaPreview : null}
+                  setAaProp={setAaProp}
                   doc={doc}
                   sel={sel}
                   block={block}
@@ -1646,6 +1792,8 @@ export function App() {
 function Properties(props: {
   tab: PropTab;
   routeSel?: RouteNode | null;
+  aaPreview?: { file: string; specs: PropSpec[]; values: Record<string, unknown> } | null;
+  setAaProp?: (name: string, value: unknown) => void;
   doc: PageDoc | null;
   sel: Sel;
   block: Block | null;
@@ -1665,6 +1813,56 @@ function Properties(props: {
 }) {
   const { tab, doc, sel, block, colHit, secHit, notes, edit, patchBlock, select } = props;
   const pad: CSSProperties = { padding: "9px 10px 12px", display: "flex", flexDirection: "column", gap: 6 };
+
+  if (props.aaPreview && !props.routeSel) {
+    const p = props.aaPreview;
+    const rel = p.file.replace(/^aa:/, "");
+    return (
+      <div style={pad}>
+        <div style={{ fontFamily: MONO, fontSize: 10.5, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={rel}>{rel}</div>
+        <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
+          Live preview of the real adventure-alerts component. Prop edits re-render the canvas; nothing is written.
+        </div>
+        {p.specs.map((s) => {
+          const raw = p.values[s.name];
+          if (s.control.kind === "boolean") {
+            return (
+              <Row key={s.name} label={s.name}>
+                <Seg grow items={[
+                  { label: "false", active: raw !== true, onClick: () => props.setAaProp?.(s.name, false) },
+                  { label: "true", active: raw === true, onClick: () => props.setAaProp?.(s.name, true) },
+                ]} />
+              </Row>
+            );
+          }
+          if (s.control.kind === "select" && s.control.options) {
+            return (
+              <Row key={s.name} label={s.name}>
+                <select className="fc" value={String(raw ?? "")} onChange={(e) => props.setAaProp?.(s.name, e.target.value || undefined)} style={{ ...inputStyle, height: 22, padding: "0 5px", flex: 1, minWidth: 0 }}>
+                  <option value="">—</option>
+                  {s.control.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </Row>
+            );
+          }
+          const display = typeof raw === "string" ? raw : raw === undefined ? "" : JSON.stringify(raw);
+          return (
+            <div key={s.name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ flex: "0 0 74px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: C.muted }} title={s.typeText}>{s.name}</span>
+              <Field value={display} onCommit={(v) => {
+                if (v === "") return props.setAaProp?.(s.name, undefined);
+                if (s.control.kind === "number") return props.setAaProp?.(s.name, Number(v) || 0);
+                let val: unknown = v;
+                if (s.control.kind === "json") { try { val = JSON.parse(v); } catch { /* keep string */ } }
+                props.setAaProp?.(s.name, val);
+              }} style={{ flex: 1, minWidth: 0 }} />
+            </div>
+          );
+        })}
+        {p.specs.length === 0 && <div style={{ fontSize: 11, color: C.faint, lineHeight: 1.5 }}>No props interface found for this component.</div>}
+      </div>
+    );
+  }
 
   if (props.routeSel) {
     const r = props.routeSel;

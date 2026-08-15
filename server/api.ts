@@ -103,9 +103,41 @@ export function uaiApi(repoRoot: string): Plugin {
     }
   };
 
+  const MIME: Record<string, string> = {
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+    ".txt": "text/plain",
+  };
+
   return {
     name: "uai-api",
     configureServer(server: ViteDevServer) {
+      // adventure-alerts components reference public/ assets by absolute URL
+      // ("/brand/logo.svg"); serve that dir so the canvas isn't full of
+      // broken images. Real editor paths never exist in public/, so this
+      // can't shadow them.
+      const aaRoot = aaRootPath(repoRoot);
+      if (aaRoot) {
+        const publicDir = path.resolve(aaRoot, "public");
+        server.middlewares.use((req, res, next) => {
+          const pathname = decodeURIComponent(
+            new URL(req.url ?? "/", "http://localhost").pathname,
+          );
+          if (pathname.startsWith("/api/") || pathname === "/") return next();
+          const file = path.resolve(publicDir, pathname.slice(1));
+          if (!file.startsWith(publicDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+            return next();
+          }
+          res.setHeader("Content-Type", MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream");
+          fs.createReadStream(file).pipe(res);
+        });
+      }
+
       server.middlewares.use(async (req, res, next) => {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (!url.pathname.startsWith("/api/")) return next();
