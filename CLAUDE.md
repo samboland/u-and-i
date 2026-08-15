@@ -29,8 +29,14 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
     target, maps `next/*`, `next-auth`, `server-only` → `harness/next-shims/`,
     `@/db` + `@/auth` → throwing stubs, other `@/…` → target src.
     Global `resolve.alias` runs before all plugins — never put `@` there.
+  - `live-proxy.ts` — mirrors the target's *own* running `next dev` on a
+    port we own (default 4410) so the canvas can show the real app with
+    real data. Forwards everything incl. websockets (HMR), strips
+    `X-Frame-Options` + CSP, injects `harness/live-probe.js`. The target app
+    is never modified. See "Render the real app" in `ROADMAP.md`.
   - `routes.ts` (app-router interpreter), `shell.ts` (page → view-component
-    resolution), `projects.ts` (target), `props.ts` (ts-morph prop specs,
+    resolution — currently mis-resolves ~⅓ of routes, see ROADMAP),
+    `projects.ts` (target), `props.ts` (ts-morph prop specs,
     wired to the target's tsconfig).
 - `web/src/editor/v3/` — chrome. `App.tsx` owns all state; every mutation
   goes through the `editFile` funnel (write → replace model → re-anchor
@@ -47,6 +53,12 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   the model, the canvas posts `set-text` back on Enter/blur.
   Async server components aren't rendered yet (outliner-only) — a gap being
   closed by "Render the real app" in `ROADMAP.md`, not a design rule.
+- `web/src/harness/live-probe.js` — **plain JS, no build step**: it is
+  injected into the target's own pages by `live-proxy.ts`, so it must
+  assume nothing about the page. Talks to the editor by `postMessage`
+  (`{uai:true, …}`, cross-origin). Finds the React fiber behind a DOM node
+  and reads `fiber._debugStack` — React 19 dropped `_debugSource`, but the
+  owner stack still gives a compiled file/line/col to map back to source.
 - `electron/main.mjs` — shell; vite runs as an `ELECTRON_RUN_AS_NODE`
   child (`server.mjs`) — moving it into the GUI process makes Windows play
   an error sound on failed DLL probes.
@@ -70,11 +82,21 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
 ## Working rules
 
 - `npx tsc --noEmit -p .` must pass; verify behavior with Playwright
-  (borrow it via `createRequire("C:\\Users\\sam\\Dev-Projects\\adventure-alerts\\package.json")`,
+  (u-and-i doesn't depend on it — borrow the target's copy via
+  `createRequire(<target>/package.json)`, resolving `<target>` from
+  `uai.config.json` rather than hardcoding a path, and
   `chromium.launch({ channel: "chrome" })`) against a dev server on 4400.
+- Testing **live mode** additionally needs the target's own `npm run dev`
+  running (default `http://localhost:3000`), and the canvas is signed out —
+  most authed routes will 307 to `/signin`. Use `/terms` or `/support` as
+  no-redirect probes. Don't assume a port is free: check first.
 - **Kill any dev server you start** — a leftover instance steals port 4400
   and breaks Sam's `npm run app`.
 - Tests that edit the target must undo via the tool's own restore and
   assert the touched file is git-clean after (fallback `git checkout` on
   that one file = test failure).
+- `scripts/checks/*.mjs` are the standing Playwright checks (`_shared.mjs`
+  resolves the target + borrows Playwright). Run them after touching the
+  canvas, the edit funnel, or the live proxy; add one when you add a
+  feature worth re-verifying on another machine.
 - Push freely to main (repo is Sam's, private).
