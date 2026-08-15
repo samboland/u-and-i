@@ -1,0 +1,2270 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  body { margin: 0; background: #16181d; color: #d7dae0; font-family: system-ui, sans-serif; font-size: 12px; overflow: hidden; }
+  a { color: #6fb8ea; text-decoration: none; }
+  a:hover { color: #328ec1; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #2a2e37; border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  input { font-family: inherit; }
+  [contenteditable="true"] { outline: none; cursor: text; }
+</style>
+</helmet>
+<div style="display:flex;flex-direction:column;height:100vh;background:#16181d;color:#d7dae0;font-family:system-ui, sans-serif;font-size:12px;box-sizing:border-box;overflow:hidden">
+
+  <!-- window top bar: menus | workspace tabs -->
+  <div style="flex:0 0 auto;min-height:32px;display:flex;flex-wrap:wrap;align-items:stretch;background:#12141a;border-bottom:1px solid #2a2e37;min-width:0;white-space:nowrap;position:relative;z-index:20">
+    <span style="flex:0 0 auto;display:flex;align-items:center;padding:0 10px 0 11px;font-family:ui-monospace, monospace;font-size:12px;color:#6fb8ea;letter-spacing:-0.04em">u&#8212;i</span>
+
+    <sc-for list="{{ menus }}" as="m" hint-placeholder-count="6">
+      <div style="flex:0 0 auto;position:relative">
+        <button style="height:32px;padding:0 9px;background:{{ m.bg }};border:none;color:{{ m.fg }};font:inherit;cursor:default" style-hover="background:#242935" onClick="{{ m.onClick }}" onMouseEnter="{{ m.onHover }}">{{ m.label }}</button>
+        <sc-if value="{{ m.open }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;top:32px;left:0;min-width:{{ m.width }};background:#1f242c;border:1px solid #2a2e37;border-radius:0 0 6px 6px;box-shadow:0 14px 30px rgba(0,0,0,0.55);padding:4px 0;z-index:30">
+            <sc-for list="{{ m.items }}" as="it" hint-placeholder-count="6">
+              <div>
+                <sc-if value="{{ it.isSep }}" hint-placeholder-val="{{ false }}">
+                  <div style="height:1px;background:#2a2e37;margin:4px 0"></div>
+                </sc-if>
+                <sc-if value="{{ it.isItem }}" hint-placeholder-val="{{ true }}">
+                  <button style="display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:24px;padding:0 10px;background:none;border:none;color:{{ it.fg }};font:inherit;cursor:{{ it.cursor }};text-align:left" style-hover="background:{{ it.hoverBg }}" onClick="{{ it.onClick }}">
+                    <span style="flex:0 0 12px;color:#6fb8ea;font-size:11px">{{ it.check }}</span>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ it.label }}</span>
+                    <span style="flex:0 0 auto;font-family:ui-monospace, monospace;font-size:10.5px;color:#6b7280">{{ it.accel }}</span>
+                  </button>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </sc-for>
+
+    <div style="flex:0 0 auto;align-self:center;width:1px;height:18px;background:#2a2e37;margin:0 8px"></div>
+
+    <div style="flex:0 0 auto;display:flex;align-items:flex-end;gap:1px">
+      <sc-for list="{{ workspaces }}" as="w" hint-placeholder-count="2">
+        <button style="flex:0 0 auto;height:32px;padding:0 14px;background:{{ w.bg }};border:none;border-radius:{{ w.radius }};color:{{ w.fg }};font:inherit;cursor:pointer" style-hover="color:#d7dae0" onClick="{{ w.onClick }}">{{ w.label }}</button>
+      </sc-for>
+    </div>
+
+    <div style="flex:1 1 0;min-width:8px"></div>
+
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;padding-right:8px">
+      <button style="width:24px;height:22px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ undoColor }};font:inherit;cursor:pointer" title="Undo" onClick="{{ undo }}">&#8630;</button>
+      <button style="width:24px;height:22px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ redoColor }};font:inherit;cursor:pointer" title="Redo" onClick="{{ redo }}">&#8631;</button>
+    </div>
+
+    <div style="flex:0 0 auto;display:flex;align-items:stretch">
+      <button style="width:44px;background:none;border:none;color:#8b919d;font-size:11px;cursor:default" style-hover="background:#242935">&#9472;</button>
+      <button style="width:44px;background:none;border:none;color:#8b919d;font-size:11px;cursor:default" style-hover="background:#242935">&#9723;</button>
+      <button style="width:44px;background:none;border:none;color:#8b919d;font-size:11px;cursor:default" style-hover="background:#c42b1c;color:#ffffff">&#10005;</button>
+    </div>
+  </div>
+
+  <sc-if value="{{ menuOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:15" onClick="{{ closeMenu }}"></div>
+  </sc-if>
+
+  <!-- document row -->
+  <div style="flex:0 0 34px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#1b1e24;border-bottom:1px solid #2a2e37;min-width:0;white-space:nowrap">
+    <button style="flex:0 0 auto;display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ focusOutliner }}">
+      <span style="color:#8b919d;font-size:11px">page</span>home<span style="color:#8b919d">&#9662;</span>
+    </button>
+    <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace, monospace;font-size:11px;color:#6b7280">adventure-alerts / pages / home.json</span>
+    <div style="flex:0 0 auto;width:1px;height:16px;background:#2a2e37"></div>
+    <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#8b919d">{{ wsHint }}</span>
+    <div style="flex:1 1 0;min-width:8px"></div>
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;font-family:ui-monospace, monospace;font-size:11px;color:{{ dirtyColor }}">
+      <span style="width:6px;height:6px;border-radius:99px;background:{{ dirtyColor }}"></span>{{ dirtyLabel }}
+    </div>
+    <button style="flex:0 0 auto;height:24px;padding:0 10px;background:#2b3342;border:1px solid #328ec1;border-radius:5px;color:#fff;font:inherit;cursor:pointer" style-hover="background:#328ec1">Preview</button>
+  </div>
+
+  <!-- workspace toolbar: Layout -->
+  <sc-if value="{{ isLayout }}" hint-placeholder-val="{{ true }}">
+    <div style="flex:0 0 auto;min-height:34px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 10px;background:#1b1e24;border-bottom:1px solid #2a2e37;min-width:0">
+      <span style="flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#8b919d;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">
+        <span style="width:7px;height:7px;background:{{ selAccent }};border-radius:2px"></span>{{ selKind }}
+      </span>
+      <div style="flex:0 0 auto;width:1px;height:18px;background:#2a2e37"></div>
+
+      <sc-if value="{{ selIsHeading }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:0 0 auto">
+          <sc-for list="{{ levels }}" as="l" hint-placeholder-count="3">
+            <button style="height:18px;padding:0 8px;border:none;border-radius:3px;background:{{ l.bg }};color:{{ l.fg }};font:inherit;cursor:pointer" onClick="{{ l.onClick }}">{{ l.label }}</button>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{ selHasText }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:0 0 auto">
+          <sc-for list="{{ aligns }}" as="a" hint-placeholder-count="3">
+            <button style="height:18px;padding:0 8px;border:none;border-radius:3px;background:{{ a.bg }};color:{{ a.fg }};font:inherit;cursor:pointer" onClick="{{ a.onClick }}">{{ a.label }}</button>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{ isItemSel }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">
+          <span style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em">Space</span>
+          <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px">
+            <sc-for list="{{ spacings }}" as="s" hint-placeholder-count="3">
+              <button style="height:18px;padding:0 8px;border:none;border-radius:3px;background:{{ s.bg }};color:{{ s.fg }};font:inherit;cursor:pointer" onClick="{{ s.onClick }}">{{ s.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ isColumnSel }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">
+          <span style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em">Width</span>
+          <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px">
+            <sc-for list="{{ widths }}" as="w" hint-placeholder-count="5">
+              <button style="height:18px;padding:0 9px;border:none;border-radius:3px;background:{{ w.bg }};color:{{ w.fg }};font:inherit;cursor:pointer" onClick="{{ w.onClick }}">{{ w.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ isSectionSel }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto">
+          <span style="font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em">Surface</span>
+          <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px">
+            <sc-for list="{{ surfaceModes }}" as="m" hint-placeholder-count="2">
+              <button style="height:18px;padding:0 9px;border:none;border-radius:3px;background:{{ m.bg }};color:{{ m.fg }};font:inherit;cursor:pointer" onClick="{{ m.onClick }}">{{ m.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <div style="flex:0 0 auto;width:1px;height:18px;background:#2a2e37"></div>
+      <sc-if value="{{ isItemSel }}" hint-placeholder-val="{{ true }}">
+        <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 9px;background:#3b3320;border:1px solid #4a3f24;border-radius:5px;color:#d9b45b;font:inherit;cursor:pointer" style-hover="background:#4a3f24" onClick="{{ toggleNote }}">{{ noteBtnLabel }}</button>
+      </sc-if>
+      <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 9px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ deleteColor }};font:inherit;cursor:pointer" style-hover="background:#3a2424;border-color:#5a3030" onClick="{{ deleteSel }}">{{ deleteLabel }}</button>
+      <div style="flex:1 1 0;min-width:8px"></div>
+      <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace, monospace;font-size:11px;color:#6b7280">{{ hintLine }}</span>
+    </div>
+  </sc-if>
+
+  <!-- workspace toolbar: Style -->
+  <sc-if value="{{ isStyle }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:0 0 auto;min-height:34px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 10px;background:#1b1e24;border-bottom:1px solid #2a2e37;min-width:0">
+      <span style="flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#8b919d;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">
+        <span style="width:7px;height:7px;background:#6fb8ea;border-radius:2px"></span>Theme
+      </span>
+      <div style="flex:0 0 auto;width:1px;height:18px;background:#2a2e37"></div>
+      <span style="flex:0 0 auto;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em">Preview</span>
+      <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:0 0 auto">
+        <sc-for list="{{ scopes }}" as="sc" hint-placeholder-count="2">
+          <button style="height:18px;padding:0 9px;border:none;border-radius:3px;background:{{ sc.bg }};color:{{ sc.fg }};font:inherit;cursor:pointer;white-space:nowrap" onClick="{{ sc.onClick }}">{{ sc.label }}</button>
+        </sc-for>
+      </div>
+      <div style="flex:0 0 auto;width:1px;height:18px;background:#2a2e37"></div>
+      <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 9px;background:#2b3342;border:1px solid #328ec1;border-radius:5px;color:#fff;font:inherit;cursor:pointer" style-hover="background:#328ec1" onClick="{{ writeTheme }}">Write to theme.css</button>
+      <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 9px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ resetThemeColor }};font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ resetTheme }}">Reset tokens</button>
+      <div style="flex:1 1 0;min-width:8px"></div>
+      <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace, monospace;font-size:11px;color:#6b7280">{{ themeHint }}</span>
+    </div>
+  </sc-if>
+
+  <!-- workspace toolbar: Workshop -->
+  <sc-if value="{{ isWorkshop }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:0 0 auto;min-height:34px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 10px;background:#1b1e24;border-bottom:1px solid #2a2e37;min-width:0">
+      <span style="flex:0 0 auto;display:flex;align-items:center;gap:6px;font-size:11px;color:#8b919d;text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap">
+        <span style="width:7px;height:7px;background:#8b919d;border-radius:2px"></span>Material
+      </span>
+      <input type="text" value="{{ matName }}" onChange="{{ onMatName }}" style="flex:0 0 168px;box-sizing:border-box;height:22px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font-family:ui-monospace, monospace;font-size:11px" style-focus="border-color:#328ec1;outline:none" />
+      <div style="flex:0 0 auto;width:1px;height:18px;background:#2a2e37"></div>
+      <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:0 0 auto">
+        <sc-for list="{{ matPresets }}" as="p" hint-placeholder-count="3">
+          <button style="height:18px;padding:0 9px;border:none;border-radius:3px;background:{{ p.bg }};color:{{ p.fg }};font:inherit;cursor:pointer;white-space:nowrap" onClick="{{ p.onClick }}">{{ p.label }}</button>
+        </sc-for>
+      </div>
+      <div style="flex:0 0 auto;width:1px;height:18px;background:#2a2e37"></div>
+      <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 9px;background:#2b3342;border:1px solid #328ec1;border-radius:5px;color:#fff;font:inherit;cursor:pointer" style-hover="background:#328ec1" onClick="{{ writeMaterial }}">Write tokens</button>
+      <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 9px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ resetMatColor }};font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ resetMaterial }}">Revert</button>
+      <div style="flex:1 1 0;min-width:8px"></div>
+      <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#8b919d;font-family:ui-monospace, monospace;font-size:11px;cursor:pointer" style-hover="background:#2b3342" title="Reset graph zoom" onClick="{{ resetZoom }}">{{ graphZoomLabel }}</button>
+      <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace, monospace;font-size:11px;color:#6b7280">{{ matHint }}</span>
+    </div>
+  </sc-if>
+
+  <!-- body -->
+  <div style="flex:1;display:flex;min-height:0">
+
+    <!-- main area: Layout workspace -->
+    <sc-if value="{{ isLayout }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:0 1 236px;min-width:180px;display:flex;flex-direction:column;background:#1b1e24;border-right:1px solid #2a2e37;min-height:0">
+        <div style="display:flex;align-items:center;gap:6px;padding:8px 10px 6px;white-space:nowrap">
+          <h2 style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;margin:0;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">Insert</h2>
+          <span style="flex:0 0 auto;font-size:10px;color:#6b7280">drag or click</span>
+        </div>
+        <div style="padding:0 10px 8px">
+          <input type="text" placeholder="Search blocks and components" value="{{ search }}" onChange="{{ onSearch }}" style="width:100%;box-sizing:border-box;height:24px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font:inherit" style-focus="border-color:#328ec1;outline:none" />
+        </div>
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding-bottom:10px">
+          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="5">
+            <div style="border-top:1px solid #23272f">
+              <div style="display:flex;align-items:baseline;gap:6px;padding:8px 10px 5px;white-space:nowrap">
+                <span style="flex:0 0 auto;font-size:11px;color:#d7dae0;font-weight:600">{{ g.name }}</span>
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:10px;color:#6b7280">{{ g.note }}</span>
+              </div>
+              <div style="display:grid;grid-template-columns:{{ insertCols }};gap:4px;padding:0 10px">
+                <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="4">
+                  <button draggable="{{ true }}" onDragStart="{{ i.onDragStart }}" onDragEnd="{{ endDrag }}" onClick="{{ i.onClick }}" style="display:flex;align-items:center;gap:6px;padding:5px 7px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#d7dae0;font:inherit;cursor:grab;text-align:left;overflow:hidden;white-space:nowrap" style-hover="background:#2b3342;border-color:#3a4356">
+                    <span style="flex:0 0 auto;color:#6fb8ea;width:13px;text-align:center">{{ i.icon }}</span>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ i.label }}</span>
+                    <sc-if value="{{ i.data }}" hint-placeholder-val="{{ false }}">
+                      <span style="flex:0 0 auto;width:5px;height:5px;border-radius:99px;background:#d9b45b" title="expects data"></span>
+                    </sc-if>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+            <div style="margin:10px;padding:10px;border:1px dashed #2a2e37;border-radius:6px;font-size:11px;color:#6b7280">Nothing matches that search.</div>
+          </sc-if>
+        </div>
+      </div>
+
+      <div style="flex:1;display:flex;flex-direction:column;min-width:240px;background:#101216">
+        <div style="flex:0 0 auto;min-height:30px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 10px;border-bottom:1px solid #1e2129;background:#15171c;min-width:0;position:relative;z-index:25">
+          <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:0 0 auto">
+            <sc-for list="{{ devices }}" as="d" hint-placeholder-count="3">
+              <button style="height:18px;padding:0 8px;border:none;border-radius:3px;background:{{ d.bg }};color:{{ d.fg }};font:inherit;cursor:pointer;font-family:ui-monospace, monospace;font-size:11px" onClick="{{ d.onClick }}">{{ d.label }}</button>
+            </sc-for>
+          </div>
+          <span style="flex:0 0 auto;font-family:ui-monospace, monospace;font-size:11px;color:#6b7280">{{ pageWidth }}px</span>
+          <div style="flex:0 0 auto;width:1px;height:16px;background:#2a2e37"></div>
+          <div style="flex:0 0 auto;position:relative;white-space:nowrap">
+            <button style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;background:{{ previewBtnBg }};border:1px solid {{ previewBtnBorder }};border-radius:5px;color:#d7dae0;font:inherit;cursor:pointer" style-hover="background:#242935;border-color:#3a4356" onClick="{{ previewToggle }}" title="Preview context (P)">
+              <span style="font-size:10px;color:#8b919d;text-transform:uppercase;letter-spacing:0.08em">Preview</span>
+              <span style="font-family:ui-monospace, monospace;font-size:11px;color:#d7dae0">{{ previewSummary }}</span>
+              <span style="font-size:8px;color:#6b7280">&#9660;</span>
+            </button>
+            <sc-if value="{{ previewOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;top:26px;left:0;min-width:230px;background:#1f242c;border:1px solid #2a2e37;border-radius:6px;box-shadow:0 14px 30px rgba(0,0,0,0.55);padding:4px 0;z-index:30">
+                <sc-for list="{{ previewGroups }}" as="g" hint-placeholder-count="3">
+                  <div>
+                    <sc-if value="{{ g.rule }}" hint-placeholder-val="{{ false }}">
+                      <div style="height:1px;background:#2a2e37;margin:4px 0"></div>
+                    </sc-if>
+                    <div style="padding:3px 10px 2px;font-size:9.5px;color:#6b7280;text-transform:uppercase;letter-spacing:0.09em">{{ g.title }}</div>
+                    <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4">
+                      <button style="display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;height:24px;padding:0 10px;background:none;border:none;color:{{ it.fg }};font:inherit;cursor:pointer;text-align:left" style-hover="background:#2b3342" onClick="{{ it.onClick }}">
+                        <span style="flex:0 0 12px;color:#6fb8ea;font-size:11px">{{ it.check }}</span>
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ it.label }}</span>
+                        <span style="flex:0 0 auto;font-family:ui-monospace, monospace;font-size:10.5px;color:#6b7280">{{ it.accel }}</span>
+                      </button>
+                    </sc-for>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+          <div style="flex:1 1 0;min-width:8px"></div>
+          <span style="flex:0 0 auto;font-family:ui-monospace, monospace;font-size:11px;color:#6b7280">layout {{ layoutChip }}</span>
+        </div>
+
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+          <sc-if value="{{ showRulers }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:0 0 16px;display:flex;background:#15171c;border-bottom:1px solid #1e2129;overflow:hidden">
+              <div style="flex:0 0 16px;border-right:1px solid #1e2129"></div>
+              <div style="flex:1;background-image:repeating-linear-gradient(to right, #2a2e37 0 1px, transparent 1px {{ rulerMinor }}), repeating-linear-gradient(to right, #3a4356 0 1px, transparent 1px {{ rulerMajor }});background-position:bottom;background-size:100% 5px, 100% 9px;background-repeat:repeat-x"></div>
+            </div>
+          </sc-if>
+          <div style="flex:1;display:flex;min-height:0;overflow:hidden">
+            <sc-if value="{{ showRulers }}" hint-placeholder-val="{{ true }}">
+              <div style="flex:0 0 16px;background:#15171c;border-right:1px solid #1e2129;background-image:repeating-linear-gradient(to bottom, #2a2e37 0 1px, transparent 1px {{ rulerMinor }});background-size:5px 100%;background-position:right;background-repeat:repeat-y"></div>
+            </sc-if>
+            <div style="flex:1;overflow:auto;padding:22px 0 40px" onClick="{{ deselect }}">
+              <div style="width:{{ stageWidth }}px;margin:0 auto">
+                <div style="width:{{ pageWidth }}px;transform:scale({{ zoom }});transform-origin:top left">
+                  <div style="background:{{ pageBg }};color:{{ pageFg }};padding:2rem;border-radius:4px;box-shadow:0 18px 40px rgba(0,0,0,0.45)">
+                    <main style="display:flex;flex-direction:column;gap:1.5rem">
+                      <sc-for list="{{ sections }}" as="sec" hint-placeholder-count="2">
+                        <section onClick="{{ sec.onClick }}" style="position:relative;padding:{{ sec.padding }};border-radius:{{ sec.radius }};background:{{ sec.background }};box-shadow:{{ sec.shadow }};outline:{{ sec.outline }};outline-offset:3px;cursor:default">
+                          <sc-if value="{{ sec.selected }}" hint-placeholder-val="{{ false }}">
+                            <div style="position:absolute;top:-20px;left:-3px;display:flex;align-items:center;gap:5px;height:16px;padding:0 5px;background:#6fb8ea;color:#0d1a22;border-radius:3px 3px 0 0;font-size:9.5px;font-weight:600;white-space:nowrap;z-index:3">{{ sec.badge }}</div>
+                          </sc-if>
+                          <div style="display:flex;gap:1.5rem;align-items:flex-start">
+                            <sc-for list="{{ sec.columns }}" as="col" hint-placeholder-count="2">
+                              <div onClick="{{ col.onClick }}" onDragOver="{{ col.onDragOver }}" onDrop="{{ col.onDrop }}" style="position:relative;flex:{{ col.flex }};display:flex;flex-direction:column;gap:1rem;align-items:stretch;min-width:0;min-height:{{ col.minHeight }};outline:{{ col.outline }};outline-offset:6px;border-radius:2px">
+                                <sc-if value="{{ col.selected }}" hint-placeholder-val="{{ false }}">
+                                  <div style="position:absolute;top:-24px;left:-5px;display:flex;align-items:center;gap:5px;height:16px;padding:0 5px;background:#5fae6f;color:#0d1a12;border-radius:3px 3px 0 0;font-size:9.5px;font-weight:600;white-space:nowrap;z-index:3">{{ col.badge }}</div>
+                                </sc-if>
+                                <sc-for list="{{ col.items }}" as="b" hint-placeholder-count="3">
+                                  <div draggable="{{ b.draggable }}" onDragStart="{{ b.onDragStart }}" onDragEnd="{{ endDrag }}" onDragOver="{{ b.onDragOver }}" onDrop="{{ b.onDrop }}" onClick="{{ b.onClick }}" onDoubleClick="{{ b.onDoubleClick }}" style="position:{{ b.posCss }};display:{{ b.displayCss }};margin:{{ b.mT }} {{ b.mR }} {{ b.mB }} {{ b.mL }};padding:{{ b.pT }} {{ b.pR }} {{ b.pB }} {{ b.pL }};width:{{ b.wCss }};min-width:{{ b.minWCss }};max-width:{{ b.maxWCss }};height:{{ b.hCss }};min-height:{{ b.minHCss }};max-height:{{ b.maxHCss }};align-self:{{ b.alignSelfCss }};overflow:{{ b.overflowCss }};top:{{ b.insetT }};right:{{ b.insetR }};bottom:{{ b.insetB }};left:{{ b.insetL }};z-index:{{ b.zCss }};outline:{{ b.outline }};outline-offset:3px;border-radius:2px;cursor:{{ b.cursor }}">
+                                    <sc-if value="{{ b.lineBefore }}" hint-placeholder-val="{{ false }}">
+                                      <div style="position:absolute;top:-9px;left:0;right:0;height:2px;background:#ff6b00;border-radius:2px;z-index:4"></div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.lineAfter }}" hint-placeholder-val="{{ false }}">
+                                      <div style="position:absolute;bottom:-9px;left:0;right:0;height:2px;background:#ff6b00;border-radius:2px;z-index:4"></div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.selected }}" hint-placeholder-val="{{ false }}">
+                                      <div style="position:absolute;top:-19px;left:-3px;display:flex;align-items:center;gap:5px;height:15px;padding:0 5px;background:#ff6b00;color:#fff;border-radius:3px 3px 0 0;font-size:9.5px;white-space:nowrap;z-index:3">{{ b.badge }}</div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.pin }}" hint-placeholder-val="{{ false }}">
+                                      <span style="position:absolute;top:2px;right:-13px;width:18px;height:18px;border-radius:99px;background:#d9b45b;color:#2c221e;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(44,34,30,0.3);z-index:2">{{ b.pin }}</span>
+                                    </sc-if>
+
+                                    <sc-if value="{{ b.isHeading }}" hint-placeholder-val="{{ false }}">
+                                      <h2 contentEditable="{{ b.editing }}" suppressContentEditableWarning="{{ true }}" ref="{{ b.editRef }}" onBlur="{{ b.onCommit }}" onKeyDown="{{ b.onKeyDown }}" style="margin:0;font-weight:700;font-size:{{ b.fontSize }};text-align:{{ b.align }}">{{ b.text }}</h2>
+                                    </sc-if>
+                                    <sc-if value="{{ b.isText }}" hint-placeholder-val="{{ true }}">
+                                      <p contentEditable="{{ b.editing }}" suppressContentEditableWarning="{{ true }}" ref="{{ b.editRef }}" onBlur="{{ b.onCommit }}" onKeyDown="{{ b.onKeyDown }}" style="margin:0;text-align:{{ b.align }}">{{ b.text }}</p>
+                                    </sc-if>
+                                    <sc-if value="{{ b.isButton }}" hint-placeholder-val="{{ false }}">
+                                      <div style="display:flex;justify-content:{{ b.justify }}">
+                                        <span contentEditable="{{ b.editing }}" suppressContentEditableWarning="{{ true }}" ref="{{ b.editRef }}" onBlur="{{ b.onCommit }}" onKeyDown="{{ b.onKeyDown }}" style="display:inline-block;padding:0.5rem 1.25rem;border-radius:{{ b.ctlRadius }};background:{{ b.cardBg }};color:{{ b.cardFg }};box-shadow:0 0 4px 0 rgba(44,34,30,0.07),-1px -1px 3px rgba(255,255,255,0.5),3px 3px 8px rgba(44,34,30,0.18),inset 0 1px 0 rgba(255,255,255,0.95),inset 0 -2px 4px rgba(44,34,30,0.18)">{{ b.text }}</span>
+                                      </div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.isBar }}" hint-placeholder-val="{{ false }}">
+                                      <div style="display:inline-flex;flex-direction:column;gap:8px;border-radius:6px;padding:8px">
+                                        <div style="display:flex;width:100%;gap:6px">
+                                          <sc-for list="{{ b.segments }}" as="s" hint-placeholder-count="4">
+                                            <div style="flex:1;display:flex;flex-direction:column;gap:4px;border-radius:2px;border:{{ s.border }};opacity:{{ s.opacity }};background-color:{{ s.fill }}">
+                                              <span style="margin-top:12px;padding:0 4px 4px;text-align:center;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.025em;color:{{ s.text }};mix-blend-mode:{{ s.blend }}">{{ s.label }}</span>
+                                            </div>
+                                          </sc-for>
+                                        </div>
+                                      </div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.isPlaceholder }}" hint-placeholder-val="{{ false }}">
+                                      <div style="display:flex;align-items:center;justify-content:center;height:{{ b.phHeight }};border:1px dashed rgba(44,34,30,0.28);border-radius:8px;background:rgba(44,34,30,0.04);font-size:11px;color:{{ pageMutedFg }}">{{ b.phLabel }}</div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.stateMessage }}" hint-placeholder-val="{{ false }}">
+                                      <div style="padding:10px 12px;border:1px dashed rgba(44,34,30,0.28);border-radius:8px;background:rgba(44,34,30,0.04);font-size:12px;color:{{ pageMutedFg }}">{{ b.stateMessage }}</div>
+                                    </sc-if>
+                                    <sc-if value="{{ b.showNote }}" hint-placeholder-val="{{ false }}">
+                                      <div style="margin-top:8px;display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border:1px dashed #d9b45b;border-radius:6px;background:rgba(217,180,91,0.10);max-width:38rem">
+                                        <span style="flex:0 0 auto;width:16px;height:16px;border-radius:99px;background:#d9b45b;color:#2c221e;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px">{{ b.pin }}</span>
+                                        <div style="font-size:12px;line-height:1.45">{{ b.note }}</div>
+                                      </div>
+                                    </sc-if>
+                                  </div>
+                                </sc-for>
+                                <sc-if value="{{ col.empty }}" hint-placeholder-val="{{ false }}">
+                                  <div style="padding:10px;border:1px dashed {{ col.emptyBorder }};border-radius:8px;font-size:11px;color:rgba(44,34,30,0.45);text-align:center">{{ col.emptyLabel }}</div>
+                                </sc-if>
+                              </div>
+                            </sc-for>
+                          </div>
+                        </section>
+                      </sc-for>
+                    </main>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- main area: Style workspace -->
+    <sc-if value="{{ isStyle }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:0 0 62px;display:flex;flex-direction:column;background:#1b1e24;border-right:1px solid #2a2e37;padding-top:4px;gap:2px">
+        <sc-for list="{{ styleRail }}" as="r" hint-placeholder-count="4">
+          <button style="display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;padding:7px 0 6px;background:{{ r.bg }};border:none;border-left:2px solid {{ r.mark }};color:{{ r.fg }};font:inherit;cursor:pointer" style-hover="background:#242935" onClick="{{ r.onClick }}">
+            <span style="font-size:14px;line-height:1">{{ r.glyph }}</span>
+            <span style="font-size:9.5px;letter-spacing:0.04em;text-transform:uppercase">{{ r.label }}</span>
+          </button>
+        </sc-for>
+        <div style="flex:1"></div>
+        <div style="padding:8px 6px;font-size:9.5px;color:#6b7280;text-align:center;line-height:1.35">theme<br />.css</div>
+      </div>
+
+      <div style="flex:1.15 1 0;min-width:300px;display:flex;flex-direction:column;background:#16181d;border-right:1px solid #2a2e37;min-height:0">
+        <div style="flex:0 0 auto;display:flex;align-items:baseline;gap:8px;padding:9px 12px 7px;border-bottom:1px solid #23272f;white-space:nowrap">
+          <h2 style="flex:0 0 auto;margin:0;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">{{ styleCat }}</h2>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:#6b7280">{{ styleCatNote }}</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding-bottom:12px">
+          <sc-for list="{{ tokenGroups }}" as="g" hint-placeholder-count="2">
+            <div>
+              <div style="padding:9px 12px 5px;font-size:11px;color:#d7dae0;font-weight:600">{{ g.name }}</div>
+              <sc-for list="{{ g.rows }}" as="t" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:10px;padding:5px 12px;border-bottom:1px solid #1e2129">
+                  <sc-if value="{{ t.isSwatch }}" hint-placeholder-val="{{ true }}">
+                    <span style="flex:0 0 auto;width:22px;height:22px;border-radius:5px;border:1px solid rgba(255,255,255,0.12);background:{{ t.value }}"></span>
+                  </sc-if>
+                  <sc-if value="{{ t.isBar }}" hint-placeholder-val="{{ false }}">
+                    <span style="flex:0 0 auto;width:{{ t.barWidth }};height:8px;border-radius:2px;background:#3a4356"></span>
+                  </sc-if>
+                  <sc-if value="{{ t.isSample }}" hint-placeholder-val="{{ false }}">
+                    <span style="flex:0 0 auto;color:#e8eaee;font-size:{{ t.sampleSize }};font-weight:{{ t.sampleWeight }};line-height:1;white-space:nowrap">Ag</span>
+                  </sc-if>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                    <span style="font-family:ui-monospace, monospace;font-size:11px;color:#d7dae0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.token }}</span>
+                    <span style="font-size:10px;color:#6b7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.usage }}</span>
+                  </div>
+                  <input type="text" value="{{ t.value }}" onChange="{{ t.onChange }}" style="flex:0 0 94px;box-sizing:border-box;height:24px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font-family:ui-monospace, monospace;font-size:11px" style-focus="border-color:#328ec1;outline:none" />
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex:1 1 0;min-width:260px;display:flex;flex-direction:column;background:#101216;min-height:0">
+        <div style="flex:0 0 auto;display:flex;align-items:baseline;gap:8px;padding:9px 12px 7px;border-bottom:1px solid #1e2129;background:#15171c;white-space:nowrap">
+          <h2 style="flex:0 0 auto;margin:0;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">Live preview</h2>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;color:#6b7280">{{ previewNote }}</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding:16px">
+          <div style="background:{{ pageBg }};color:{{ pageFg }};border-radius:6px;padding:18px;display:flex;flex-direction:column;gap:18px;box-shadow:0 14px 30px rgba(0,0,0,0.4)">
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:ui-monospace, monospace;font-size:10px;color:{{ pageMutedFg }}">type scale</span>
+              <span style="font-size:{{ themeH1 }};font-weight:700;line-height:1.15">{{ specH1 }}</span>
+              <span style="font-size:{{ themeH2 }};font-weight:700;line-height:1.15">{{ specH2 }}</span>
+              <span style="font-size:{{ themeH3 }};font-weight:700;line-height:1.2">{{ specH3 }}</span>
+              <span style="font-size:1em;line-height:1.5">{{ specBody }}</span>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:ui-monospace, monospace;font-size:10px;color:{{ pageMutedFg }}">tier 1 surface</span>
+              <div style="padding:16px;border-radius:{{ themeCardRadius }};background:{{ cardBg }};box-shadow:{{ cardShadow }};display:flex;flex-direction:column;gap:8px">
+                <span style="font-size:{{ themeH2 }};font-weight:700">{{ specH1 }}</span>
+                <span style="font-size:1em">{{ specBody2 }}</span>
+                <div style="display:flex;gap:8px;padding-top:4px">
+                  <span style="padding:0.5rem 1.25rem;border-radius:{{ themeCtlRadius }};background:{{ cardBg }};box-shadow:0 0 4px 0 rgba(44,34,30,0.07),3px 3px 8px rgba(44,34,30,0.18),inset 0 1px 0 rgba(255,255,255,0.95),inset 0 -2px 4px rgba(44,34,30,0.18);font-size:1em">{{ specControl }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:ui-monospace, monospace;font-size:10px;color:{{ pageMutedFg }}">ConfidenceBar</span>
+              <div style="display:flex;gap:6px">
+                <sc-for list="{{ previewSegments }}" as="s" hint-placeholder-count="4">
+                  <div style="flex:1;display:flex;flex-direction:column;border-radius:2px;border:{{ s.border }};opacity:{{ s.opacity }};background-color:{{ s.fill }}">
+                    <span style="margin-top:12px;padding:0 4px 4px;text-align:center;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:0.025em;color:{{ s.text }};mix-blend-mode:{{ s.blend }}">{{ s.label }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:ui-monospace, monospace;font-size:10px;color:{{ pageMutedFg }}">provenance ladder · six rungs</span>
+              <div style="display:flex;flex-wrap:wrap;gap:5px">
+                <sc-for list="{{ previewLadder }}" as="r" hint-placeholder-count="6">
+                  <span style="display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:{{ themePillRadius }};border:{{ r.border }};background:{{ pageMuted }};font-size:10px;text-transform:uppercase;letter-spacing:0.04em;font-weight:600">
+                    <span style="width:8px;height:8px;border-radius:9999px;background:{{ r.fill }};border:{{ r.border }}"></span>{{ r.label }}
+                    <sc-if value="{{ r.note }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-weight:400;text-transform:none;letter-spacing:0;color:{{ pageMutedFg }}">{{ r.note }}</span>
+                    </sc-if>
+                  </span>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:ui-monospace, monospace;font-size:10px;color:{{ pageMutedFg }}">states</span>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="padding:10px 12px;border:1px dashed rgba(44,34,30,0.28);border-radius:8px;background:{{ pageMuted }};font-size:12px;color:{{ pageMutedFg }}">No sources yet</div>
+                <div style="padding:10px 12px;border:1px dashed #d9b45b;border-radius:8px;background:rgba(217,180,91,0.10);font-size:12px">Needs data hookup</div>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:ui-monospace, monospace;font-size:10px;color:{{ pageMutedFg }}">block spacing</span>
+              <div style="display:flex;flex-direction:column;gap:0">
+                <div style="height:8px;background:{{ pageMuted }};border-radius:2px"></div>
+                <div style="height:{{ themeSpaceM }}"></div>
+                <div style="height:8px;background:{{ pageMuted }};border-radius:2px"></div>
+                <div style="height:{{ themeSpaceL }}"></div>
+                <div style="height:8px;background:{{ pageMuted }};border-radius:2px"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- main area: Workshop workspace -->
+    <sc-if value="{{ isWorkshop }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:0 1 236px;min-width:186px;display:flex;flex-direction:column;background:#1b1e24;border-right:1px solid #2a2e37;min-height:0">
+        <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 10px 6px;white-space:nowrap">
+          <h2 style="flex:1;min-width:0;margin:0;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">Build</h2>
+          <span style="flex:0 0 auto;font-size:10px;color:#6b7280">part by part</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;min-height:0">
+          <sc-for list="{{ subjectGroups }}" as="g" hint-placeholder-count="2">
+            <div style="border-top:1px solid #23272f">
+              <div style="padding:8px 10px 5px;font-size:11px;color:#d7dae0;font-weight:600">{{ g.name }}</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:0 10px 8px">
+                <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="4">
+                  <button style="display:flex;align-items:center;gap:6px;padding:5px 7px;background:{{ i.bg }};border:1px solid {{ i.border }};border-radius:5px;color:{{ i.fg }};font:inherit;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap" style-hover="border-color:#3a4356" onClick="{{ i.onClick }}">
+                    <span style="flex:0 0 auto;color:#6fb8ea;width:12px;text-align:center">{{ i.icon }}</span>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ i.label }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="border-top:1px solid #23272f">
+            <div style="padding:8px 10px 5px;display:flex;align-items:baseline;gap:6px">
+              <span style="flex:0 0 auto;font-size:11px;color:#d7dae0;font-weight:600">Anatomy</span>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:10px;color:#6b7280">{{ subjectLabel }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;padding:0 10px 10px">
+              <sc-for list="{{ anatomyRows }}" as="p" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;gap:5px">
+                  <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#d7dae0">{{ p.label }}</span>
+                  <select value="{{ p.value }}" onChange="{{ p.onChange }}" style="flex:0 0 88px;box-sizing:border-box;height:20px;background:#12141a;border:1px solid #2a2e37;border-radius:4px;color:#8b919d;font:inherit;font-size:10.5px;padding:0 3px" style-focus="border-color:#328ec1;outline:none">
+                    <sc-for list="{{ p.options }}" as="o" hint-placeholder-count="3">
+                      <option value="{{ o }}">{{ o }}</option>
+                    </sc-for>
+                  </select>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="border-top:1px solid #23272f">
+            <div style="padding:8px 10px 5px;font-size:11px;color:#d7dae0;font-weight:600">States</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:0 10px 12px">
+              <sc-for list="{{ wsStates }}" as="st" hint-placeholder-count="4">
+                <button style="height:22px;padding:0 7px;background:{{ st.bg }};border:1px solid {{ st.border }};border-radius:5px;color:{{ st.fg }};font:inherit;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap" onClick="{{ st.onClick }}">{{ st.label }}</button>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;display:flex;flex-direction:column;min-width:260px;background:#101216;min-height:0">
+        <div ref="{{ graphRef }}" style="flex:1;position:relative;overflow:auto;min-height:0;background-color:#101216;background-image:radial-gradient(#20242c 1px, transparent 1px);background-size:16px 16px">
+          <div style="position:relative;width:{{ graphScaleW }}px;height:{{ graphScaleH }}px">
+          <div style="position:relative;width:{{ graphW }}px;height:{{ graphH }}px;transform:{{ graphScale }};transform-origin:0 0">
+            <svg width="{{ graphW }}" height="{{ graphH }}" style="position:absolute;top:0;left:0;pointer-events:none;z-index:1">
+              <sc-for list="{{ wires }}" as="w" hint-placeholder-count="6">
+                <path d="{{ w.d }}" fill="none" stroke="{{ w.color }}" strokeWidth="1.6" opacity="0.85"></path>
+              </sc-for>
+            </svg>
+            <sc-for list="{{ matNodes }}" as="n" hint-placeholder-count="6">
+              <div style="position:absolute;left:{{ n.x }}px;top:{{ n.y }}px;width:{{ n.w }}px;background:#1f242c;border:1px solid {{ n.border }};border-radius:7px;box-shadow:0 10px 24px rgba(0,0,0,0.5);z-index:{{ n.z }}" onMouseDown="{{ n.onSelect }}">
+                <div onMouseDown="{{ n.onGrab }}" style="display:flex;align-items:center;gap:6px;height:20px;padding:0 8px;background:{{ n.headBg }};color:{{ n.headFg }};border-bottom:1px solid #2a2e37;border-radius:6px 6px 0 0;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;cursor:grab;user-select:none">
+                  <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ n.title }}</span>
+                  <span style="flex:0 0 auto;opacity:0.55">&#8942;&#8942;</span>
+                </div>
+                <div style="position:relative;padding:8px;display:flex;flex-direction:column;gap:7px">
+                  <sc-if value="{{ n.hasOut }}" hint-placeholder-val="{{ true }}">
+                    <span style="position:absolute;top:-14px;right:-5px;width:9px;height:9px;border-radius:9999px;background:{{ n.socket }};border:1px solid #101216"></span>
+                  </sc-if>
+                  <sc-for list="{{ n.inSockets }}" as="sk" hint-placeholder-count="0">
+                    <span style="position:absolute;top:{{ sk.top }}px;left:-5px;width:9px;height:9px;border-radius:9999px;background:{{ sk.color }};border:1px solid #101216"></span>
+                  </sc-for>
+                  <sc-for list="{{ n.controls }}" as="c" hint-placeholder-count="2">
+                    <div style="display:flex;flex-direction:column;gap:3px">
+                      <div style="display:flex;align-items:baseline;gap:6px">
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:10px;color:#8b919d">{{ c.label }}</span>
+                        <span style="flex:0 0 auto;font-family:ui-monospace, monospace;font-size:10px;color:#d7dae0">{{ c.display }}</span>
+                      </div>
+                      <sc-if value="{{ c.isRange }}" hint-placeholder-val="{{ true }}">
+                        <input type="range" min="{{ c.min }}" max="{{ c.max }}" step="{{ c.step }}" value="{{ c.value }}" onChange="{{ c.onChange }}" style="width:100%;height:12px;accent-color:#6fb8ea;background:transparent;cursor:pointer" />
+                      </sc-if>
+                      <sc-if value="{{ c.isSwatch }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;gap:4px">
+                          <sc-for list="{{ c.swatches }}" as="sw" hint-placeholder-count="4">
+                            <button style="flex:1;height:18px;border-radius:4px;background:{{ sw.color }};border:1px solid {{ sw.border }};cursor:pointer" title="{{ sw.title }}" onClick="{{ sw.onClick }}"></button>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ c.isReadout }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-family:ui-monospace, monospace;font-size:9.5px;line-height:1.5;color:#8b919d;word-break:break-all;background:#12141a;border:1px solid #2a2e37;border-radius:4px;padding:5px 6px">{{ c.text }}</div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          </div>
+        </div>
+
+        <div style="flex:0 0 auto;max-height:134px;display:flex;flex-wrap:nowrap;gap:10px;padding:9px 10px;background:#15171c;border-top:1px solid #2a2e37;overflow-x:auto;overflow-y:hidden">
+          <div style="flex:0 0 auto;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em">Material</span>
+            <div style="display:flex;align-items:center;justify-content:center;width:122px;height:86px;border-radius:8px;background:{{ groundBg }}">
+              <div style="width:78px;height:52px;border-radius:{{ matRadius }};background:{{ matSurface }};box-shadow:{{ matShadowCss }}"></div>
+            </div>
+          </div>
+          <div style="flex:1 1 190px;min-width:150px;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em">{{ subjectLabel }} &middot; {{ wsState }}</span>
+            <div style="display:flex;align-items:center;justify-content:center;gap:10px;min-height:86px;padding:12px;border-radius:8px;background:{{ groundBg }};box-sizing:border-box">
+              <sc-if value="{{ previewIsButton }}" hint-placeholder-val="{{ true }}">
+                <span style="display:inline-flex;align-items:center;padding:0.55rem 1.3rem;border-radius:{{ matRadius }};background:{{ matSurface }};box-shadow:{{ matShadowCss }};color:{{ pageFg }};font-family:Cabin, system-ui, sans-serif;font-size:13px;opacity:{{ previewOpacity }}">{{ previewLabel }}</span>
+              </sc-if>
+              <sc-if value="{{ previewIsCard }}" hint-placeholder-val="{{ false }}">
+                <div style="width:100%;max-width:250px;padding:14px 16px;border-radius:{{ matRadius }};background:{{ matSurface }};box-shadow:{{ matShadowCss }};color:{{ pageFg }};opacity:{{ previewOpacity }};display:flex;flex-direction:column;gap:5px">
+                  <span style="font-family:'Goudy Old Style', Georgia, serif;font-size:16px">{{ previewLabel }}</span>
+                  <span style="font-family:Cabin, system-ui, sans-serif;font-size:11.5px;color:{{ pageMutedFg }}">Surfaces straddle the ground's luminance.</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ previewIsField }}" hint-placeholder-val="{{ false }}">
+                <div style="width:100%;max-width:250px;padding:0.6rem 0.85rem;border-radius:{{ matRadius }};background:{{ matSurface }};box-shadow:{{ matShadowCss }};color:{{ pageMutedFg }};font-family:Cabin, system-ui, sans-serif;font-size:12.5px;opacity:{{ previewOpacity }}">{{ previewLabel }}</div>
+              </sc-if>
+            </div>
+          </div>
+          <div style="flex:1 1 210px;min-width:160px;display:flex;flex-direction:column;gap:5px;min-height:0">
+            <div style="display:flex;align-items:baseline;gap:6px">
+              <span style="flex:1;min-width:0;font-size:9.5px;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em">Writes to theme.css</span>
+              <span style="flex:0 0 auto;font-size:9.5px;color:{{ matDirtyColor }}">{{ matDirtyLabel }}</span>
+            </div>
+            <div style="flex:1;overflow:auto;max-height:86px;background:#12141a;border:1px solid #2a2e37;border-radius:6px;padding:7px 8px;font-family:ui-monospace, monospace;font-size:10px;line-height:1.65;color:#8b919d;white-space:pre">{{ matTokens }}</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- constant right column: Outliner over Properties -->
+    <div style="flex:0 1 302px;min-width:230px;display:flex;flex-direction:column;background:#1b1e24;border-left:1px solid #2a2e37;min-height:0">
+
+      <div style="flex:0 0 38%;min-height:132px;display:flex;flex-direction:column;border-bottom:1px solid #2a2e37">
+        <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 10px 6px;white-space:nowrap">
+          <h2 style="flex:0 0 auto;margin:0;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">Outliner</h2>
+          <div style="flex:1 1 0;min-width:4px"></div>
+          <div style="flex:0 0 auto;display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px">
+            <sc-for list="{{ outlinerModes }}" as="o" hint-placeholder-count="2">
+              <button style="height:17px;padding:0 7px;border:none;border-radius:3px;background:{{ o.bg }};color:{{ o.fg }};font:inherit;font-size:11px;cursor:pointer" onClick="{{ o.onClick }}">{{ o.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding-bottom:8px">
+          <sc-for list="{{ outlinerRows }}" as="r" hint-placeholder-count="10">
+            <div style="display:flex;align-items:center;gap:5px;height:20px;padding-right:8px;padding-left:{{ r.pad }};background:{{ r.bg }};border-left:2px solid {{ r.mark }};box-sizing:border-box;cursor:pointer" style-hover="background:#242935" onClick="{{ r.onClick }}">
+              <button style="flex:0 0 11px;width:11px;background:none;border:none;padding:0;color:#6b7280;font-size:9px;cursor:pointer;line-height:1" onClick="{{ r.onToggle }}">{{ r.caret }}</button>
+              <span style="flex:0 0 auto;width:12px;text-align:center;color:{{ r.glyphColor }};font-size:11px">{{ r.glyph }}</span>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:{{ r.fg }}">{{ r.label }}</span>
+              <sc-if value="{{ r.note }}" hint-placeholder-val="{{ false }}">
+                <span style="flex:0 0 auto;color:#d9b45b;font-size:10px">&#9998;</span>
+              </sc-if>
+              <sc-if value="{{ r.data }}" hint-placeholder-val="{{ false }}">
+                <span style="flex:0 0 auto;width:5px;height:5px;border-radius:99px;background:#d9b45b"></span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex:1;display:flex;min-height:0">
+        <div style="flex:0 0 30px;display:flex;flex-direction:column;background:#16181d;border-right:1px solid #2a2e37;padding-top:4px;gap:1px">
+          <sc-for list="{{ propTabs }}" as="p" hint-placeholder-count="6">
+            <button title="{{ p.label }}" style="height:28px;background:{{ p.bg }};border:none;border-left:2px solid {{ p.mark }};color:{{ p.fg }};font-size:13px;cursor:pointer;line-height:1" style-hover="background:#242935" onClick="{{ p.onClick }}">{{ p.glyph }}</button>
+          </sc-for>
+        </div>
+
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+          <div style="flex:0 0 auto;padding:8px 10px 7px;border-bottom:1px solid #23272f">
+            <div style="display:flex;align-items:center;gap:6px;white-space:nowrap">
+              <span style="flex:0 0 auto;width:7px;height:7px;background:{{ selAccent }};border-radius:2px"></span>
+              <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:#fff;font-weight:600">{{ selTitle }}</span>
+              <span style="flex:0 0 auto;font-size:11px;color:#8b919d">{{ selKind }}</span>
+            </div>
+            <div style="margin-top:3px;display:flex;align-items:baseline;gap:6px;white-space:nowrap">
+              <span style="flex:0 0 auto;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">{{ propTab }}</span>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace, monospace;font-size:10.5px;color:#6b7280">{{ selPath }}</span>
+            </div>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;overflow-x:hidden">
+            <sc-if value="{{ noSelection }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:12px 10px;font-size:11px;color:#6b7280;line-height:1.5">Nothing selected. Pick a row in the Outliner, or click something on the page.</div>
+            </sc-if>
+
+            <sc-if value="{{ tabContent }}" hint-placeholder-val="{{ true }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:6px">
+                <sc-if value="{{ selHasText }}" hint-placeholder-val="{{ true }}">
+                  <input type="text" value="{{ selText }}" onChange="{{ onText }}" style="width:100%;box-sizing:border-box;height:24px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font:inherit" style-focus="border-color:#328ec1;outline:none" />
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">Reads as</span>
+                    <span style="flex:1;min-width:0;color:#d7dae0">{{ selReadsAs }}</span>
+                  </div>
+                  <div style="font-size:10.5px;color:#6b7280;line-height:1.5">Double-click the element on the page to edit in place.</div>
+                </sc-if>
+                <sc-if value="{{ isSectionSel }}" hint-placeholder-val="{{ false }}">
+                  <input type="text" value="{{ secLabel }}" onChange="{{ onSecLabel }}" style="width:100%;box-sizing:border-box;height:24px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font:inherit" style-focus="border-color:#328ec1;outline:none" />
+                  <div style="font-size:10.5px;color:#6b7280;line-height:1.5">Section names are labels for you and for the Outliner. They don't render on the page.</div>
+                </sc-if>
+                <sc-if value="{{ contentEmpty }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:11px;color:#6b7280;line-height:1.5">{{ contentEmptyLabel }}</div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ tabPlacement }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:6px">
+                <sc-if value="{{ isItemSel }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">In column</span>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d7dae0">{{ selColumn }}</span>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isItemSel }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d;line-height:1.25">Space above</span>
+                    <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                      <sc-for list="{{ spacings }}" as="s" hint-placeholder-count="3">
+                        <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ s.bg }};color:{{ s.fg }};font:inherit;cursor:pointer" onClick="{{ s.onClick }}">{{ s.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d;line-height:1.25">Space below</span>
+                    <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                      <sc-for list="{{ spacingsBelow }}" as="s" hint-placeholder-count="3">
+                        <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ s.bg }};color:{{ s.fg }};font:inherit;cursor:pointer" onClick="{{ s.onClick }}">{{ s.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+
+                  <div style="border:1px solid #2a2e37;border-radius:6px;background:#12141a;padding:7px 8px 8px;display:flex;flex-direction:column;gap:5px">
+                    <div style="display:flex;align-items:baseline;justify-content:space-between">
+                      <span style="font-size:9.5px;color:#8b919d;text-transform:uppercase;letter-spacing:0.08em">Margin</span>
+                      <span style="font-family:ui-monospace, monospace;font-size:9.5px;color:#6b7280">any CSS length</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:44px 1fr 44px;gap:4px;align-items:center;justify-items:center">
+                      <span></span>
+                      <input type="text" value="{{ boxMT.value }}" placeholder="{{ boxMT.placeholder }}" onChange="{{ boxMT.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                      <span></span>
+                      <input type="text" value="{{ boxML.value }}" placeholder="{{ boxML.placeholder }}" onChange="{{ boxML.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                      <div style="width:100%;box-sizing:border-box;border:1px dashed #3a4356;border-radius:5px;padding:6px 5px;display:grid;grid-template-columns:44px 1fr 44px;gap:4px;align-items:center;justify-items:center">
+                        <span></span>
+                        <input type="text" value="{{ boxPT.value }}" placeholder="{{ boxPT.placeholder }}" onChange="{{ boxPT.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                        <span></span>
+                        <input type="text" value="{{ boxPL.value }}" placeholder="{{ boxPL.placeholder }}" onChange="{{ boxPL.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                        <span style="font-size:9.5px;color:#6b7280;text-transform:uppercase;letter-spacing:0.08em">padding</span>
+                        <input type="text" value="{{ boxPR.value }}" placeholder="{{ boxPR.placeholder }}" onChange="{{ boxPR.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                        <span></span>
+                        <input type="text" value="{{ boxPB.value }}" placeholder="{{ boxPB.placeholder }}" onChange="{{ boxPB.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                        <span></span>
+                      </div>
+                      <input type="text" value="{{ boxMR.value }}" placeholder="{{ boxMR.placeholder }}" onChange="{{ boxMR.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                      <span></span>
+                      <input type="text" value="{{ boxMB.value }}" placeholder="{{ boxMB.placeholder }}" onChange="{{ boxMB.onChange }}" style="width:44px;box-sizing:border-box;height:20px;background:#1b1e24;border:1px solid #2a2e37;border-radius:4px;color:#e8eaee;text-align:center;font-family:ui-monospace, monospace;font-size:10px;padding:0 2px" style-focus="border-color:#328ec1;outline:none" />
+                      <span></span>
+                    </div>
+                  </div>
+
+                  <sc-for list="{{ sizeRows }}" as="r" hint-placeholder-count="3">
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">{{ r.label }}</span>
+                      <input type="text" value="{{ r.a.value }}" placeholder="{{ r.a.placeholder }}" onChange="{{ r.a.onChange }}" title="{{ r.a.prop }}" style="flex:1;min-width:0;box-sizing:border-box;height:22px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font-family:ui-monospace, monospace;font-size:11px" style-focus="border-color:#328ec1;outline:none" />
+                      <input type="text" value="{{ r.b.value }}" placeholder="{{ r.b.placeholder }}" onChange="{{ r.b.onChange }}" title="{{ r.b.prop }}" style="flex:1;min-width:0;box-sizing:border-box;height:22px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font-family:ui-monospace, monospace;font-size:11px" style-focus="border-color:#328ec1;outline:none" />
+                    </div>
+                  </sc-for>
+
+                  <sc-for list="{{ flowSelects }}" as="f" hint-placeholder-count="4">
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">{{ f.label }}</span>
+                      <select value="{{ f.value }}" onChange="{{ f.onChange }}" style="flex:1;min-width:0;box-sizing:border-box;height:22px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 5px;font:inherit" style-focus="border-color:#328ec1;outline:none">
+                        <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="4">
+                          <option value="{{ o }}">{{ o }}</option>
+                        </sc-for>
+                      </select>
+                    </div>
+                  </sc-for>
+
+                  <sc-if value="{{ showInset }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">Inset</span>
+                      <div style="flex:1;min-width:0;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:4px">
+                        <sc-for list="{{ insetFields }}" as="f" hint-placeholder-count="4">
+                          <input type="text" value="{{ f.value }}" placeholder="{{ f.placeholder }}" onChange="{{ f.onChange }}" title="{{ f.prop }}" style="min-width:0;box-sizing:border-box;height:22px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 5px;text-align:center;font-family:ui-monospace, monospace;font-size:10px" style-focus="border-color:#328ec1;outline:none" />
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">Z-index</span>
+                    <input type="text" value="{{ zField.value }}" placeholder="{{ zField.placeholder }}" onChange="{{ zField.onChange }}" style="flex:1;min-width:0;box-sizing:border-box;height:22px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font-family:ui-monospace, monospace;font-size:11px" style-focus="border-color:#328ec1;outline:none" />
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isColumnSel }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">Width</span>
+                      <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                        <sc-for list="{{ widths }}" as="w" hint-placeholder-count="5">
+                          <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ w.bg }};color:{{ w.fg }};font:inherit;cursor:pointer" onClick="{{ w.onClick }}">{{ w.label }}</button>
+                        </sc-for>
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">Share</span>
+                      <span style="flex:1;min-width:0;color:#d7dae0">{{ colShare }}</span>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">Contains</span>
+                      <span style="flex:1;min-width:0;color:#d7dae0">{{ colContains }}</span>
+                    </div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isSectionSel }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">Columns</span>
+                    <span style="flex:1;min-width:0;color:#d7dae0">{{ secColumnCount }}</span>
+                    <button style="flex:0 0 auto;height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#d7dae0;font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ addColumn }}">Add</button>
+                  </div>
+                </sc-if>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <span style="flex:0 0 62px;color:#8b919d;white-space:nowrap">Order</span>
+                  <div style="display:flex;gap:4px">
+                    <button style="height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ upColor }};font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ moveUp }}">{{ upLabel }}</button>
+                    <button style="height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:{{ downColor }};font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ moveDown }}">{{ downLabel }}</button>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ tabStyle }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:6px">
+                <sc-if value="{{ selIsHeading }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">Level</span>
+                    <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                      <sc-for list="{{ levels }}" as="l" hint-placeholder-count="3">
+                        <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ l.bg }};color:{{ l.fg }};font:inherit;cursor:pointer" onClick="{{ l.onClick }}">{{ l.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ selHasText }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">Align</span>
+                    <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                      <sc-for list="{{ aligns }}" as="a" hint-placeholder-count="3">
+                        <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ a.bg }};color:{{ a.fg }};font:inherit;cursor:pointer" onClick="{{ a.onClick }}">{{ a.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isSectionSel }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 62px;color:#8b919d">Surface</span>
+                    <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                      <sc-for list="{{ surfaceModes }}" as="m" hint-placeholder-count="2">
+                        <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ m.bg }};color:{{ m.fg }};font:inherit;cursor:pointer" onClick="{{ m.onClick }}">{{ m.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <span style="flex:0 0 62px;color:#8b919d">Tokens</span>
+                  <button style="flex:0 0 auto;height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#d7dae0;font:inherit;cursor:pointer;white-space:nowrap" style-hover="background:#2b3342" onClick="{{ gotoStyle }}">Open Style workspace</button>
+                </div>
+                <div style="background:#12141a;border:1px solid #2a2e37;border-radius:6px;padding:7px 8px;font-family:ui-monospace, monospace;font-size:10.5px;line-height:1.6;color:#8b919d">{{ advancedCss }}</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ tabProps }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:6px">
+                <div style="font-family:ui-monospace, monospace;font-size:10.5px;color:#8b919d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ propsFile }}</div>
+                <sc-for list="{{ propsRows }}" as="p" hint-placeholder-count="2">
+                  <div style="display:flex;gap:6px;align-items:center">
+                    <span style="flex:0 0 74px;min-width:0;overflow:hidden;text-overflow:ellipsis;color:#8b919d" title="{{ p.typeText }}">{{ p.name }}</span>
+                    <input type="text" value="{{ p.value }}" onChange="{{ p.onChange }}" style="flex:1;min-width:0;box-sizing:border-box;height:24px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font:inherit" style-focus="border-color:#328ec1;outline:none" />
+                  </div>
+                </sc-for>
+                <sc-if value="{{ propsEmpty }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:11px;color:#6b7280;line-height:1.5">No props interface found for this component.</div>
+                </sc-if>
+                <div style="font-size:10.5px;color:#6b7280;line-height:1.5">Controls are derived from the component's TypeScript props interface. Values are written into the page document, not the component.</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ tabData }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:6px">
+                <sc-if value="{{ isItemSel }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <div style="display:flex;gap:6px;align-items:center">
+                      <span style="flex:0 0 62px;color:#8b919d">Value</span>
+                      <div style="display:flex;gap:2px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;padding:2px;flex:1;min-width:0">
+                        <sc-for list="{{ valueModes }}" as="v" hint-placeholder-count="2">
+                          <button style="flex:1;min-width:0;height:18px;border:none;border-radius:3px;background:{{ v.bg }};color:{{ v.fg }};font:inherit;cursor:pointer" onClick="{{ v.onClick }}">{{ v.label }}</button>
+                        </sc-for>
+                      </div>
+                    </div>
+                    <sc-if value="{{ selNeedsData }}" hint-placeholder-val="{{ true }}">
+                      <div style="padding:8px 9px;background:#12141a;border:1px solid #2a2e37;border-radius:6px;display:flex;flex-direction:column;gap:6px">
+                        <div style="display:flex;align-items:center;gap:6px">
+                          <span style="flex:0 0 auto;width:5px;height:5px;border-radius:99px;background:#d9b45b"></span>
+                          <span style="color:#d7dae0">Awaiting data</span>
+                        </div>
+                        <div style="font-family:ui-monospace, monospace;font-size:10.5px;color:#8b919d;line-height:1.5">{{ selBinding }}</div>
+                        <div style="display:flex;gap:5px">
+                          <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 8px;background:#2b3342;border:1px solid #328ec1;border-radius:5px;color:#fff;font:inherit;cursor:pointer" style-hover="background:#328ec1" onClick="{{ hookUp }}">Hook up&#8230;</button>
+                          <button style="flex:0 0 auto;white-space:nowrap;height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#d7dae0;font:inherit;cursor:pointer" style-hover="background:#2b3342" onClick="{{ keepMock }}">Keep mock</button>
+                        </div>
+                      </div>
+                    </sc-if>
+                    <div style="display:flex;gap:6px;align-items:flex-start">
+                      <span style="flex:0 0 62px;color:#8b919d">Show in</span>
+                      <div style="display:flex;flex-wrap:wrap;gap:4px;flex:1;min-width:0">
+                        <sc-for list="{{ states }}" as="s" hint-placeholder-count="4">
+                          <button style="padding:2px 7px;border-radius:999px;background:{{ s.pillBg }};border:1px solid {{ s.pillBorder }};color:{{ s.pillFg }};font:inherit;cursor:pointer" onClick="{{ s.onClick }}">{{ s.label }}</button>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+                <div style="padding-top:2px;font-size:11px;color:#6b7280;line-height:1.5">{{ dataHint }}</div>
+                <div style="display:flex;flex-direction:column;gap:5px">
+                  <span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">Objects on this page</span>
+                  <sc-for list="{{ objects }}" as="o" hint-placeholder-count="3">
+                    <div style="padding:7px 8px;background:#242935;border:1px solid #2a2e37;border-radius:6px;display:flex;flex-direction:column;gap:4px;cursor:pointer" style-hover="border-color:#3a4356" onClick="{{ o.onClick }}">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <span style="flex:0 0 auto;width:5px;height:5px;border-radius:99px;background:{{ o.dot }}"></span>
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e8eaee;font-weight:600">{{ o.name }}</span>
+                        <span style="flex:0 0 auto;font-size:10px;color:{{ o.dot }}">{{ o.status }}</span>
+                      </div>
+                      <div style="font-family:ui-monospace, monospace;font-size:10px;color:#8b919d;line-height:1.5">{{ o.fields }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ tabNotes }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:8px">
+                <sc-if value="{{ isItemSel }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <input type="text" value="{{ selNote }}" placeholder="No note on this element" onChange="{{ onNote }}" style="width:100%;box-sizing:border-box;height:24px;background:#12141a;border:1px solid #2a2e37;border-radius:5px;color:#e8eaee;padding:0 7px;font:inherit" style-focus="border-color:#328ec1;outline:none" />
+                    <button style="align-self:flex-start;height:22px;padding:0 9px;background:#3b3320;border:1px solid #4a3f24;border-radius:5px;color:#d9b45b;font:inherit;cursor:pointer;white-space:nowrap" style-hover="background:#4a3f24" onClick="{{ toggleNote }}">{{ noteBtnLabel }}</button>
+                  </div>
+                </sc-if>
+                <div style="display:flex;flex-direction:column;gap:5px">
+                  <div style="display:flex;align-items:baseline;gap:6px">
+                    <span style="flex:1;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#8b919d;font-weight:700">Open on this page</span>
+                    <span style="flex:0 0 auto;font-size:10px;color:#6b7280">{{ openNoteCount }}</span>
+                  </div>
+                  <sc-for list="{{ notes }}" as="n" hint-placeholder-count="2">
+                    <div style="padding:7px 8px;background:#242935;border:1px solid #2a2e37;border-radius:6px;display:flex;gap:7px;align-items:flex-start;cursor:pointer" style-hover="border-color:#3a4356" onClick="{{ n.onClick }}">
+                      <span style="flex:0 0 auto;width:16px;height:16px;border-radius:99px;background:#d9b45b;color:#2c221e;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-top:1px">{{ n.n }}</span>
+                      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                        <span style="color:#e8eaee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.title }}</span>
+                        <span style="font-family:ui-monospace, monospace;font-size:10px;color:#8b919d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.target }}</span>
+                      </div>
+                    </div>
+                  </sc-for>
+                  <sc-if value="{{ noNotes }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding:9px;border:1px dashed #2a2e37;border-radius:6px;font-size:11px;color:#6b7280;line-height:1.5">No open notes on this page.</div>
+                  </sc-if>
+                </div>
+                <div style="font-size:10.5px;color:#6b7280;line-height:1.5">Notes travel with the element in <span style="font-family:ui-monospace, monospace">home.json</span> and surface as TODO comments in generated source.</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ tabSource }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:9px 10px 12px;display:flex;flex-direction:column;gap:7px">
+                <div style="font-family:ui-monospace, monospace;font-size:10.5px;color:#8b919d;line-height:1.6;overflow:hidden;text-overflow:ellipsis">
+                  <a href="#">pages/home.json</a> &#8594; <a href="#">{{ selGenPath }}</a>
+                </div>
+                <div style="background:#12141a;border:1px solid #2a2e37;border-radius:6px;padding:7px 8px;font-family:ui-monospace, monospace;font-size:10.5px;line-height:1.55;overflow:hidden">
+                  <div style="color:#e07a7a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ diffMinus }}</div>
+                  <div style="color:#5fae6f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ diffPlus }}</div>
+                </div>
+                <div style="display:flex;gap:5px">
+                  <button style="height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#d7dae0;font:inherit;cursor:pointer;white-space:nowrap" style-hover="background:#2b3342">Reveal in editor</button>
+                  <button style="height:22px;padding:0 8px;background:#242935;border:1px solid #2a2e37;border-radius:5px;color:#d7dae0;font:inherit;cursor:pointer;white-space:nowrap" style-hover="background:#2b3342">Copy path</button>
+                </div>
+                <div style="font-size:10.5px;color:#6b7280;line-height:1.5">The editor writes JSON; the component is regenerated. Never edit <span style="font-family:ui-monospace, monospace">pages-gen/</span> by hand.</div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div style="flex:0 0 26px;display:flex;align-items:center;gap:10px;padding:0 10px;background:#1b1e24;border-top:1px solid #2a2e37;font-size:11px;min-width:0;overflow:hidden;white-space:nowrap">
+    <span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace, monospace;color:#8b919d">{{ crumb }}</span>
+    <div style="flex:1 1 0;min-width:8px"></div>
+    <span style="flex:0 0 auto;color:#5fae6f">{{ savedLabel }}</span>
+    <div style="flex:0 0 auto;width:1px;height:14px;background:#2a2e37"></div>
+    <span style="flex:0 0 auto;color:#8b919d">{{ needsDataLabel }}</span>
+    <div style="flex:0 0 auto;width:1px;height:14px;background:#2a2e37"></div>
+    <span style="flex:0 0 auto;font-family:ui-monospace, monospace;color:#8b919d">layout {{ layoutChip }}</span>
+    <div style="flex:0 0 auto;width:1px;height:14px;background:#2a2e37"></div>
+    <div style="flex:0 0 auto;display:flex;align-items:center;gap:4px">
+      <button style="width:19px;height:18px;background:#242935;border:1px solid #2a2e37;border-radius:4px;color:#d7dae0;font:inherit;cursor:pointer;line-height:1" title="Zoom out" onClick="{{ zoomOut }}">&#8722;</button>
+      <span style="font-family:ui-monospace, monospace;color:#d7dae0;width:32px;text-align:center">{{ zoomLabel }}</span>
+      <button style="width:19px;height:18px;background:#242935;border:1px solid #2a2e37;border-radius:4px;color:#d7dae0;font:inherit;cursor:pointer;line-height:1" title="Zoom in" onClick="{{ zoomIn }}">+</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showDevNotes&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Chrome&quot;},&quot;showRulers&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Chrome&quot;},&quot;insertColumns&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;One&quot;,&quot;Two&quot;],&quot;default&quot;:&quot;Two&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Chrome&quot;}}">
+const UI_KIT = ["ActionButton","AppBar","Badge","Card","CardStack","Checkbox","ComplianceBadge","Divider","FormFactorBar","IconButton","IconWell","input","LiftText","LinkText","Navbar","PressWell","PrimaryButton","SearchBar","Secredit","SectionCard","source-dot","StarRating","StatBar","SubHeader","Switch","TabBar","TextField","Toggle","UseRow","VoteButton"];
+
+const ZOOMS = [0.4, 0.5, 0.62, 0.75, 0.9, 1, 1.25];
+const DEVICES = { Desktop: { width: 1100, zoom: 0.62 }, Tablet: { width: 834, zoom: 0.75 }, Phone: { width: 390, zoom: 1 } };
+const WORKSPACES = [
+  { label: "Layout", hint: "compose the page" },
+  { label: "Style", hint: "edit theme tokens with a live preview" },
+  { label: "Workshop", hint: "build components and their materials" },
+];
+const PROP_TABS = [
+  { label: "Content", glyph: "✎" },
+  { label: "Placement", glyph: "⊞" },
+  { label: "Style", glyph: "◐" },
+  { label: "Props", glyph: "⚙" },
+  { label: "Data", glyph: "◈" },
+  { label: "Notes", glyph: "✱" },
+  { label: "Source", glyph: "⎇" },
+];
+const KIND = { heading: "Heading", text: "Paragraph", button: "Button", component: "Component", repeater: "Repeater", image: "Image", spacer: "Spacer" };
+const TAG = { heading: "h2", text: "p", button: "button", component: "Component", repeater: "Repeater", image: "img", spacer: "div" };
+const GLYPH = { heading: "H", text: "¶", button: "▭", component: "⧉", repeater: "≡", image: "▨", spacer: "↕" };
+const ROLES = ["Traveler", "Advisor", "Admin", "Operator"];
+const WS_SUBJECTS = [
+  { name: "New primitive", items: [["Button", "\u25AD"], ["Card", "\u25A4"], ["Field", "\u2337"], ["Pill", "\u25B0"]] },
+  { name: "From kit", items: [["SearchBar", "\u2315"], ["Badge", "\u25C8"], ["Switch", "\u2299"], ["Navbar", "\u2261"]] },
+];
+const WS_PARTS = {
+  Button: ["Surface", "Label", "Focus ring"], Card: ["Surface", "Rim", "Content"],
+  Field: ["Well", "Text", "Focus ring"], Pill: ["Surface", "Label"],
+  SearchBar: ["Well", "Icon", "Text"], Badge: ["Surface", "Label"],
+  Switch: ["Track", "Knob"], Navbar: ["Bar", "Item", "Active item"],
+};
+const WS_STATES = ["Default", "Hover", "Pressed", "Disabled"];
+const MAT_SLOTS = ["raised", "inset", "flat"];
+const PREVIEW_KIND = { Button: "button", Pill: "button", Badge: "button", Switch: "button", Navbar: "button", Card: "card", Field: "field", SearchBar: "field" };
+const PREVIEW_LABEL = { Button: "Explore", Pill: "verified", Badge: "Verified", Switch: "On", Navbar: "Coverage", Card: "Source coverage", Field: "Search bookings", SearchBar: "Search bookings" };
+const MAT_DEFAULT = { angle: 135, distance: 5, blur: 14, spread: 0, tint: "#f3e8db", innerMix: 16, rim: 95, radius: 10, pressed: 60 };
+const MAT_PRESETS = {
+  Raised: { ...MAT_DEFAULT },
+  Inset: { ...MAT_DEFAULT, innerMix: 88, blur: 10, distance: 4, rim: 30 },
+  Flat: { ...MAT_DEFAULT, innerMix: 0, blur: 4, distance: 1, spread: 0, rim: 40 },
+};
+const NODE_POS = {
+  light: { x: 20, y: 18 }, surface: { x: 20, y: 156 }, shadow: { x: 250, y: 18 },
+  depth: { x: 250, y: 152 }, rim: { x: 250, y: 286 }, out: { x: 492, y: 120 },
+};
+const CANVAS_STATES = ["Default", "Loading", "Empty", "Error"];
+/* Export name → real repo path. The kit falls back to ui/<name>.tsx; these are
+   the files that don't follow that shape. */
+const COMPONENT_FILES = {
+  ConfidenceBar: "fixtures/demo-project/src/components/product-card/confidence-bar.tsx",
+  ResultCard: "fixtures/demo-project/src/components/explore/result-card.tsx",
+  input: "fixtures/demo-project/src/components/ui/input.tsx",
+  "source-dot": "fixtures/demo-project/src/components/ui/source-dot.tsx",
+};
+const PROP_SPECS = {
+  ConfidenceBar: [["sourceCategoriesPresent", "SourceCategory[]", "reddit, amazon, youtube"], ["confidenceLevel", "\"low\" | \"medium\" | \"high\"", "medium"], ["state", "\"streaming\" | \"final\"", "final"]],
+  SearchBar: [["placeholder", "string", "Search bookings"], ["size", "\"sm\" | \"md\" | \"lg\"", "md"]],
+  Badge: [["label", "string", "Verified"], ["variant", "\"neutral\" | \"verified\"", "verified"]],
+  Switch: [["checked", "boolean", "true"], ["disabled", "boolean", "false"]],
+};
+
+const THEME = {
+  community: "#FF1414", marketplace: "#0052FF", expert: "#F5A800", handson: "#1FB35A",
+  exclusive: "", verified: "",
+  background: "#F5EADD", foreground: "#2C221E", muted: "#F0E5D9", mutedForeground: "rgba(44,34,30,0.62)", ring: "#328EC1",
+  abyss: "#0B1D33", abyssCard: "color-mix(in oklab, #0B1D33 84%, #FFFFFF)", abyssFg: "#E8EFF6",
+  beaconArmed: "#0B0C12", beaconFired: "#FFFFFF",
+  fontDisplay: "Goudy Old Style", fontBody: "Cabin", fontMono: "Inconsolata",
+  cardTop: "#f9f3eb", cardBottom: "#f3e8db", cardRim: "rgba(255,255,255,0.95)", cardDrop: "3px 3px 8px rgba(44,34,30,0.18)",
+  cardRadius: "10px", ctlRadius: "14px", pillRadius: "9999px",
+  h1: "1.9em", h2: "1.5em", h3: "1.15em",
+  spaceS: "0px", spaceM: "16px", spaceL: "32px",
+};
+
+const CARD_BG = "linear-gradient(180deg,#f9f3eb 0,#f3e8db 24px,#f3e8db 100%)";
+const CARD_SHADOW = "0 0 4px 0 rgba(44,34,30,0.07),-1px -1px 3px rgba(255,255,255,0.5),3px 3px 8px rgba(44,34,30,0.18),0 4px 6px -2px rgba(44,34,30,0.12),inset 0 1px 0 rgba(255,255,255,0.95),inset 0 -2px 4px rgba(44,34,30,0.18)";
+
+let uid = 100;
+const nid = () => `n${++uid}`;
+
+/* Verbatim from fixtures/demo-project/pages/home.json — the fixture page the
+   repo ships. Not invented copy, and not a proposal for an AA surface. */
+function initialPage() {
+  return {
+    sections: [
+      { id: "hero1", label: "hero1", card: true, columns: [
+        { id: "heroCol", flex: 1, items: [
+          { id: "h1", type: "heading", level: 2, align: "left", space: "None", text: "Adventure Alerts HQ" },
+          { id: "t1", type: "text", align: "left", space: "None", text: "Gear intelligence from every source that matters." },
+        ]},
+      ]},
+      { id: "grid1", label: "grid1", card: false, columns: [
+        { id: "colA", flex: 1, items: [] },
+        { id: "i5j0v66", flex: 1, items: [] },
+        { id: "colB", flex: 4, items: [
+          { id: "b1", type: "button", align: "left", space: "None", text: "ExploreG" },
+          { id: "h2", type: "heading", level: 2, align: "left", space: "None", text: "Source coverage" },
+          { id: "cmp2", type: "component", component: "ConfidenceBar", space: "None", phHeight: "60px", needsData: true,
+            note: "Rendering props from mocks.ts. Where the real data comes from is a dev note, not a design decision.",
+            binding: "ConfidenceBar ← mocks.ts\n· sourceCategoriesPresent\n· confidenceLevel",
+            props: { sourceCategoriesPresent: "reddit, amazon, youtube", confidenceLevel: "medium", state: "final" } },
+        ]},
+      ]},
+    ],
+  };
+}
+
+class Component extends DCLogic {
+  state = {
+    page: initialPage(),
+    selKind: "item",
+    selId: "h2",
+    editingId: null,
+    dragging: null,
+    dragOver: null,
+    workspace: "Layout",
+    themeMode: "Parchment",
+    role: "Traveler",
+    propTab: "Content",
+    outlinerMode: "Page",
+    expanded: {},
+    collapsed: {},
+    theme: { ...THEME },
+    styleCat: "Colors",
+    scope: "Page",
+    openMenu: null,
+    previewMenu: false,
+    savedAt: "11:24:07 PM",
+    rulersOn: null,
+    notesOn: null,
+    device: "Desktop",
+    zoom: 0.62,
+    canvasState: "Default",
+    search: "",
+    resolved: 0,
+    edits: 0,
+    themeEdits: 0,
+    valueMode: "Static",
+    wsSubject: "Button",
+    wsState: "Default",
+    matName: "surface-raised",
+    matPreset: "Raised",
+    mat: { ...MAT_DEFAULT },
+    matEdits: 0,
+    partMat: {},
+    nodePos: { ...NODE_POS },
+    graphZoom: 1,
+    selNode: "surface",
+    dragNode: null,
+    history: [],
+    future: [],
+  };
+
+  locate(page, id) {
+    for (const sec of page.sections) {
+      for (const col of sec.columns) {
+        const idx = col.items.findIndex((i) => i.id === id);
+        if (idx > -1) return { sec, col, idx, item: col.items[idx] };
+      }
+    }
+    return null;
+  }
+  findCol(page, id) {
+    for (const sec of page.sections) {
+      const idx = sec.columns.findIndex((c) => c.id === id);
+      if (idx > -1) return { sec, col: sec.columns[idx], idx };
+    }
+    return null;
+  }
+  findSec(page, id) {
+    const idx = page.sections.findIndex((x) => x.id === id);
+    return idx > -1 ? { sec: page.sections[idx], idx } : null;
+  }
+  allItems() {
+    const out = [];
+    this.state.page.sections.forEach((sec) => sec.columns.forEach((col) => col.items.forEach((i) => out.push({ sec, col, item: i }))));
+    return out;
+  }
+  edit(fn) {
+    this.setState((s) => {
+      const page = JSON.parse(JSON.stringify(s.page));
+      const extra = fn(page) || {};
+      return { page, edits: s.edits + 1,
+        history: [...s.history, { page: s.page, selKind: s.selKind, selId: s.selId }].slice(-40),
+        future: [], ...extra };
+    });
+  }
+  patchItem(patch) {
+    this.edit((page) => {
+      const h = this.locate(page, this.state.selId);
+      if (h) Object.assign(h.item, patch);
+    });
+  }
+  setSpace(field, prop, value) {
+    this.edit((page) => {
+      const h = this.locate(page, this.state.selId);
+      if (!h) return;
+      h.item[field] = value;
+      const css = { ...(h.item.css || {}) };
+      delete css[prop];
+      h.item.css = css;
+    });
+  }
+  patchCss(prop, raw) {
+    const value = (raw ?? "").trim();
+    this.edit((page) => {
+      const h = this.locate(page, this.state.selId);
+      if (!h) return;
+      const css = { ...(h.item.css || {}) };
+      if (value === "") delete css[prop]; else css[prop] = value;
+      h.item.css = css;
+    });
+  }
+  select(kind, id) {
+    this.setState((st) => {
+      const next = { selKind: kind, selId: id, editingId: null, openMenu: null };
+      if (kind === "item") {
+        const h = this.locate(st.page, id);
+        if (h && h.item.text === undefined && st.propTab === "Content") next.propTab = "Placement";
+      } else if (st.propTab === "Data" || (st.propTab === "Content" && kind === "column")) {
+        next.propTab = "Placement";
+      }
+      return next;
+    });
+  }
+  componentDidMount() {
+    this.onKey = (e) => {
+      const t = e.target;
+      if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+      if (e.ctrlKey || e.metaKey) return;
+      const n = "1234".indexOf(e.key);
+      if (n >= 0) {
+        e.preventDefault();
+        if (e.altKey) this.setState({ canvasState: CANVAS_STATES[n] });
+        else this.setState({ role: ROLES[n] });
+        return;
+      }
+      if (e.altKey) return;
+      if (e.key === "z" || e.key === "Z") {
+        e.preventDefault();
+        this.setState((s) => ({ themeMode: s.themeMode === "Parchment" ? "Abyss" : "Parchment" }));
+      } else if (e.key === "p" || e.key === "P") {
+        e.preventDefault();
+        this.setState((s) => ({ previewMenu: !s.previewMenu, openMenu: null }));
+      } else if (e.key === "Escape") {
+        this.setState({ previewMenu: false, openMenu: null });
+      }
+    };
+    window.addEventListener("keydown", this.onKey);
+    this.onMove = (e) => {
+      const d = this.state.dragNode;
+      if (!d) return;
+      const z = this.state.graphZoom || 1;
+      const x = Math.max(0, Math.round(d.ox + (e.clientX - d.cx) / z));
+      const y = Math.max(0, Math.round(d.oy + (e.clientY - d.cy) / z));
+      this.setState((st) => ({ nodePos: { ...st.nodePos, [d.id]: { x, y } } }));
+    };
+    this.onUp = () => { if (this.state.dragNode) this.setState({ dragNode: null }); };
+    window.addEventListener("mousemove", this.onMove);
+    window.addEventListener("mouseup", this.onUp);
+  }
+  componentWillUnmount() {
+    window.removeEventListener("keydown", this.onKey);
+    window.removeEventListener("mousemove", this.onMove);
+    window.removeEventListener("mouseup", this.onUp);
+  }
+  graphRef = (el) => {
+    if (this._graphEl === el) return;
+    if (this._graphEl) this._graphEl.removeEventListener("wheel", this.onWheel);
+    this._graphEl = el;
+    if (el) el.addEventListener("wheel", this.onWheel, { passive: false });
+  };
+  /* Wheel zooms the graph around the pointer: the content point under the
+     cursor stays under the cursor, the way a node editor should behave. */
+  onWheel = (e) => {
+    const el = this._graphEl;
+    if (!el) return;
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    const px = e.clientX - r.left;
+    const py = e.clientY - r.top;
+    const z = this.state.graphZoom;
+    const cx = (el.scrollLeft + px) / z;
+    const cy = (el.scrollTop + py) / z;
+    const nz = Math.min(2.5, Math.max(0.35, z * Math.exp(-e.deltaY * 0.0015)));
+    if (nz === z) return;
+    this.setState({ graphZoom: nz }, () => {
+      el.scrollLeft = Math.max(0, cx * nz - px);
+      el.scrollTop = Math.max(0, cy * nz - py);
+    });
+  };
+  setMat(key, value) {
+    this.setState((st) => ({ mat: { ...st.mat, [key]: value }, matEdits: st.matEdits + 1, matPreset: "" }));
+  }
+  /* One material resolved to a box-shadow. Outer and inner pairs are the two
+     halves of the same light: the ratio is the Depth node's inner/outer mix. */
+  matShadow(state) {
+    const m = this.state.mat;
+    const pressed = state === "Pressed";
+    const rad = (m.angle * Math.PI) / 180;
+    const dist = m.distance * (state === "Hover" ? 1.4 : state === "Disabled" ? 0.4 : 1);
+    const dx = Math.round(Math.cos(rad) * dist * 10) / 10;
+    const dy = Math.round(Math.sin(rad) * dist * 10) / 10;
+    const blur = Math.round(m.blur * (pressed ? 0.7 : state === "Disabled" ? 0.6 : 1) * 10) / 10;
+    const inner = pressed ? Math.max(m.innerMix, m.pressed) / 100 : m.innerMix / 100;
+    const outer = 1 - inner;
+    const dim = state === "Disabled" ? 0.5 : 1;
+    const parts = [];
+    if (outer > 0.02) {
+      parts.push(`${dx}px ${dy}px ${blur}px ${m.spread}px rgba(44,34,30,${(0.34 * outer * dim).toFixed(3)})`);
+      parts.push(`${-dx}px ${-dy}px ${blur}px ${m.spread}px rgba(255,255,255,${(0.6 * outer * dim).toFixed(3)})`);
+    }
+    if (inner > 0.02) {
+      parts.push(`inset ${dx}px ${dy}px ${blur}px rgba(44,34,30,${(0.34 * inner * dim).toFixed(3)})`);
+      parts.push(`inset ${-dx}px ${-dy}px ${blur}px rgba(255,255,255,${(0.55 * inner * dim).toFixed(3)})`);
+    }
+    if (m.rim > 2) parts.push(`inset 0 1px 0 rgba(255,255,255,${(m.rim / 100).toFixed(2)})`);
+    return parts.join(", ");
+  }
+  previewPick(patch) { this.setState({ ...patch, previewMenu: false }); }
+  setTheme(key, value) {
+    this.setState((st) => ({ theme: { ...st.theme, [key]: value }, themeEdits: st.themeEdits + 1 }));
+  }
+  segments() {
+    const t = this.state.theme;
+    /* Expert is absent on this page: its treatment is derived from the same
+       token so editing --source-expert still moves the preview. */
+    const absent = `color-mix(in oklab, ${t.expert || "#F5A800"} 46%, ${t.background})`;
+    return [
+      { label: "Community", fill: t.community, border: "1px solid transparent", opacity: "1", text: t.foreground, blend: "luminosity" },
+      { label: "Marketplace", fill: t.marketplace, border: "1px solid transparent", opacity: "1", text: t.foreground, blend: "luminosity" },
+      { label: "Expert", fill: absent, border: "1px dashed rgba(44,34,30,0.25)", opacity: "0.6", text: t.mutedForeground, blend: "normal" },
+      { label: "Hands-On", fill: t.handson, border: "1px solid transparent", opacity: "1", text: t.foreground, blend: "luminosity" },
+    ];
+  }
+  ladder() {
+    const t = this.state.theme;
+    return [
+      ["community", t.community], ["marketplace", t.marketplace], ["expert", t.expert],
+      ["hands-on", t.handson], ["exclusive", t.exclusive], ["verified", t.verified],
+    ].map(([label, value]) => ({
+      label, value,
+      fill: value || "transparent",
+      border: value ? "1px solid rgba(44,34,30,0.18)" : "1px dashed rgba(44,34,30,0.35)",
+      note: value ? "" : "no token",
+    }));
+  }
+  tagOf(it) {
+    if (!it) return "";
+    if (it.type === "component") return it.component || "Component";
+    if (it.type === "repeater") return it.collection || "collection";
+    return TAG[it.type];
+  }
+
+  performDrop() {
+    const { dragging, dragOver } = this.state;
+    if (!dragging || !dragOver) return this.setState({ dragging: null, dragOver: null });
+    const { colId, index } = dragOver;
+    this.edit((page) => {
+      const destHit = this.findCol(page, colId);
+      if (!destHit) return { dragging: null, dragOver: null };
+      const dest = destHit.col;
+      if (dragging.mode === "new") {
+        const item = { id: nid(), align: "left", space: "None", ...dragging.spec };
+        dest.items.splice(Math.min(index, dest.items.length), 0, item);
+        return { dragging: null, dragOver: null, selKind: "item", selId: item.id };
+      }
+      const src = this.locate(page, dragging.id);
+      if (!src) return { dragging: null, dragOver: null };
+      const sameCol = src.col.id === dest.id;
+      const [moved] = src.col.items.splice(src.idx, 1);
+      const at = sameCol && src.idx < index ? index - 1 : index;
+      dest.items.splice(Math.max(0, Math.min(at, dest.items.length)), 0, moved);
+      return { dragging: null, dragOver: null, selKind: "item", selId: moved.id };
+    });
+  }
+
+  undoAction() {
+    this.setState((st) => {
+      if (!st.history.length) return { openMenu: null };
+      const prev = st.history[st.history.length - 1];
+      return { page: prev.page, selKind: prev.selKind, selId: prev.selId, history: st.history.slice(0, -1),
+        future: [...st.future, { page: st.page, selKind: st.selKind, selId: st.selId }],
+        edits: Math.max(0, st.edits - 1), editingId: null, openMenu: null };
+    });
+  }
+  redoAction() {
+    this.setState((st) => {
+      if (!st.future.length) return { openMenu: null };
+      const next = st.future[st.future.length - 1];
+      return { page: next.page, selKind: next.selKind, selId: next.selId, future: st.future.slice(0, -1),
+        history: [...st.history, { page: st.page, selKind: st.selKind, selId: st.selId }],
+        edits: st.edits + 1, editingId: null, openMenu: null };
+    });
+  }
+  saveAction() {
+    const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    this.setState({ edits: 0, themeEdits: 0, savedAt: t, openMenu: null });
+  }
+  duplicateAction() {
+    this.edit((p) => {
+      const h = this.locate(p, this.state.selId);
+      if (!h) return;
+      const copy = JSON.parse(JSON.stringify(h.item));
+      copy.id = nid();
+      h.col.items.splice(h.idx + 1, 0, copy);
+      return { selKind: "item", selId: copy.id };
+    });
+  }
+  insertBlock(spec) {
+    this.edit((p) => {
+      const h = this.locate(p, this.state.selId);
+      const cols = p.sections.flatMap((x) => x.columns);
+      const dest = h ? this.findCol(p, h.col.id).col : cols[cols.length - 1];
+      const item = { id: nid(), align: "left", space: "None", ...spec };
+      const at = h ? dest.items.findIndex((i) => i.id === h.item.id) + 1 : dest.items.length;
+      dest.items.splice(at, 0, item);
+      return { selKind: "item", selId: item.id };
+    });
+  }
+  zoomBy(dir) {
+    this.setState((st) => {
+      const i = ZOOMS.reduce((best, z, idx) => (Math.abs(z - st.zoom) < Math.abs(ZOOMS[best] - st.zoom) ? idx : best), 0);
+      return { zoom: ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, i + dir))] };
+    });
+  }
+
+  workshopVals(t, ground) {
+    const s = this.state;
+    const m = s.mat;
+    const subject = s.wsSubject;
+    const shadow = this.matShadow(s.wsState);
+    const tokens = [
+      `--material-${s.matName}-radius: ${m.radius}px;`,
+      `--material-${s.matName}-surface: ${m.tint};`,
+      `--material-${s.matName}-shadow: ${this.matShadow("Default")};`,
+      `--material-${s.matName}-shadow-pressed: ${this.matShadow("Pressed")};`,
+    ].join("\n");
+
+    const rng = (label, key, min, max, step, unit) => ({
+      label, min, max, step, value: m[key], display: `${m[key]}${unit}`, text: "", swatches: [],
+      isRange: true, isSwatch: false, isReadout: false,
+      onChange: (e) => this.setMat(key, Number(e.target.value)),
+    });
+    const swatch = () => ({
+      label: "Surface tint", display: m.tint, min: 0, max: 0, step: 0, value: 0, text: "",
+      isRange: false, isSwatch: true, isReadout: false, onChange: () => {},
+      swatches: [t.cardTop, t.cardBottom, t.muted, t.background].map((c) => ({
+        color: c, title: c, border: c.toLowerCase() === m.tint.toLowerCase() ? "#6fb8ea" : "rgba(0,0,0,0.4)",
+        onClick: () => this.setMat("tint", c),
+      })),
+    });
+    const readout = (text) => ({
+      label: "box-shadow", display: "", min: 0, max: 0, step: 0, value: 0, text, swatches: [],
+      isRange: false, isSwatch: false, isReadout: true, onChange: () => {},
+    });
+
+    /* Nodes are differentiated by the chrome's neutral ramp, not by hue: the
+       four hues in this shell already mean selection state and needs-data. */
+    const defs = [
+      { id: "light", title: "Light", w: 196, ins: 0, controls: [rng("Angle", "angle", 0, 360, 1, "\u00b0"), rng("Distance", "distance", 0, 24, 0.5, "px")] },
+      { id: "surface", title: "Surface", w: 196, ins: 0, controls: [swatch(), rng("Corner radius", "radius", 0, 28, 1, "px")] },
+      { id: "shadow", title: "Shadow", w: 196, ins: 1, controls: [rng("Blur", "blur", 0, 40, 1, "px"), rng("Spread", "spread", -8, 8, 0.5, "px")] },
+      { id: "depth", title: "Depth", w: 196, ins: 1, controls: [rng("Inner / outer", "innerMix", 0, 100, 1, "%"), rng("Pressed depth", "pressed", 0, 100, 1, "%")] },
+      { id: "rim", title: "Rim highlight", w: 196, ins: 1, controls: [rng("Strength", "rim", 0, 100, 1, "%")] },
+      { id: "out", title: `Material \u00b7 ${s.matName}`, w: 244, ins: 4, controls: [readout(this.matShadow("Default"))] },
+    ];
+    const pos = (id) => s.nodePos[id] || { x: 0, y: 0 };
+    const nodes = defs.map((d) => {
+      const p = pos(d.id);
+      const on = s.selNode === d.id;
+      return { ...d, x: p.x, y: p.y,
+        border: on ? "#328ec1" : "#2a2e37",
+        headBg: on ? "#2b3342" : "#242935",
+        headFg: on ? "#ffffff" : "#8b919d",
+        socket: on ? "#8b919d" : "#3a4356",
+        z: on ? 6 : 3,
+        hasOut: d.id !== "out",
+        inSockets: Array.from({ length: d.ins }, (_, i) => ({ top: 6 + i * 16, color: on ? "#8b919d" : "#3a4356" })),
+        onSelect: () => { if (s.selNode !== d.id) this.setState({ selNode: d.id }); },
+        onGrab: (e) => { e.preventDefault(); this.setState({ selNode: d.id, dragNode: { id: d.id, cx: e.clientX, cy: e.clientY, ox: p.x, oy: p.y } }); },
+      };
+    });
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+    const outPt = (n) => [n.x + n.w, n.y + 15];
+    const inPt = (n, i) => [n.x, n.y + 31 + i * 16];
+    const link = (from, to, i) => {
+      const a = outPt(byId[from]); const b = inPt(byId[to], i);
+      const bend = Math.max(6, Math.min(Math.abs(b[0] - a[0]) / 2, 70));
+      const lit = s.selNode === from || s.selNode === to;
+      return { d: `M ${a[0]} ${a[1]} C ${a[0] + bend} ${a[1]}, ${b[0] - bend} ${b[1]}, ${b[0]} ${b[1]}`, color: lit ? "#8b919d" : "#3a4356" };
+    };
+    const wires = [link("light", "shadow", 0), link("light", "rim", 0), link("surface", "out", 0), link("shadow", "out", 1), link("depth", "out", 2), link("rim", "out", 3)];
+    const kind = PREVIEW_KIND[subject] || "button";
+    const pillOn = (on) => ({ bg: on ? "#2b3342" : "#242935", border: on ? "#328ec1" : "#2a2e37", fg: on ? "#ffffff" : "#8b919d" });
+
+    return {
+      subjectGroups: WS_SUBJECTS.map((g) => ({ name: g.name, items: g.items.map(([label, icon]) => ({
+        label, icon, ...pillOn(label === subject), onClick: () => this.setState({ wsSubject: label }),
+      })) })),
+      subjectLabel: subject,
+      anatomyRows: (WS_PARTS[subject] || []).map((label) => ({
+        label, options: MAT_SLOTS,
+        value: s.partMat[`${subject}\u00b7${label}`] || MAT_SLOTS[0],
+        onChange: (e) => this.setState((st) => ({ partMat: { ...st.partMat, [`${subject}\u00b7${label}`]: e.target.value } })),
+      })),
+      wsStates: WS_STATES.map((label) => ({ label, ...pillOn(label === s.wsState), onClick: () => this.setState({ wsState: label }) })),
+      wsState: s.wsState,
+      matNodes: nodes,
+      wires,
+      graphW: Math.max(760, ...nodes.map((n) => n.x + n.w + 40)),
+      graphH: Math.max(470, ...nodes.map((n) => n.y + 230)),
+      graphScaleW: Math.round(Math.max(760, ...nodes.map((n) => n.x + n.w + 40)) * s.graphZoom),
+      graphScaleH: Math.round(Math.max(470, ...nodes.map((n) => n.y + 230)) * s.graphZoom),
+      graphScale: `scale(${s.graphZoom})`,
+      graphRef: this.graphRef,
+      graphZoomLabel: `${Math.round(s.graphZoom * 100)}%`,
+      resetZoom: () => this.setState({ graphZoom: 1 }),
+      matName: s.matName,
+      onMatName: (e) => this.setState({ matName: e.target.value.trim() || "material" }),
+      matPresets: Object.keys(MAT_PRESETS).map((label) => ({
+        label, bg: s.matPreset === label ? "#2b3342" : "transparent", fg: s.matPreset === label ? "#ffffff" : "#8b919d",
+        onClick: () => this.setState({ mat: { ...MAT_PRESETS[label] }, matPreset: label, matEdits: s.matEdits + 1, matName: `surface-${label.toLowerCase()}` }),
+      })),
+      writeMaterial: () => this.saveAction(),
+      resetMaterial: () => this.setState({ mat: { ...MAT_DEFAULT }, matPreset: "Raised", matEdits: 0 }),
+      resetMatColor: s.matEdits ? "#d7dae0" : "#6b7280",
+      matHint: s.matEdits ? `${s.matEdits} unsaved change${s.matEdits === 1 ? "" : "s"} \u00b7 theme.css` : "in sync with theme.css",
+      matDirtyLabel: s.matEdits ? "not written yet" : "written",
+      matDirtyColor: s.matEdits ? "#d9b45b" : "#5fae6f",
+      matTokens: tokens,
+      matShadowCss: shadow,
+      matSurface: m.tint,
+      matRadius: `${m.radius}px`,
+      groundBg: ground,
+      previewIsButton: kind === "button",
+      previewIsCard: kind === "card",
+      previewIsField: kind === "field",
+      previewLabel: PREVIEW_LABEL[subject] || subject,
+      previewOpacity: s.wsState === "Disabled" ? 0.55 : 1,
+    };
+  }
+
+  buildMenus(ctx) {
+    const s = this.state;
+    const mi = (label, accel, action, opts) => {
+      const o = opts || {};
+      return { isItem: true, isSep: false, label, accel: accel || "", check: o.check || "",
+        fg: o.disabled ? "#6b7280" : "#d7dae0", hoverBg: o.disabled ? "transparent" : "#2b3342",
+        cursor: o.disabled ? "default" : "pointer",
+        onClick: (e) => { e.stopPropagation(); if (o.disabled) return; this.setState({ openMenu: null }); if (action) action(); } };
+    };
+    const sep = () => ({ isSep: true, isItem: false, label: "", accel: "", check: "", fg: "", hoverBg: "", cursor: "default", onClick: () => {} });
+    const tick = (on) => (on ? "✓" : "");
+    const dot = (on) => (on ? "•" : "");
+    const dirty = s.edits || s.themeEdits;
+
+    const defs = [
+      ["File", 224, [
+        mi("New page", "Ctrl+N", null),
+        mi("Open page…", "Ctrl+P", null),
+        sep(),
+        mi("Save to source", "Ctrl+S", () => this.saveAction(), { disabled: !dirty }),
+        mi("Revert to saved", "", () => this.setState({ page: initialPage(), theme: { ...THEME }, history: [], future: [], edits: 0, themeEdits: 0, selKind: null, selId: null }), { disabled: !dirty }),
+        sep(),
+        mi("Regenerate components", "", () => this.saveAction()),
+        mi("Reveal home.json", "", null),
+        sep(),
+        mi("Exit", "Alt+F4", null),
+      ]],
+      ["Edit", 216, [
+        mi("Undo", "Ctrl+Z", () => this.undoAction(), { disabled: !s.history.length }),
+        mi("Redo", "Ctrl+Shift+Z", () => this.redoAction(), { disabled: !s.future.length }),
+        sep(),
+        mi("Duplicate", "Ctrl+D", () => this.duplicateAction(), { disabled: !ctx.hasItem }),
+        mi("Delete", "Del", ctx.deleteSel, { disabled: !ctx.hasSelection }),
+        sep(),
+        mi("Move up", "Alt+Up", ctx.moveUp, { disabled: !ctx.canUp }),
+        mi("Move down", "Alt+Down", ctx.moveDown, { disabled: !ctx.canDown }),
+        sep(),
+        mi("Edit text in place", "F2", () => this.setState({ editingId: s.selId }), { disabled: !ctx.hasText }),
+      ]],
+      ["Insert", 200, [
+        mi("Heading", "", () => this.insertBlock({ type: "heading", text: "New heading", level: 2 })),
+        mi("Paragraph", "", () => this.insertBlock({ type: "text", text: "New paragraph." })),
+        mi("Button", "", () => this.insertBlock({ type: "button", text: "Button" })),
+        mi("Image", "", () => this.insertBlock({ type: "image", phLabel: "Image placeholder", phHeight: "120px" })),
+        mi("Spacer", "", () => this.insertBlock({ type: "spacer", phLabel: "spacer", phHeight: "32px" })),
+        sep(),
+        mi("Section", "", () => this.edit((p) => {
+          const sc = { id: nid(), label: "New section", card: true, columns: [{ id: nid(), flex: 1, items: [] }] };
+          p.sections.push(sc);
+          return { selKind: "section", selId: sc.id };
+        })),
+        mi("Column", "", ctx.addColumn),
+        sep(),
+        mi("ConfidenceBar", "", () => this.insertBlock({ type: "bar", component: "ConfidenceBar", needsData: true, note: "Needs data hookup. Bind to the synthesis output.", binding: "ConfidenceBar ← ReviewSynthesisOutput" })),
+      ]],
+      ["View", 244, [
+        mi("Layout workspace", "", () => this.setState({ workspace: "Layout" }), { check: dot(s.workspace === "Layout") }),
+        mi("Style workspace", "", () => this.setState({ workspace: "Style" }), { check: dot(s.workspace === "Style") }),
+        mi("Workshop workspace", "", () => this.setState({ workspace: "Workshop" }), { check: dot(s.workspace === "Workshop") }),
+        sep(),
+        mi("Outliner: page tree", "", () => this.setState({ outlinerMode: "Page" }), { check: dot(s.outlinerMode === "Page") }),
+        mi("Outliner: project", "", () => this.setState({ outlinerMode: "Project" }), { check: dot(s.outlinerMode === "Project") }),
+        sep(),
+        mi("Rulers", "", () => this.setState({ rulersOn: !ctx.showRulers }), { check: tick(ctx.showRulers) }),
+        mi("Dev notes", "", () => this.setState({ notesOn: !ctx.showNotes }), { check: tick(ctx.showNotes) }),
+        sep(),
+        mi("Zoom in", "Ctrl+=", () => this.zoomBy(1)),
+        mi("Zoom out", "Ctrl+-", () => this.zoomBy(-1)),
+        mi("Reset zoom", "Ctrl+0", () => this.setState({ zoom: DEVICES[s.device].zoom })),
+      ]],
+      ["Canvas", 208, [
+        mi("Desktop", "", () => this.setState({ device: "Desktop", zoom: DEVICES.Desktop.zoom }), { check: dot(s.device === "Desktop") }),
+        mi("Tablet", "", () => this.setState({ device: "Tablet", zoom: DEVICES.Tablet.zoom }), { check: dot(s.device === "Tablet") }),
+        mi("Phone", "", () => this.setState({ device: "Phone", zoom: DEVICES.Phone.zoom }), { check: dot(s.device === "Phone") }),
+        sep(),
+        mi("Preview context…", "P", () => this.setState({ previewMenu: true })),
+        mi("Default state", "Alt+1", () => this.setState({ canvasState: "Default" }), { check: dot(s.canvasState === "Default") }),
+        mi("Loading state", "Alt+2", () => this.setState({ canvasState: "Loading" }), { check: dot(s.canvasState === "Loading") }),
+        mi("Empty state", "Alt+3", () => this.setState({ canvasState: "Empty" }), { check: dot(s.canvasState === "Empty") }),
+        mi("Error state", "Alt+4", () => this.setState({ canvasState: "Error" }), { check: dot(s.canvasState === "Error") }),
+        sep(),
+        mi("Reload canvas", "Ctrl+R", null),
+        mi("Open canvas devtools", "F12", null),
+      ]],
+      ["Help", 220, [
+        mi("Documentation", "", null),
+        mi("Keyboard shortcuts", "", null),
+        sep(),
+        mi("About u-and-i", "", null),
+      ]],
+    ];
+
+    return defs.map(([label, width, items]) => ({
+      label, width: `${width}px`, items,
+      open: s.openMenu === label,
+      bg: s.openMenu === label ? "#2b3342" : "transparent",
+      fg: s.openMenu === label ? "#ffffff" : "#d7dae0",
+      onClick: (e) => { e.stopPropagation(); this.setState({ openMenu: s.openMenu === label ? null : label }); },
+      onHover: () => { if (s.openMenu && s.openMenu !== label) this.setState({ openMenu: label }); },
+    }));
+  }
+
+  insertGroups(query) {
+    const build = (label, icon, spec, data) => ({
+      label, icon, data: !!data,
+      onDragStart: (e) => { if (e.dataTransfer) e.dataTransfer.effectAllowed = "copy"; this.setState({ dragging: { mode: "new", spec } }); },
+      onClick: () => this.insertBlock(spec),
+    });
+    const specs = [
+      ["Text", "headings and copy", [
+        ["Heading", "H", { type: "heading", text: "New heading", level: 2 }],
+        ["Paragraph", "¶", { type: "text", text: "New paragraph." }],
+      ]],
+      ["Interaction", "buttons and links", [
+        ["Button", "▭", { type: "button", text: "Button" }],
+        ["Link", "↗", { type: "text", text: "Link text" }],
+      ]],
+      ["Media", "images and space", [
+        ["Image", "▨", { type: "image", phLabel: "Image placeholder", phHeight: "120px" }],
+        ["Spacer", "↕", { type: "spacer", phLabel: "spacer", phHeight: "32px" }],
+      ]],
+      ["Data", "bound to sample data", [
+        ["Repeater", "≡", { type: "repeater", collection: "alerts", phHeight: "104px", needsData: true, note: "Bind to a sample-data collection; the real source is a dev note.", binding: "Repeater ← sample data: alerts" }, true],
+      ]],
+      ["Shell", "chrome components", [
+        ["SearchBar", "⧉", { type: "component", component: "SearchBar", phHeight: "44px", props: { placeholder: "Search bookings", size: "md" } }],
+        ["Navbar", "⧉", { type: "component", component: "Navbar", phHeight: "48px" }],
+        ["TabBar", "⧉", { type: "component", component: "TabBar", phHeight: "36px" }],
+        ["SubHeader", "⧉", { type: "component", component: "SubHeader", phHeight: "28px" }],
+      ]],
+      ["Interface kit", `${UI_KIT.length} components`, UI_KIT.map((n) => [n, "⧉", { type: "component", component: n, phHeight: "44px" }])],
+      ["Residue", "secretless · not AA domain", [
+        ["ConfidenceBar", "⧉", { type: "component", component: "ConfidenceBar", phHeight: "60px" }],
+        ["ResultCard", "⧉", { type: "component", component: "ResultCard", phHeight: "96px" }],
+      ]],
+    ];
+
+    let groups = specs.map(([name, note, items]) => ({ name, note, items: items.map((a) => build(a[0], a[1], a[2], a[3])) }));
+    groups.splice(3, 0, { name: "Structure", note: "page structure", items: [
+      { label: "Section", icon: "▤", data: false, onDragStart: () => {}, onClick: () => this.edit((p) => {
+        const sc = { id: nid(), label: "New section", card: true, columns: [{ id: nid(), flex: 1, items: [] }] };
+        p.sections.push(sc);
+        return { selKind: "section", selId: sc.id };
+      }) },
+      { label: "Column", icon: "▯", data: false, onDragStart: () => {}, onClick: () => this.edit((p) => {
+        const h = this.locate(p, this.state.selId);
+        const sec = h ? h.sec : (this.findSec(p, this.state.selId) || {}).sec || p.sections[p.sections.length - 1];
+        const c = { id: nid(), flex: 1, items: [] };
+        sec.columns.push(c);
+        return { selKind: "column", selId: c.id };
+      }) },
+    ]});
+
+    const q = query.trim().toLowerCase();
+    if (!q) return groups;
+    return groups.map((g) => ({ ...g, items: g.items.filter((i) => i.label.toLowerCase().includes(q)) })).filter((g) => g.items.length);
+  }
+
+  tokenGroupsFor(cat) {
+    const t = this.state.theme;
+    const row = (token, key, usage, extra) => ({
+      token, usage, value: t[key],
+      isSwatch: !extra, isBar: extra === "bar", isSample: extra === "sample",
+      barWidth: extra === "bar" ? t[key] : "0px",
+      sampleSize: extra === "sample" ? t[key] : "1em",
+      sampleWeight: extra === "sample" ? "700" : "400",
+      onChange: (e) => this.setTheme(key, e.target.value),
+    });
+    if (cat === "Colors") return [
+      { name: "Provenance trust ladder", rows: [
+        row("--source-community", "community", "where a crawled fact came from"),
+        row("--source-marketplace", "marketplace", "never status, never the beacon"),
+        row("--source-expert", "expert", "rung 3 of 6"),
+        row("--source-handson", "handson", "rung 4 of 6"),
+        row("--source-exclusive", "exclusive", "rung 5 · no token in theme.css yet"),
+        row("--source-verified", "verified", "rung 6 · no token in theme.css yet"),
+      ]},
+      { name: "Seven Seas · light", rows: [
+        row("--background", "background", "parchment ground · L* 93.2"),
+        row("--foreground", "foreground", "warm ink · never pure black"),
+        row("--muted", "muted", "wells and placeholders"),
+        row("--muted-foreground", "mutedForeground", "captions, absent labels"),
+        row("--ring", "ring", "focus outlines"),
+      ]},
+      { name: "Dark · abyss", rows: [
+        row("--abyss", "abyss", "dark canvas ground"),
+        row("--abyss-card", "abyssCard", "cards go lighter than the canvas"),
+        row("--abyss-foreground", "abyssFg", "body copy on abyss"),
+      ]},
+      { name: "Beacon · one bit", rows: [
+        row("--beacon-armed", "beaconArmed", "luminance slam, from"),
+        row("--beacon-fired", "beaconFired", "…to. Never hue."),
+      ]},
+    ];
+    if (cat === "Type") return [
+      { name: "Families", rows: [
+        row("--font-display", "fontDisplay", "a punctuation mark, not the default voice"),
+        row("--font-body", "fontBody", "body and UI"),
+        row("--font-mono", "fontMono", "mono"),
+      ]},
+      { name: "Heading scale", rows: [
+        row("--text-h1", "h1", "Page title", "sample"),
+        row("--text-h2", "h2", "Section title · 1 use", "sample"),
+        row("--text-h3", "h3", "Sub-heading · 2 uses", "sample"),
+      ]},
+    ];
+    if (cat === "Surfaces") return [
+      { name: "Radius", rows: [
+        row("--radius", "cardRadius", "default · sections and cards"),
+        row("--radius-search", "ctlRadius", "search bar"),
+        row("--radius-pill", "pillRadius", "pills and badges"),
+      ]},
+      { name: "Card material · straddle", rows: [
+        row("--ui-card-top", "cardTop", "top stop · above the ground"),
+        row("--ui-card-bottom", "cardBottom", "bottom stop · below the ground"),
+        row("--ui-card-rim", "cardRim", "inset rim highlight"),
+        row("--ui-card-drop", "cardDrop", "cast shadow"),
+      ]},
+    ];
+    return [
+      { name: "Block spacing", rows: [
+        row("--space-none", "spaceS", "Space above · None", "bar"),
+        row("--space-m", "spaceM", "Space above · 1rem · 1 use", "bar"),
+        row("--space-l", "spaceL", "Space above · 2rem", "bar"),
+      ]},
+    ];
+  }
+
+  renderVals() {
+    const s = this.state;
+    const page = s.page;
+    const t = s.theme;
+    const ws = s.workspace;
+    const itemHit = s.selKind === "item" ? this.locate(page, s.selId) : null;
+    const item = itemHit ? itemHit.item : null;
+    const colHit = s.selKind === "column" ? this.findCol(page, s.selId) : null;
+    const secHit = s.selKind === "section" ? this.findSec(page, s.selId) : null;
+    const device = DEVICES[s.device];
+    const showNotes = s.notesOn ?? this.props.showDevNotes ?? true;
+    const showRulers = s.rulersOn ?? this.props.showRulers ?? true;
+    const notesList = this.allItems().filter((x) => x.item.note);
+    const segs = this.segments();
+    const SPACE = { None: t.spaceS, "1rem": t.spaceM, "2rem": t.spaceL };
+    const cssv = (it, prop, fallback) => ((it.css || {})[prop] ?? fallback);
+    const abyss = s.themeMode === "Abyss";
+    const pageBg = abyss ? t.abyss : t.background;
+    const pageFg = abyss ? t.abyssFg : t.foreground;
+    const pageMutedFg = abyss ? "rgba(232,239,246,0.62)" : t.mutedForeground;
+    const pageMuted = abyss ? "color-mix(in oklab, #0B1D33 90%, #FFFFFF)" : t.muted;
+    const cardBg = abyss ? t.abyssCard : `linear-gradient(180deg,${t.cardTop} 0,${t.cardBottom} 24px,${t.cardBottom} 100%)`;
+    const cardShadow = abyss
+      ? "0 1px 0 rgba(255,255,255,0.10) inset, 0 8px 18px rgba(0,0,0,0.45)"
+      : `0 0 4px 0 rgba(44,34,30,0.07),-1px -1px 3px rgba(255,255,255,0.5),${t.cardDrop},0 4px 6px -2px rgba(44,34,30,0.12),inset 0 1px 0 ${t.cardRim},inset 0 -2px 4px rgba(44,34,30,0.18)`;
+    const repeaterCount = s.role === "Advisor" ? 12 : 4;
+    const repeaterLabel = (it) => `Repeater · ${it.collection} × ${repeaterCount}${s.role === "Advisor" ? " · client: Rowe party" : ""}`;
+    const pill = (on) => ({ bg: on ? "#2b3342" : "transparent", fg: on ? "#ffffff" : "#8b919d" });
+    const group = (labels, current, pick) => labels.map((l) => ({ label: l, ...pill(l === current), onClick: () => pick(l) }));
+    const pickItem = (label, accel, on, onClick) => ({ label, accel, check: on ? "•" : "", fg: on ? "#ffffff" : "#d7dae0", onClick: (e) => { e.stopPropagation(); onClick(); } });
+    const itemCss = item ? item.css || {} : {};
+    const cssField = (prop, placeholder) => ({
+      prop, placeholder,
+      value: itemCss[prop] ?? "",
+      onChange: (e) => this.patchCss(prop, e.target.value),
+    });
+    const cssSelect = (prop, options, fallback) => ({
+      prop, options,
+      value: itemCss[prop] ?? fallback,
+      onChange: (e) => this.patchCss(prop, e.target.value === fallback ? "" : e.target.value),
+    });
+
+    const overCol = s.dragOver ? s.dragOver.colId : null;
+    const overIdx = s.dragOver ? s.dragOver.index : -1;
+
+    const sections = page.sections.map((sec) => ({
+      selected: s.selKind === "section" && s.selId === sec.id,
+      badge: `Section · ${sec.label}${sec.sticky ? " · sticky" : ""}`,
+      padding: sec.card ? "2rem" : "0",
+      radius: t.cardRadius,
+      background: sec.card ? cardBg : "transparent",
+      shadow: sec.card ? cardShadow : "none",
+      outline: s.selKind === "section" && s.selId === sec.id ? "2px solid #6fb8ea" : "none",
+      onClick: (e) => { e.stopPropagation(); this.select("section", sec.id); },
+      columns: sec.columns.map((col, ci) => ({
+        flex: col.flex,
+        minHeight: col.items.length ? "0px" : "48px",
+        selected: s.selKind === "column" && s.selId === col.id,
+        badge: `Column ${ci + 1} · ${col.flex} of ${sec.columns.reduce((a, c) => a + c.flex, 0)}`,
+        outline: s.selKind === "column" && s.selId === col.id ? "2px solid #5fae6f" : "none",
+        empty: col.items.length === 0,
+        emptyLabel: overCol === col.id ? "drop here" : "empty column",
+        emptyBorder: overCol === col.id ? "#ff6b00" : "rgba(44,34,30,0.20)",
+        onClick: (e) => { e.stopPropagation(); this.select("column", col.id); },
+        onDragOver: (e) => { e.preventDefault(); if (overCol !== col.id || overIdx !== col.items.length) this.setState({ dragOver: { colId: col.id, index: col.items.length } }); },
+        onDrop: (e) => { e.preventDefault(); e.stopPropagation(); this.performDrop(); },
+        items: col.items.map((it, idx) => {
+          const selected = s.selKind === "item" && s.selId === it.id;
+          const editing = s.editingId === it.id;
+          const hasNote = !!it.note;
+          const dataDriven = it.type === "repeater" || !!it.needsData;
+          const stateMsg = dataDriven && s.canvasState !== "Default"
+            ? { Loading: "Loading…", Empty: it.type === "repeater" ? "No alerts yet" : "Nothing to show", Error: "Couldn't load" }[s.canvasState] : null;
+          return {
+            selected, editing,
+            draggable: !editing,
+            cursor: editing ? "text" : "grab",
+            badge: `${KIND[it.type]} · ${this.tagOf(it)}`,
+            outline: selected ? "2px solid #ff6b00" : "none",
+            lineBefore: overCol === col.id && overIdx === idx,
+            lineAfter: overCol === col.id && overIdx === idx + 1,
+            spaceAbove: SPACE[it.space] ?? "0px",
+            posCss: cssv(it, "position", "relative"),
+            displayCss: cssv(it, "display", "block"),
+            mT: cssv(it, "margin-top", SPACE[it.space] ?? "0px"),
+            mR: cssv(it, "margin-right", "0px"),
+            mB: cssv(it, "margin-bottom", SPACE[it.spaceBelow] ?? "0px"),
+            mL: cssv(it, "margin-left", "0px"),
+            pT: cssv(it, "padding-top", "0px"),
+            pR: cssv(it, "padding-right", "0px"),
+            pB: cssv(it, "padding-bottom", "0px"),
+            pL: cssv(it, "padding-left", "0px"),
+            wCss: cssv(it, "width", "auto"),
+            minWCss: cssv(it, "min-width", "0px"),
+            maxWCss: cssv(it, "max-width", "none"),
+            hCss: cssv(it, "height", "auto"),
+            minHCss: cssv(it, "min-height", "0px"),
+            maxHCss: cssv(it, "max-height", "none"),
+            alignSelfCss: cssv(it, "align-self", "auto"),
+            overflowCss: cssv(it, "overflow", "visible"),
+            insetT: cssv(it, "top", "auto"),
+            insetR: cssv(it, "right", "auto"),
+            insetB: cssv(it, "bottom", "auto"),
+            insetL: cssv(it, "left", "auto"),
+            zCss: cssv(it, "z-index", "auto"),
+            align: it.align ?? "left",
+            justify: it.align === "center" ? "center" : it.align === "right" ? "flex-end" : "flex-start",
+            fontSize: it.level === 1 ? t.h1 : it.level === 3 ? t.h3 : t.h2,
+            cardBg, cardFg: pageFg, ctlRadius: t.ctlRadius,
+            text: it.text,
+            isHeading: it.type === "heading",
+            isText: it.type === "text",
+            isButton: it.type === "button",
+            isBar: it.component === "ConfidenceBar" && !stateMsg,
+            isPlaceholder: (it.type === "image" || it.type === "spacer" || it.type === "repeater" || (it.type === "component" && it.component !== "ConfidenceBar")) && !stateMsg,
+            phLabel: it.type === "repeater" ? repeaterLabel(it) : it.type === "component" ? `${it.component}` : it.phLabel ?? "placeholder",
+            phHeight: it.phHeight ?? "80px",
+            stateMessage: stateMsg,
+            segments: segs,
+            pin: hasNote && showNotes ? String(notesList.findIndex((n) => n.item.id === it.id) + 1) : "",
+            showNote: hasNote && showNotes && selected,
+            note: it.note,
+            onClick: (e) => { e.stopPropagation(); if (!editing) this.select("item", it.id); },
+            onDoubleClick: (e) => { e.stopPropagation(); if (it.text !== undefined) this.setState({ selKind: "item", selId: it.id, editingId: it.id }); },
+            onDragStart: (e) => {
+              if (editing) { e.preventDefault(); return; }
+              if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+              this.setState({ dragging: { mode: "move", id: it.id }, selKind: "item", selId: it.id });
+            },
+            onDragOver: (e) => {
+              e.preventDefault(); e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              const target = idx + (e.clientY - r.top > r.height / 2 ? 1 : 0);
+              if (overCol !== col.id || overIdx !== target) this.setState({ dragOver: { colId: col.id, index: target } });
+            },
+            onDrop: (e) => { e.preventDefault(); e.stopPropagation(); this.performDrop(); },
+            editRef: (el) => {
+              if (el && editing && el.dataset.editing !== "1") {
+                el.dataset.editing = "1";
+                el.focus();
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+              } else if (el && !editing) { el.dataset.editing = "0"; }
+            },
+            onCommit: (e) => {
+              const text = e.currentTarget.textContent;
+              this.setState({ editingId: null });
+              if (text !== it.text) this.edit((p) => { const h = this.locate(p, it.id); if (h) h.item.text = text; });
+            },
+            onKeyDown: (e) => {
+              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+              if (e.key === "Escape") { e.currentTarget.textContent = it.text; e.currentTarget.blur(); }
+            },
+          };
+        }),
+      })),
+    }));
+
+    /* ---------- outliner ---------- */
+    const isOpen = (id) => s.collapsed[id] !== true;
+    const rows = [];
+    const rowFor = (o) => ({
+      pad: `${6 + o.depth * 13}px`,
+      caret: o.expandable ? (isOpen(o.id) ? "▾" : "▸") : "",
+      glyph: o.glyph, glyphColor: o.glyphColor,
+      label: o.label, data: !!o.data, note: !!o.note,
+      bg: o.selected ? "#2b3342" : "transparent",
+      fg: o.selected ? "#ffffff" : "#d7dae0",
+      mark: o.selected ? o.accent : "transparent",
+      onClick: o.onClick,
+      onToggle: (e) => { e.stopPropagation(); if (o.expandable) this.setState({ collapsed: { ...s.collapsed, [o.id]: isOpen(o.id) } }); },
+    });
+
+    if (s.outlinerMode === "Project") {
+      const coll = (id, glyph, label, children) => {
+        rows.push(rowFor({ id, depth: 0, glyph, glyphColor: "#8b919d", label, expandable: true, selected: false, accent: "#328ec1", onClick: () => {} }));
+        if (isOpen(id)) children.forEach((c) => rows.push(rowFor({
+          id: `${id}-${c[0]}`, depth: 1, glyph: c[1], glyphColor: c[3] || "#6fb8ea", label: c[0],
+          expandable: false, selected: !!c[2], accent: "#328ec1", data: !!c[4], onClick: c[5] || (() => {}),
+        })));
+      };
+      coll("c-pages", "▤", "Pages · 1", [["home  /", "🗎", true]]);
+      coll("c-layouts", "▥", "Layouts · 0", [["no layout documents yet", "·", false, "#6b7280"]]);
+      coll("c-components", "⧉", `Components · ${UI_KIT.length + 2}`, [
+        ["SearchBar", "⧉", false], ["Navbar", "⧉", false], ["Badge", "⧉", false], ["Switch", "⧉", false],
+        [`… ${UI_KIT.length - 4} more in src/components/ui`, "·", false, "#6b7280"],
+        ["ConfidenceBar · residue", "⧉", false, "#8b6f3a"], ["ResultCard · residue", "⧉", false, "#8b6f3a"],
+      ]);
+      coll("c-data", "≡", "Sample data · 1", [["alerts · 4 rows", "≡", false, "#d9b45b", true]]);
+      coll("c-assets", "▨", "Assets · 0", [["drop files to add", "·", false, "#6b7280"]]);
+    } else {
+      rows.push(rowFor({ id: "root", depth: 0, glyph: "🗎", glyphColor: "#6fb8ea", label: "home.json", expandable: true, selected: false, accent: "#328ec1", onClick: () => {} }));
+      if (isOpen("root")) {
+        page.sections.forEach((sec) => {
+          rows.push(rowFor({ id: sec.id, depth: 1, glyph: "▤", glyphColor: "#6fb8ea", label: sec.label, expandable: true,
+            selected: s.selKind === "section" && s.selId === sec.id, accent: "#6fb8ea", onClick: () => this.select("section", sec.id) }));
+          if (!isOpen(sec.id)) return;
+          sec.columns.forEach((col, ci) => {
+            rows.push(rowFor({ id: col.id, depth: 2, glyph: "▯", glyphColor: "#5fae6f", label: `column ${ci + 1}${col.items.length ? "" : " · empty"}`,
+              expandable: col.items.length > 0, selected: s.selKind === "column" && s.selId === col.id, accent: "#5fae6f", onClick: () => this.select("column", col.id) }));
+            if (!isOpen(col.id)) return;
+            col.items.forEach((it) => {
+              rows.push(rowFor({ id: it.id, depth: 3, glyph: GLYPH[it.type], glyphColor: "#8b919d",
+                label: it.text ?? it.phLabel ?? it.component ?? it.type, expandable: false,
+                data: !!it.needsData, note: !!it.note,
+                selected: s.selKind === "item" && s.selId === it.id, accent: "#ff6b00", onClick: () => this.select("item", it.id) }));
+            });
+          });
+        });
+      }
+    }
+
+    const needing = this.allItems().filter((x) => x.item.needsData).length;
+
+    /* ---------- selection labels ---------- */
+    let selKindLabel = "Nothing", selTitle = "No selection", selPath = "home.json", accent = "#3a4356";
+    if (item) { selKindLabel = KIND[item.type]; selTitle = item.text ?? item.component ?? item.phLabel ?? KIND[item.type]; selPath = `${itemHit.sec.id} › ${itemHit.col.id} › ${this.tagOf(item)}`; accent = "#ff6b00"; }
+    if (colHit) { selKindLabel = "Column"; selTitle = `Column ${colHit.sec.columns.indexOf(colHit.col) + 1}`; selPath = `${colHit.sec.id} › ${colHit.col.id}`; accent = "#5fae6f"; }
+    if (secHit) { selKindLabel = "Section"; selTitle = secHit.sec.label; selPath = `home.json › ${secHit.sec.id}`; accent = "#6fb8ea"; }
+
+    const moveUp = () => this.edit((p) => {
+      if (item) { const h = this.locate(p, s.selId); if (h && h.idx > 0) h.col.items.splice(h.idx - 1, 0, h.col.items.splice(h.idx, 1)[0]); return; }
+      if (colHit) { const h = this.findCol(p, s.selId); if (h && h.idx > 0) h.sec.columns.splice(h.idx - 1, 0, h.sec.columns.splice(h.idx, 1)[0]); return; }
+      if (secHit) { const i = p.sections.findIndex((x) => x.id === s.selId); if (i > 0) p.sections.splice(i - 1, 0, p.sections.splice(i, 1)[0]); }
+    });
+    const moveDown = () => this.edit((p) => {
+      if (item) { const h = this.locate(p, s.selId); if (h && h.idx < h.col.items.length - 1) h.col.items.splice(h.idx + 1, 0, h.col.items.splice(h.idx, 1)[0]); return; }
+      if (colHit) { const h = this.findCol(p, s.selId); if (h && h.idx < h.sec.columns.length - 1) h.sec.columns.splice(h.idx + 1, 0, h.sec.columns.splice(h.idx, 1)[0]); return; }
+      if (secHit) { const i = p.sections.findIndex((x) => x.id === s.selId); if (i > -1 && i < p.sections.length - 1) p.sections.splice(i + 1, 0, p.sections.splice(i, 1)[0]); }
+    });
+    const canUp = item ? itemHit.idx > 0 : colHit ? colHit.idx > 0 : secHit ? secHit.idx > 0 : false;
+    const canDown = item ? itemHit.idx < itemHit.col.items.length - 1
+      : colHit ? colHit.idx < colHit.sec.columns.length - 1
+      : secHit ? secHit.idx < page.sections.length - 1 : false;
+    const deleteSel = () => this.edit((p) => {
+      if (item) { const h = this.locate(p, s.selId); if (h) h.col.items.splice(h.idx, 1); }
+      else if (colHit) { const h = this.findCol(p, s.selId); if (h && h.sec.columns.length > 1) h.sec.columns.splice(h.idx, 1); }
+      else if (secHit) { const i = p.sections.findIndex((x) => x.id === s.selId); if (i > -1) p.sections.splice(i, 1); }
+      return { selKind: null, selId: null };
+    });
+    const addColumn = () => this.edit((p) => {
+      const target = secHit ? this.findSec(p, s.selId) : colHit ? this.findCol(p, s.selId) : itemHit ? { sec: this.locate(p, s.selId).sec } : null;
+      const sec = target ? target.sec : p.sections[p.sections.length - 1];
+      const c = { id: nid(), flex: 1, items: [] };
+      sec.columns.push(c);
+      return { selKind: "column", selId: c.id };
+    });
+    const bind = () => this.edit((p) => {
+      const h = this.locate(p, s.selId);
+      if (h && h.item.needsData) { h.item.needsData = false; h.item.note = null; }
+      return { resolved: this.state.resolved + 1, valueMode: "From data" };
+    });
+
+    /* Specimens are derived from the page document so they can never drift
+       back into copy the page no longer contains. */
+    const flat = this.allItems().map((x) => x.item);
+    const headings = flat.filter((x) => x.type === "heading");
+    const bodies = flat.filter((x) => x.type === "text");
+    const specH1 = headings[0] ? headings[0].text : "Heading";
+    const specH2 = headings[1] ? headings[1].text : specH1;
+    const specH3 = headings[2] ? headings[2].text : specH2;
+    const specBody = bodies[0] ? bodies[0].text : "Body copy.";
+    const specBody2 = bodies[1] ? bodies[1].text : specBody;
+    const firstControl = flat.find((x) => x.type === "button") || flat.find((x) => x.type === "component");
+    const specControl = firstControl ? (firstControl.text ?? firstControl.component) : "Control";
+    const tokenGroups = this.tokenGroupsFor(s.styleCat);
+    const tokenCount = tokenGroups.reduce((a, g) => a + g.rows.length, 0);
+
+    const hasText = !!(item && item.text !== undefined);
+    const tabAvailable = (label) => {
+      if (label === "Content") return hasText || !!secHit;
+      if (label === "Props") return !!(item && item.type === "component");
+      if (label === "Data") return !!item;
+      if (label === "Notes") return !!item || notesList.length > 0;
+      if (label === "Source") return !!item;
+      return !!(item || colHit || secHit);
+    };
+    const activeTab = tabAvailable(s.propTab) ? s.propTab : "Placement";
+    const dirty = s.edits || s.themeEdits;
+
+    return {
+      /* window chrome */
+      menus: this.buildMenus({ hasItem: !!item, hasSelection: !!(item || colHit || secHit), hasText, canUp, canDown, showRulers, showNotes, moveUp, moveDown, deleteSel, addColumn }),
+      menuOpen: !!s.openMenu || s.previewMenu,
+      closeMenu: () => this.setState({ openMenu: null, previewMenu: false }),
+      workspaces: WORKSPACES.map((w) => ({
+        label: w.label,
+        bg: w.label === ws ? "#1b1e24" : "transparent",
+        fg: w.label === ws ? "#ffffff" : "#8b919d",
+        radius: w.label === ws ? "5px 5px 0 0" : "5px",
+        onClick: () => this.setState({ workspace: w.label, openMenu: null }),
+      })),
+      wsHint: (WORKSPACES.find((w) => w.label === ws) || {}).hint || "",
+      isLayout: ws === "Layout", isStyle: ws === "Style",
+      undo: () => this.undoAction(), redo: () => this.redoAction(),
+      undoColor: s.history.length ? "#d7dae0" : "#6b7280",
+      redoColor: s.future.length ? "#d7dae0" : "#6b7280",
+      dirtyLabel: dirty ? `${dirty} unsaved edit${dirty === 1 ? "" : "s"}` : "2 files changed",
+      dirtyColor: dirty ? "#d9b45b" : "#5fae6f",
+      savedLabel: dirty ? "writing to source…" : `saved to source at ${s.savedAt}`,
+      needsDataLabel: needing ? `${needing} element${needing === 1 ? " needs" : "s need"} data` : "all elements bound",
+      focusOutliner: () => this.setState({ outlinerMode: "Project" }),
+
+      /* layout toolbar */
+      selKind: selKindLabel, selAccent: accent, selTitle, selPath,
+      selIsHeading: !!(item && item.type === "heading"),
+      selHasText: hasText,
+      isItemSel: !!item, isColumnSel: !!colHit, isSectionSel: !!secHit,
+      noSelection: !item && !colHit && !secHit,
+      levels: group(["H1", "H2", "H3"], `H${item && item.level ? item.level : 2}`, (l) => this.patchItem({ level: Number(l[1]) })),
+      aligns: group(["Left", "Center", "Right"], item ? (item.align || "left")[0].toUpperCase() + (item.align || "left").slice(1) : "Left", (a) => this.patchItem({ align: a.toLowerCase() })),
+      spacings: group(["None", "1rem", "2rem"], item ? item.space || "None" : "None", (sp) => this.setSpace("space", "margin-top", sp)),
+      spacingsBelow: group(["None", "1rem", "2rem"], item ? item.spaceBelow || "None" : "None", (sp) => this.setSpace("spaceBelow", "margin-bottom", sp)),
+      boxMT: cssField("margin-top", SPACE[item && item.space] ?? "0"),
+      boxMR: cssField("margin-right", "0"),
+      boxMB: cssField("margin-bottom", SPACE[item && item.spaceBelow] ?? "0"),
+      boxML: cssField("margin-left", "0"),
+      boxPT: cssField("padding-top", "0"),
+      boxPR: cssField("padding-right", "0"),
+      boxPB: cssField("padding-bottom", "0"),
+      boxPL: cssField("padding-left", "0"),
+      sizeRows: [
+        { label: "Size", a: cssField("width", "auto"), b: cssField("height", "auto") },
+        { label: "Min", a: cssField("min-width", "0"), b: cssField("min-height", "0") },
+        { label: "Max", a: cssField("max-width", "none"), b: cssField("max-height", "none") },
+      ],
+      flowSelects: [
+        { label: "Display", ...cssSelect("display", ["block", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "contents", "none"], "block") },
+        { label: "Position", ...cssSelect("position", ["static", "relative", "absolute", "fixed", "sticky"], "relative") },
+        { label: "Align self", ...cssSelect("align-self", ["auto", "flex-start", "center", "flex-end", "stretch", "baseline"], "auto") },
+        { label: "Overflow", ...cssSelect("overflow", ["visible", "hidden", "auto", "scroll", "clip"], "visible") },
+      ],
+      showInset: !!item && ["absolute", "fixed", "sticky", "relative"].includes(itemCss.position || "relative"),
+      insetFields: [cssField("top", "top"), cssField("right", "right"), cssField("bottom", "bottom"), cssField("left", "left")],
+      zField: cssField("z-index", "auto"),
+      widths: group(["1", "2", "3", "4", "5"], colHit ? String(colHit.col.flex) : "1", (w) => this.edit((p) => { const h = this.findCol(p, s.selId); if (h) h.col.flex = Number(w); })),
+      surfaceModes: group(["Card", "Plain"], secHit ? (secHit.sec.card ? "Card" : "Plain") : "Card", (m) => this.edit((p) => { const h = this.findSec(p, s.selId); if (h) h.sec.card = m === "Card"; })),
+      toggleNote: () => this.patchItem({ note: item && item.note ? null : "Needs review before handoff." }),
+      noteBtnLabel: item && item.note ? "Remove note" : "Add dev note",
+      deleteSel, deleteLabel: secHit ? "Delete section" : colHit ? "Delete column" : "Delete",
+      deleteColor: item || colHit || secHit ? "#d7dae0" : "#6b7280",
+      hintLine: item ? "double-click to edit text · drag to move" : colHit ? "drag blocks into this column" : secHit ? "sections are flex rows in home.json" : "click an element, column, or section",
+
+      /* insert library */
+      search: s.search,
+      onSearch: (e) => this.setState({ search: e.target.value }),
+      groups: this.insertGroups(s.search),
+      noResults: this.insertGroups(s.search).length === 0,
+      insertCols: (this.props.insertColumns ?? "Two") === "One" ? "1fr" : "1fr 1fr",
+      endDrag: () => this.setState({ dragging: null, dragOver: null }),
+
+      /* canvas */
+      sections,
+      devices: Object.keys(DEVICES).map((label) => ({ label, ...pill(label === s.device), onClick: () => this.setState({ device: label, zoom: DEVICES[label].zoom }) })),
+      states: ["Default", "Loading", "Empty", "Error"].map((label) => {
+        const on = label === s.canvasState;
+        return { label, ...pill(on), pillBg: on ? "#2b3342" : "#12141a", pillBorder: on ? "#328ec1" : "#2a2e37", pillFg: on ? "#ffffff" : "#8b919d",
+          onClick: () => this.setState({ canvasState: label }) };
+      }),
+      zoom: s.zoom, zoomIn: () => this.zoomBy(1), zoomOut: () => this.zoomBy(-1),
+      zoomLabel: `${Math.round(s.zoom * 100)}%`,
+      pageWidth: device.width,
+      stageWidth: Math.round(device.width * s.zoom),
+      rulerMinor: `${(10 * s.zoom).toFixed(2)}px`,
+      rulerMajor: `${(100 * s.zoom).toFixed(2)}px`,
+      showRulers,
+      deselect: () => this.setState({ selKind: null, selId: null, editingId: null }),
+      pageBg, pageFg, pageMuted, pageMutedFg,
+      previewOpen: s.previewMenu,
+      previewToggle: (e) => { e.stopPropagation(); this.setState((st) => ({ previewMenu: !st.previewMenu, openMenu: null })); },
+      previewSummary: `${s.role} · ${s.canvasState} · ${s.themeMode}`,
+      previewBtnBg: s.previewMenu ? "#2b3342" : "#12141a",
+      previewBtnBorder: s.previewMenu ? "#328ec1" : "#2a2e37",
+      previewGroups: [
+        { title: "Role", rule: false, items: ROLES.map((label, i) => pickItem(label, `${i + 1}`, label === s.role, () => this.previewPick({ role: label }))) },
+        { title: "Data state", rule: true, items: CANVAS_STATES.map((label, i) => pickItem(label, `Alt+${i + 1}`, label === s.canvasState, () => this.previewPick({ canvasState: label }))) },
+        { title: "Theme", rule: true, items: ["Parchment", "Abyss"].map((label) => pickItem(label, "Z", label === s.themeMode, () => this.previewPick({ themeMode: label }))) },
+      ],
+      layoutChip: "(main)",
+      isWorkshop: ws === "Workshop",
+      ...this.workshopVals(t, pageBg),
+
+      /* outliner */
+      outlinerRows: rows,
+      outlinerModes: ["Page", "Project"].map((label) => ({ label, ...pill(label === s.outlinerMode), onClick: () => this.setState({ outlinerMode: label }) })),
+
+      /* properties */
+      propTabs: PROP_TABS.map((p) => {
+        const on = p.label === activeTab;
+        const avail = tabAvailable(p.label);
+        return { label: p.label, glyph: p.glyph,
+          bg: on ? "#1b1e24" : "transparent",
+          fg: on ? "#6fb8ea" : avail ? "#8b919d" : "#4a5060",
+          mark: on ? "#328ec1" : "transparent",
+          onClick: () => this.setState({ propTab: p.label }) };
+      }),
+      propTab: activeTab,
+      tabContent: activeTab === "Content", tabPlacement: activeTab === "Placement",
+      tabStyle: activeTab === "Style", tabData: activeTab === "Data", tabProps: activeTab === "Props",
+      propsComponent: item && item.component ? item.component : "",
+      selGenFile: item && item.component ? COMPONENT_FILES[item.component] || `fixtures/demo-project/src/components/ui/${item.component}.tsx` : "",
+      propsFile: item && item.component ? COMPONENT_FILES[item.component] || `fixtures/demo-project/src/components/ui/${item.component}.tsx` : "",
+      propsRows: (item && item.type === "component" ? (PROP_SPECS[item.component] || []) : []).map(([name, typeText, fallback]) => ({
+        name, typeText,
+        value: item.props && item.props[name] !== undefined ? String(item.props[name]) : fallback,
+        onChange: (e) => { const v = e.target.value; this.patchItem({ props: { ...(item.props || {}), [name]: v } }); },
+      })),
+      propsEmpty: !!(item && item.type === "component" && !(PROP_SPECS[item.component] || []).length),
+      tabNotes: activeTab === "Notes", tabSource: activeTab === "Source",
+      contentEmpty: activeTab === "Content" && !hasText && !secHit,
+      contentEmptyLabel: colHit ? "Columns hold blocks; they have no content of their own." : "This element has no editable text.",
+      selText: item ? item.text ?? "" : "",
+      onText: (e) => this.patchItem({ text: e.target.value }),
+      selReadsAs: item ? (item.type === "heading" ? (item.level === 1 ? "Page title" : item.level === 3 ? "Sub-heading" : "Section title") : item.type === "button" ? "Action label" : "Body copy") : "",
+      secLabel: secHit ? secHit.sec.label : "",
+      onSecLabel: (e) => { const v = e.target.value; this.edit((p) => { const h = this.findSec(p, s.selId); if (h) h.sec.label = v; }); },
+      selColumn: itemHit ? `${itemHit.col.id} · ${itemHit.col.flex} of ${itemHit.sec.columns.reduce((a, c) => a + c.flex, 0)} width` : "",
+      colShare: colHit ? `${colHit.col.flex} of ${colHit.sec.columns.reduce((a, c) => a + c.flex, 0)}` : "",
+      colContains: colHit ? `${colHit.col.items.length} block${colHit.col.items.length === 1 ? "" : "s"}` : "",
+      secColumnCount: secHit ? `${secHit.sec.columns.length}` : "",
+      addColumn, moveUp, moveDown,
+      upColor: canUp ? "#d7dae0" : "#6b7280",
+      downColor: canDown ? "#d7dae0" : "#6b7280",
+      upLabel: colHit ? "Move left" : "Move up",
+      downLabel: colHit ? "Move right" : "Move down",
+      advancedCss: item ? [
+        `text-align: ${item.align ?? "left"};`,
+        `margin-top: ${itemCss["margin-top"] ?? SPACE[item.space] ?? "0px"};`,
+        `margin-bottom: ${itemCss["margin-bottom"] ?? SPACE[item.spaceBelow] ?? "0px"};`,
+        ...Object.keys(itemCss).filter((k) => k !== "margin-top" && k !== "margin-bottom").map((k) => `${k}: ${itemCss[k]};`),
+      ].join(" ") : secHit ? `padding: ${secHit.sec.card ? "2rem" : "0"}; border-radius: ${t.cardRadius};` : "flex: 1;",
+      gotoStyle: () => this.setState({ workspace: "Style" }),
+      valueModes: group(["Static", "From data"], item && item.needsData ? "Static" : s.valueMode, (v) => (v === "From data" ? bind() : this.setState({ valueMode: v }))),
+      selNeedsData: !!(item && item.needsData),
+      selBinding: item && item.binding ? item.binding : "",
+      hookUp: bind, keepMock: () => this.setState({ propTab: "Notes" }),
+      dataHint: item ? (item.needsData ? "Click an object to bind this element." : "This element renders static content from the page document.") : "Sections and columns don't bind to data directly.",
+      objects: [
+        { name: "ReviewSynthesisOutput", status: needing ? "1 pending" : "bound", dot: needing ? "#d9b45b" : "#5fae6f", fields: "confidenceLevel · sourceCategoriesPresent · summary", onClick: bind },
+        { name: "Product", status: "available", dot: "#6fb8ea", fields: "title · price · retailer · imageUrl", onClick: bind },
+        { name: "SourceCategory", status: "enum", dot: "#6fb8ea", fields: "community · marketplace · expert · handson", onClick: () => this.setState({ workspace: "Style", styleCat: "Colors" }) },
+      ],
+      selNote: item && item.note ? item.note : "",
+      onNote: (e) => this.patchItem({ note: e.target.value || null }),
+      notes: notesList.map((n, i) => ({
+        n: i + 1,
+        title: n.item.needsData ? "Needs data hookup" : "Needs review",
+        target: `${n.item.text ?? n.item.phLabel ?? n.item.component} · ${n.col.id}`,
+        onClick: () => this.select("item", n.item.id),
+      })),
+      openNoteCount: `${notesList.length}`, noNotes: notesList.length === 0,
+      selGenPath: itemHit ? `src/pages-gen/home.tsx:${14 + itemHit.idx * 3}` : "src/pages-gen/home.tsx",
+      diffMinus: item ? `- <${this.tagOf(item)} …>${String(item.text ?? item.phLabel ?? "").slice(0, 14)}</${this.tagOf(item)}>` : "",
+      diffPlus: item ? `+ <${this.tagOf(item)} …>${String(item.text ?? item.phLabel ?? "")}</${this.tagOf(item)}>` : "",
+
+      /* style workspace */
+      styleRail: ["Colors", "Type", "Surfaces", "Spacing"].map((label, i) => ({
+        label, glyph: ["◐", "A", "▤", "↕"][i],
+        bg: label === s.styleCat ? "#2b3342" : "transparent",
+        fg: label === s.styleCat ? "#ffffff" : "#8b919d",
+        mark: label === s.styleCat ? "#328ec1" : "transparent",
+        onClick: () => this.setState({ styleCat: label }),
+      })),
+      styleCat: s.styleCat,
+      styleCatNote: `${tokenCount} token${tokenCount === 1 ? "" : "s"} · ${{ Colors: "src/theme.css", Type: "src/theme.css", Surfaces: "ui.css recipes", Spacing: "page document" }[s.styleCat]}`,
+      tokenGroups: tokenGroups,
+      specH1, specH2, specH3, specBody, specBody2, specControl,
+      scopes: group(["Page", "Specimens"], s.scope, (v) => this.setState({ scope: v })),
+      writeTheme: () => this.saveAction(),
+      resetTheme: () => this.setState({ theme: { ...THEME }, themeEdits: 0 }),
+      resetThemeColor: s.themeEdits ? "#d7dae0" : "#6b7280",
+      themeHint: s.themeEdits ? `${s.themeEdits} token edit${s.themeEdits === 1 ? "" : "s"} not yet in theme.css` : "in sync with src/theme.css",
+      previewNote: s.scope === "Page" ? "specimens from this page" : "all component specimens",
+      previewSegments: segs,
+      previewLadder: this.ladder(),
+      themeH1: t.h1, themeH2: t.h2, themeH3: t.h3,
+      themeCardRadius: t.cardRadius, themeCtlRadius: t.ctlRadius, themePillRadius: t.pillRadius,
+      themeSpaceM: t.spaceM, themeSpaceL: t.spaceL,
+      cardBg, cardShadow,
+
+      crumb: itemHit ? `home.json › ${itemHit.sec.label} › column ${itemHit.sec.columns.indexOf(itemHit.col) + 1} › ${this.tagOf(item)}`
+        : colHit ? `home.json › ${colHit.sec.label} › column ${colHit.idx + 1}`
+        : secHit ? `home.json › ${secHit.sec.label}` : "home.json",
+    };
+  }
+}
+</script>
+</body>
+</html>
