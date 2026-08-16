@@ -10,7 +10,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Plugin, ViteDevServer } from "vite";
-import { analyzeFile, applyEdit, buildModel, tagTransform, type Edit } from "./ast.ts";
+import { analyzeFile, applyEdit, buildModel, nodeAtPosition, tagTransform, type Edit } from "./ast.ts";
+import { resolveLivePosition } from "./live-resolve.ts";
 import { parseTokens, writeToken } from "./tokens.ts";
 import { extractProps } from "./props.ts";
 import { getProject, targetRootPath, type UaiProject } from "./projects.ts";
@@ -246,6 +247,34 @@ export function uaiApi(repoRoot: string): Plugin {
               // Async components (server pages) can't run in a browser canvas;
               // they get assisted (no-live-preview) editing instead.
               renderable: !isServerOnly(code) && !analysis.defaultAsync,
+            });
+          }
+
+          if (url.pathname === "/api/live-resolve" && req.method === "POST") {
+            // A live-canvas click: compiled stack-frame position → source
+            // file → JSX node id. Misses are ok:false, not errors — clicks
+            // on framework-owned DOM have nowhere to land.
+            const { url: frameUrl, line, column } = (await readBody(req)) as {
+              url: string;
+              line: number;
+              column: number;
+            };
+            const pos = await resolveLivePosition(
+              project.root,
+              liveProxyOptions(repoRoot).upstream,
+              frameUrl,
+              line,
+              column,
+            );
+            if (!pos) return json(200, { ok: false });
+            const code = fs.readFileSync(abs(project, pos.file), "utf8");
+            const index = nodeAtPosition(code, pos.line, pos.column);
+            return json(200, {
+              ok: true,
+              file: pos.file,
+              line: pos.line,
+              column: pos.column,
+              id: index != null ? `${APP_PREFIX}${pos.file}::${index}` : null,
             });
           }
 

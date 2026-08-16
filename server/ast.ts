@@ -485,6 +485,42 @@ export function analyzeFile(code: string): { defaultAsync: boolean; hasDefault: 
   return { defaultAsync, hasDefault };
 }
 
+/** The JSXElement at a source position, as a preorder index — how a
+ * source-mapped stack frame (live click) becomes a node id. `line` is
+ * 1-based, `column` 0-based (babel convention; callers translating V8 stack
+ * columns must subtract 1 first).
+ *
+ * The position is a JSX call site, so it names an element's *start* — but
+ * Turbopack's dev maps are line-granular (mapped column is often 0), so an
+ * exact match can't be required. Preference order: element starting exactly
+ * at the position, then the leftmost element starting on that line at or
+ * after the column, then the innermost element containing the position
+ * (preorder visits ancestors first, so the last containing one is
+ * innermost). */
+export function nodeAtPosition(code: string, line: number, column: number): number | null {
+  const ast = parse(code);
+  let exact: number | null = null;
+  let onLine: { index: number; column: number } | null = null;
+  let containing: number | null = null;
+  visitElements(ast, (path, index) => {
+    const l = (
+      path.node as unknown as {
+        loc?: { start: { line: number; column: number }; end: { line: number; column: number } };
+      }
+    ).loc;
+    if (!l) return;
+    if (l.start.line === line && l.start.column === column) exact ??= index;
+    if (l.start.line === line && l.start.column >= column) {
+      if (!onLine || l.start.column < onLine.column) onLine = { index, column: l.start.column };
+    }
+    const afterStart =
+      line > l.start.line || (line === l.start.line && column >= l.start.column);
+    const beforeEnd = line < l.end.line || (line === l.end.line && column <= l.end.column);
+    if (afterStart && beforeEnd) containing = index;
+  });
+  return exact ?? (onLine as { index: number } | null)?.index ?? containing;
+}
+
 // ---------------------------------------------------------------------------
 // Edits
 // ---------------------------------------------------------------------------

@@ -60,40 +60,33 @@ Everything the canvas shows inside live mode is the real running app.
    bar and by clicking a route in the Routes tree. The probe reports where
    the app actually landed, and a banner calls out redirects.
 
-### Next: step 3 — click an element, land on its source line
+3. **Click → source** — clicking an element in the live canvas lands the
+   editor on its file with the JSX node selected (outliner + Properties
+   card; the canvas stays live). The chain: probe click handler →
+   `fiber._debugStack` owner frame → `/api/live-resolve`
+   (`server/live-resolve.ts`, source maps via `source-map-js`) →
+   `nodeAtPosition` in `server/ast.ts` → `openFile` + focus. Select is the
+   probe's default; the editor's Interact toggle passes clicks through.
+   Verified for both map sources: client chunks (`.map` fetched from the
+   upstream dev server) and server components (`about://React/Server/…`
+   paths read off `.next/dev/server/chunks/ssr/` disk). Standing check:
+   `scripts/checks/live-click.mjs`.
 
-This is the piece that turns live mode from a viewer into an editor.
+   Answers to the old open questions: the owner frame lands on the clicked
+   element itself, not its parent (a `/terms` h1 resolved to the exact
+   `<Tag>` in `markdown.tsx`); resolution runs server-side (disk access, no
+   CORS); Turbopack's dev maps are indexed (`sections`) and line-granular
+   (column often 0), which is why `nodeAtPosition` prefers "element
+   starting on that line" over strict containment.
 
-The chain, all verified to be available except the last hop:
+### Next: step 4 — edit through a live selection
 
-- DOM node → React fiber (`el.__reactFiber$…`).
-- fiber → **`fiber._debugStack`**, an Error whose stack names the component
-  that created the element, at a position in the *compiled* bundle.
-  React 19 removed `_debugSource`; this replaces it. `live-probe.js`
-  already has `ownerFrame()` for this.
-- Client components resolve to `/_next/static/chunks/src_*.js:LINE:COL`.
-  Server components resolve to
-  `about://React/Server/<url-encoded .next/dev/server/chunks/ssr/*.js>?N:LINE:COL`
-  — note the `?N` cache-buster before the line number, and that the path is
-  percent-encoded and Windows-backslashed.
-- compiled position → **source map** → real file + line + column. Turbopack
-  serves `.map` files next to the chunks; server chunks are on disk under
-  the target's `.next/dev/server/chunks/`. NOT YET BUILT.
-- file + line/col → JSX node. `server/ast.ts` already knows every
-  JSXElement's `loc`; add a lookup that returns the preorder index whose
-  span contains the position (innermost wins). Then the existing model,
-  selection, Properties card, AST edits and undo all work unchanged.
-
-Open questions for whoever picks this up:
-
-- The owner stack names the *creating component*, so the position is the
-  JSX call site. Confirm it lands on the element itself and not the parent
-  when components are nested.
-- Decide where source-map resolution runs. Server-side (`server/`) is
-  easier: it can read `.next/dev/**` off disk, and Node has no CORS.
-- Editing a live page means the file changes underneath a running Next dev
-  server. HMR should handle it; verify the fidelity guard and undo behave
-  when the app reloads mid-edit.
+- A live click selects; edits then flow through the normal funnel. The
+  file changes under the running `next dev` — HMR should reload the live
+  frame. STILL UNVERIFIED: fidelity guard + undo behaviour when the app
+  reloads mid-edit, and whether the selection survives the reload.
+- The probe's highlight box is a selection flash, not a tracked overlay —
+  it goes stale on scroll. Fine for now; revisit with hover outlines.
 
 ### Known rough edges
 

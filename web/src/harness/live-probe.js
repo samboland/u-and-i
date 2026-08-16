@@ -5,9 +5,10 @@
  * serves. It runs inside the real running app, so it is plain JS with no
  * build step and no imports: it must not assume anything about the page.
  *
- * Step 1 scope: announce itself to the editor and answer "is React here?".
- * Step 3 turns the fiber walk below into a source location (file + line),
- * which the AST engine turns back into a node id.
+ * Jobs: announce itself to the editor, and turn a click into a compiled
+ * source position (`live-click`) that the daemon runs back through source
+ * maps to a real file + JSX node. Select mode is the default; the editor's
+ * Interact toggle (`uaiCmd: "set-interact"`) lets clicks through to the app.
  */
 (function () {
   "use strict";
@@ -48,12 +49,81 @@
     return null;
   }
 
+  /** Select mode: clicks pick elements instead of reaching the app. */
+  var selecting = true;
+
+  /** One reusable outline box so the user sees what they picked. It tracks
+   * nothing — any scroll or layout shift just leaves it until the next
+   * click, which is fine for a selection flash. */
+  var box = null;
+  function highlight(el) {
+    if (!box) {
+      box = document.createElement("div");
+      box.style.cssText =
+        "position:fixed;z-index:2147483647;pointer-events:none;" +
+        "border:1.5px solid #4a9eff;background:rgba(74,158,255,0.08);border-radius:2px";
+      document.documentElement.appendChild(box);
+    }
+    var r = el.getBoundingClientRect();
+    box.style.left = r.left + "px";
+    box.style.top = r.top + "px";
+    box.style.width = r.width + "px";
+    box.style.height = r.height + "px";
+    box.style.display = "block";
+  }
+
+  /** The clicked element's owner frame: walk up the DOM for a node React
+   * knows, then up the fiber tree for a frame that names app code. */
+  function frameForClick(target) {
+    var el = target;
+    while (el && el.nodeType === 1) {
+      var fiber = fiberOf(el);
+      var f = fiber;
+      while (f) {
+        var frame = ownerFrame(f);
+        if (frame) return { el: el, frame: frame };
+        f = f.return;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  document.addEventListener(
+    "click",
+    function (e) {
+      if (!selecting) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var hit = frameForClick(e.target);
+      if (hit) {
+        highlight(hit.el);
+        post({
+          type: "live-click",
+          url: hit.frame.url,
+          line: hit.frame.line,
+          column: hit.frame.column,
+          tag: (hit.el.tagName || "").toLowerCase(),
+          page: location.href,
+        });
+      } else {
+        post({ type: "live-click", url: null, page: location.href });
+      }
+    },
+    true,
+  );
+
   window.addEventListener("message", function (e) {
     var msg = e.data;
-    if (!msg || msg.uaiCmd !== "ping") return;
-    var el = document.querySelector("main, #__next, body");
-    var frame = el ? ownerFrame(fiberOf(el)) : null;
-    post({ type: "live-pong", url: location.href, react: !!(el && fiberOf(el)), frame: frame });
+    if (!msg || !msg.uaiCmd) return;
+    if (msg.uaiCmd === "set-interact") {
+      selecting = !msg.on;
+      if (selecting === false && box) box.style.display = "none";
+    } else if (msg.uaiCmd === "ping") {
+      var el = document.querySelector("main, #__next, body");
+      var frame = el ? ownerFrame(fiberOf(el)) : null;
+      post({ type: "live-pong", url: location.href, react: !!(el && fiberOf(el)), frame: frame });
+    }
   });
 
   post({ type: "live-ready", url: location.href, title: document.title });

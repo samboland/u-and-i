@@ -206,6 +206,8 @@ export function App() {
   const [role, setRole] = useState("Traveler");
   const [search, setSearch] = useState("");
   const [interact, setInteract] = useState(false);
+  const interactRef = useRef(interact);
+  interactRef.current = interact;
   // Live canvas: the target's own running dev server, mirrored by
   // server/live-proxy.ts. `livePath` is the route we're showing; `liveUrl` is
   // where the app actually ended up (it redirects, e.g. /account → /signin).
@@ -481,6 +483,10 @@ export function App() {
   useEffect(() => send({ type: "set-zoom", zoom }), [zoom, send]);
   useEffect(() => send({ type: "set-theme", dark: themeDark }), [themeDark, send]);
   useEffect(() => send({ type: "set-interact", on: interact }), [interact, send]);
+  // The live probe honours the same toggle (select is its default).
+  useEffect(() => {
+    liveFrameRef.current?.contentWindow?.postMessage({ uaiCmd: "set-interact", on: interact }, "*");
+  }, [interact]);
   useEffect(() => {
     send({
       type: "set-session",
@@ -506,14 +512,41 @@ export function App() {
 
   // ------------------------------------------------------------------ harness messages
 
+  // A live-canvas click: the probe sends a compiled stack-frame position,
+  // the daemon runs it back through source maps to a file + node id. The
+  // canvas stays live; the outliner and Properties card carry the selection.
+  const resolveLiveClick = useCallback(async (msg: { url: string; line: number; column: number }) => {
+    try {
+      const r = await api<{ ok: boolean; file?: string; id?: string | null }>("/api/live-resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: msg.url, line: msg.line, column: msg.column }),
+      });
+      if (!r.ok || !r.file) return;
+      if (fileStateRef.current?.file !== r.file) await openFileRef.current(r.file);
+      if (r.id) setFileFocusId(r.id);
+    } catch {
+      /* unresolvable click — leave the selection as-is */
+    }
+  }, []);
+
   useEffect(() => {
     const onMessage = (e: MessageEvent<HarnessToEditor>) => {
       const msg = e.data;
       if (!msg || typeof msg !== "object") return;
       // The live probe speaks its own dialect from a different origin.
       if ((msg as { uai?: boolean }).uai) {
-        const live = msg as unknown as { type: string; url?: string };
-        if (live.type === "live-ready" && live.url) setLiveUrl(live.url);
+        const live = msg as unknown as { type: string; url?: string | null; line?: number; column?: number };
+        if (live.type === "live-ready" && live.url) {
+          setLiveUrl(live.url);
+          // A fresh page load resets the probe; re-send the toggle state.
+          liveFrameRef.current?.contentWindow?.postMessage(
+            { uaiCmd: "set-interact", on: interactRef.current },
+            "*",
+          );
+        } else if (live.type === "live-click" && live.url) {
+          void resolveLiveClick(live as { url: string; line: number; column: number });
+        }
         return;
       }
       if (msg.type === "ready") {
@@ -607,7 +640,7 @@ export function App() {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [send, device, zoom, appZoom, zoomBy, beginTextEdit]);
+  }, [send, device, zoom, appZoom, zoomBy, beginTextEdit, resolveLiveClick]);
 
   // ------------------------------------------------------------------ keyboard
 
