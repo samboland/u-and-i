@@ -6,7 +6,7 @@
  *
  *   node scripts/checks/live-click.mjs [screenshot-prefix]
  */
-import { playwright, reporter, liveOrigin } from "./_shared.mjs";
+import { playwright, reporter, liveOrigin, clickInFrame } from "./_shared.mjs";
 
 const { chromium } = playwright();
 const { check, done } = reporter();
@@ -48,14 +48,12 @@ try {
   check(!!frame, `live frame present: ${frame?.url()}`);
   if (!frame) throw new Error("no live frame");
 
-  // Click a real content element (`:visible` skips Next's hidden route
-  // announcer) so the fiber walk has something real. A cold dev server can
-  // still be compiling/hydrating — retry until a resolution arrives.
-  const target = frame.locator("h1:visible, h2:visible, p:visible").first();
+  // Click a real content element (clickInFrame skips invisible ones like
+  // Next's route announcer) so the fiber walk has something real. A cold
+  // dev server can still be compiling/hydrating — retry until a
+  // resolution arrives.
   for (let attempt = 0; attempt < 4 && !resolves.some((r) => r.ok); attempt++) {
-    // force: the select-mode overlay intercepts pointer events by design;
-    // the probe hit-tests through it, so click at the element's position.
-    await target.click({ force: true });
+    await clickInFrame(frame, "h1, h2, p");
     await page.waitForTimeout(3000);
   }
   if (shot) await page.screenshot({ path: `${shot}-clicked.png` });

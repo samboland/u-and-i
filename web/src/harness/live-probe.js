@@ -368,6 +368,18 @@
     true,
   );
 
+  /** The canvas is a design surface, not a browser: hide the ROOT
+   * scrollbar. The app forces `overflow-y: scroll` on html, so the track
+   * shows even when nothing scrolls — and it takes no layout space here
+   * (overlay style), so hiding it shifts nothing. Wheel scrolling still
+   * works; inner scrollable regions keep their own bars. */
+  (function () {
+    var s = document.createElement("style");
+    s.setAttribute("data-uai-no-scrollbar", "");
+    s.textContent = "html::-webkit-scrollbar{display:none}html{scrollbar-width:none}";
+    document.documentElement.appendChild(s);
+  })();
+
   /** Hide Next's dev-tools badge — and only the badge. It lives as
    * `#devtools-indicator` inside the open `nextjs-portal` shadow root;
    * build-error overlays are siblings in the same root and must stay
