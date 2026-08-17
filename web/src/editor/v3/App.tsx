@@ -1584,6 +1584,25 @@ function LiveCanvas({
 }) {
   const [draft, setDraft] = useState(path);
   useEffect(() => setDraft(path), [path]);
+  const [signingIn, setSigningIn] = useState(false);
+
+  /** OAuth can't run inside the iframe (GitHub won't be framed), but a
+   * TOP-LEVEL window in the same profile shares the `localhost` cookie jar
+   * regardless of port — Electron's default window.open does too. Sign in
+   * there, and when the window closes, reload the frame into the session. */
+  const signIn = () => {
+    if (!live) return;
+    const popup = window.open(`${live.upstream}/signin`, "_blank");
+    if (!popup) return;
+    setSigningIn(true);
+    const watch = setInterval(() => {
+      if (!popup.closed) return;
+      clearInterval(watch);
+      setSigningIn(false);
+      if (frameRef.current) frameRef.current.src = `${live.origin}${path}`;
+    }, 500);
+  };
+
   if (!live) {
     return (
       <div style={{ flex: 1, display: "grid", placeItems: "center", background: C.void }}>
@@ -1628,8 +1647,15 @@ function LiveCanvas({
         </button>
       </div>
       {landedElsewhere && (
-        <div style={{ flex: "0 0 auto", padding: "3px 10px", background: C.amberBg, borderBottom: `1px solid ${C.amberBorder}`, fontSize: 10.5, color: C.amber }}>
-          The app sent us to <span style={{ fontFamily: MONO }}>{landedAt}</span> — usually a sign-in redirect. Sign in inside the canvas and it will stick.
+        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", background: C.amberBg, borderBottom: `1px solid ${C.amberBorder}`, fontSize: 10.5, color: C.amber }}>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            {signingIn
+              ? "Waiting for the sign-in window — the canvas reloads when it closes."
+              : <>The app sent us to <span style={{ fontFamily: MONO }}>{landedAt}</span> — usually a sign-in redirect. OAuth can't run in the canvas; use the button.</>}
+          </span>
+          <button className="hv-ctl" style={{ ...ctlBtn, flex: "0 0 auto" }} title={`Sign in at ${live.upstream}/signin in its own window; the session carries over`} onClick={signIn} disabled={signingIn}>
+            Sign in…
+          </button>
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>

@@ -29,6 +29,10 @@ const STRIP = new Set([
   // content-encoding that no longer describes the body.
   "content-encoding",
   "content-length",
+  // Hop-by-hop framing: Node re-frames the response itself, and forwarding
+  // chunked alongside our recomputed content-length is invalid HTTP that
+  // strict clients reject.
+  "transfer-encoding",
 ]);
 
 const PROBE_PATH = "/__uai/probe.js";

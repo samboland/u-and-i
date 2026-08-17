@@ -94,9 +94,17 @@ Everything the canvas shows inside live mode is the real running app.
 
 - The probe's highlight box is a selection flash, not a tracked overlay —
   it goes stale on scroll. Fine for now; revisit with hover outlines.
-- The canvas has no session, so `/account` and `/waitlist` redirect to
-  `/signin`. Signing in inside the canvas should stick (cookies ignore
-  port), but this is untested.
+- ~~The canvas has no session, so `/account` and `/waitlist` redirect to
+  `/signin`.~~ Fixed: OAuth can't run inside the iframe (GitHub won't be
+  framed), so the redirect banner's "Sign in…" opens the target's own
+  `/signin` in a top-level window and reloads the frame when it closes —
+  the session cookie is host-scoped (`localhost` ignores ports), so the
+  mirror sees it. Works in Electron too (default `window.open` shares the
+  session). Check: `scripts/checks/live-signin.mjs` verifies each
+  mechanical link; the actual OAuth completion needs human credentials.
+  The same investigation fixed the mirror forwarding `Transfer-Encoding`
+  alongside its recomputed `Content-Length` — invalid HTTP that strict
+  clients reject.
 - ~~The Next dev-tools badge shows in the corner of the live canvas.~~
   Fixed: the probe styles `#devtools-indicator` inside the `nextjs-portal`
   shadow root to `display:none` — only the badge; build-error overlays in
