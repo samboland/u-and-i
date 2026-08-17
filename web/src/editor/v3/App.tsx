@@ -15,6 +15,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -570,9 +571,8 @@ export function App() {
           );
         } else if (live.type === "live-click" && live.url) {
           void resolveLiveClick(live as { url: string; line: number; column: number });
-        } else if (live.type === "live-zoom") {
-          zoomBy((live as unknown as { dir: 1 | -1 }).dir);
         }
+        // live-zoom is LiveCanvas's own affair — it needs the cursor anchor.
         return;
       }
       if (msg.type === "ready") {
@@ -1600,21 +1600,62 @@ function LiveCanvas({
   zoom: number;
   onZoom: (dir: 1 | -1) => void;
 }) {
-  // Ctrl+wheel over the apron zooms like inside the frame (the probe covers
-  // the frame itself). Attached manually: preventDefault needs a
-  // non-passive listener, which React's onWheel doesn't guarantee.
+  // Ctrl+wheel zoom, anchored on the cursor. The wheel arrives two ways —
+  // relayed by the probe from inside the iframe (content coordinates), or
+  // directly over the apron — and both funnel into zoomAt, which remembers
+  // where the anchored content point sat on screen. After the new zoom
+  // renders, the layout effect scrolls the apron so that point hasn't moved.
   const apronRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<{ cx: number; cy: number; sx: number; sy: number } | null>(null);
+  const zoomAt = useCallback(
+    (dir: 1 | -1, cx: number, cy: number) => {
+      const rect = frameRef.current?.getBoundingClientRect();
+      if (rect) anchorRef.current = { cx, cy, sx: rect.left + cx * zoom, sy: rect.top + cy * zoom };
+      onZoom(dir);
+    },
+    [frameRef, zoom, onZoom],
+  );
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const m = e.data as { uai?: boolean; type?: string; dir?: 1 | -1; x?: number; y?: number };
+      if (m?.uai && m.type === "live-zoom" && m.dir) {
+        zoomAt(m.dir, m.x ?? width / 2, m.y ?? height / 2);
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [zoomAt, width, height]);
   useEffect(() => {
     const el = apronRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      onZoom(e.deltaY < 0 ? 1 : -1);
+      const rect = frameRef.current?.getBoundingClientRect();
+      zoomAt(
+        e.deltaY < 0 ? 1 : -1,
+        rect ? (e.clientX - rect.left) / zoom : width / 2,
+        rect ? (e.clientY - rect.top) / zoom : height / 2,
+      );
     };
+    // Attached manually: preventDefault needs a non-passive listener, which
+    // React's onWheel doesn't guarantee.
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [onZoom]);
+  }, [zoomAt, zoom, width, height, frameRef]);
+  useLayoutEffect(() => {
+    const a = anchorRef.current;
+    if (!a) return;
+    anchorRef.current = null;
+    const apron = apronRef.current;
+    const rect = frameRef.current?.getBoundingClientRect();
+    if (!apron || !rect) return;
+    // rect reflects the new scale at the old scroll; the difference from the
+    // remembered screen position is exactly the scroll correction. The
+    // browser clamps at the edges, where anchoring has no room anyway.
+    apron.scrollLeft += rect.left + a.cx * zoom - a.sx;
+    apron.scrollTop += rect.top + a.cy * zoom - a.sy;
+  }, [zoom, frameRef]);
   const [draft, setDraft] = useState(path);
   useEffect(() => setDraft(path), [path]);
   const [signingIn, setSigningIn] = useState(false);

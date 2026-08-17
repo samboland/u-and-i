@@ -122,7 +122,10 @@
     function (e) {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      post({ type: "live-zoom", dir: e.deltaY < 0 ? 1 : -1 });
+      // clientX/Y are content coordinates: the CSS scale on the iframe is
+      // the parent's affair — inside, the page is unscaled. The editor
+      // anchors the zoom on this point.
+      post({ type: "live-zoom", dir: e.deltaY < 0 ? 1 : -1, x: e.clientX, y: e.clientY });
     },
     { passive: false },
   );
