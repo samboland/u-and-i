@@ -135,6 +135,23 @@
     return out;
   }
 
+  /** The chip sits OUTSIDE the box it labels — above when there is room,
+   * below otherwise — so it never covers the selection (a chip inside a
+   * small element can hide it entirely). Inside, pinned to the top edge,
+   * only when the box fills the viewport and there is no outside. */
+  function placeChip(r, text) {
+    hoverChip.textContent = text;
+    hoverChip.style.display = "block";
+    var h = 20;
+    var top;
+    if (r.top >= h + 2) top = r.top - h;
+    else if (r.bottom + h + 2 <= window.innerHeight) top = r.bottom + 2;
+    else top = Math.max(2, r.top + 2);
+    hoverChip.style.top = top + "px";
+    var left = Math.max(0, Math.min(r.left, window.innerWidth - hoverChip.offsetWidth - 2));
+    hoverChip.style.left = left + "px";
+  }
+
   /** Hover affordance: outline + tag chip on whatever a click would pick.
    * rAF-throttled; re-aimed on scroll so it never points at stale pixels. */
   var hoverXY = null;
@@ -162,10 +179,7 @@
       hoverBox.style.width = r.width + "px";
       hoverBox.style.height = r.height + "px";
       hoverBox.style.display = "block";
-      hoverChip.textContent = (hit.el.tagName || "").toLowerCase();
-      hoverChip.style.left = Math.max(0, r.left) + "px";
-      hoverChip.style.top = (r.top >= 22 ? r.top - 20 : r.top + 2) + "px";
-      hoverChip.style.display = "block";
+      placeChip(r, (hit.el.tagName || "").toLowerCase());
     });
   }
 
@@ -243,12 +257,10 @@
         highlight(hit.el);
         hoverBox.style.display = "none";
         // The chip doubles as a depth gauge while drilling.
-        var r = hit.el.getBoundingClientRect();
-        hoverChip.textContent =
-          (hit.el.tagName || "").toLowerCase() + (cands.length > 1 ? " · " + (i + 1) + "/" + cands.length : "");
-        hoverChip.style.left = Math.max(0, r.left) + "px";
-        hoverChip.style.top = (r.top >= 22 ? r.top - 20 : r.top + 2) + "px";
-        hoverChip.style.display = "block";
+        placeChip(
+          hit.el.getBoundingClientRect(),
+          (hit.el.tagName || "").toLowerCase() + (cands.length > 1 ? " · " + (i + 1) + "/" + cands.length : ""),
+        );
         post({
           type: "live-click",
           url: hit.frame.url,
