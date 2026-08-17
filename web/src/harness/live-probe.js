@@ -292,7 +292,13 @@
    * Ctrl+middle is taken, leaving the page its native middle-click
    * behaviours (autoscroll, open-in-tab). Deltas are content px — the
    * editor scales them by its own zoom. */
-  var panDrag = false;
+  // ⚠️ Deltas come from screenX/Y, and the editor applies them 1:1 — moving
+  // the window with the cursor is a SCREEN-pixel relationship. clientX/Y
+  // won't do: they live in the iframe's scaled coordinate space, which the
+  // pan itself shifts under the cursor (feedback → half-speed jitter), and
+  // movementX/Y is raw device px, blind to the scale. Screen coords are
+  // immune to both.
+  var panDrag = null; // last {x, y} in screen px while middle-dragging
   window.addEventListener(
     "mousedown",
     function (e) {
@@ -300,7 +306,7 @@
       if (!selecting && !e.ctrlKey) return;
       e.preventDefault();
       e.stopPropagation();
-      panDrag = true;
+      panDrag = { x: e.screenX, y: e.screenY };
     },
     true,
   );
@@ -308,19 +314,20 @@
     "mousemove",
     function (e) {
       if (!panDrag) return;
-      post({ type: "live-pan", dx: e.movementX, dy: e.movementY });
+      post({ type: "live-pan", dx: e.screenX - panDrag.x, dy: e.screenY - panDrag.y });
+      panDrag = { x: e.screenX, y: e.screenY };
     },
     true,
   );
   window.addEventListener(
     "mouseup",
     function (e) {
-      if (e.button === 1) panDrag = false;
+      if (e.button === 1) panDrag = null;
     },
     true,
   );
   window.addEventListener("blur", function () {
-    panDrag = false;
+    panDrag = null;
   });
 
   /** Ctrl+wheel is canvas zoom, same as the component harness — without

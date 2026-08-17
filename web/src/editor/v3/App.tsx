@@ -1680,8 +1680,9 @@ function LiveCanvas({
       if (m?.uai && m.type === "live-zoom" && m.dir) {
         zoomAt(m.dir, m.x ?? width / 2, m.y ?? height / 2);
       } else if (m?.uai && m.type === "live-pan") {
-        // Deltas are content px; the frame moves by their scaled size.
-        setPan((p) => p && { x: p.x + (m.dx ?? 0) * zoom, y: p.y + (m.dy ?? 0) * zoom });
+        // Deltas are SCREEN px (see the probe) — applied 1:1, no zoom scaling,
+        // so the frame tracks the cursor exactly at any zoom.
+        setPan((p) => p && { x: p.x + (m.dx ?? 0), y: p.y + (m.dy ?? 0) });
       }
     };
     window.addEventListener("message", onMsg);
