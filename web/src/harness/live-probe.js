@@ -287,6 +287,42 @@
     { passive: true, capture: true },
   );
 
+  /** Middle-drag pans the canvas. In select (edit) mode the page is frozen
+   * anyway, so a plain middle-drag is ours; in interact (view) mode only
+   * Ctrl+middle is taken, leaving the page its native middle-click
+   * behaviours (autoscroll, open-in-tab). Deltas are content px — the
+   * editor scales them by its own zoom. */
+  var panDrag = false;
+  window.addEventListener(
+    "mousedown",
+    function (e) {
+      if (e.button !== 1) return;
+      if (!selecting && !e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      panDrag = true;
+    },
+    true,
+  );
+  window.addEventListener(
+    "mousemove",
+    function (e) {
+      if (!panDrag) return;
+      post({ type: "live-pan", dx: e.movementX, dy: e.movementY });
+    },
+    true,
+  );
+  window.addEventListener(
+    "mouseup",
+    function (e) {
+      if (e.button === 1) panDrag = false;
+    },
+    true,
+  );
+  window.addEventListener("blur", function () {
+    panDrag = false;
+  });
+
   /** Ctrl+wheel is canvas zoom, same as the component harness — without
    * this the iframe swallows the gesture and the editor never sees it.
    * Forwarded in both select and interact modes; the page itself never

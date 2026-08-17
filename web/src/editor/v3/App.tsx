@@ -1609,12 +1609,62 @@ function LiveCanvas({
   zoom: number;
   onZoom: (dir: 1 | -1) => void;
 }) {
+  // The frame floats freely on the apron: `pan` is its top-left corner in
+  // apron px, unclamped — a real canvas lets the window sit with void on
+  // every side, which scroll-based centering (clamped at 0) never could.
+  // null = not yet placed; the layout effect centers it once the apron has
+  // a size, and a device-width change re-centers.
+  const apronRef = useRef<HTMLDivElement>(null);
+  const [pan, setPan] = useState<{ x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  useLayoutEffect(() => {
+    if (pan !== null) return;
+    // `live` is a dep because the apron only exists once the mirror is known:
+    // without it, the effect fires before the ref is attached and never again.
+    const a = apronRef.current;
+    if (!a) return;
+    setPan({ x: Math.max(16, (a.clientWidth - width * zoom) / 2), y: 16 });
+  }, [pan, width, zoom, live]);
+  useEffect(() => setPan(null), [width]);
+
+  // Middle-drag pans. While dragging, the iframe stops eating pointer
+  // events so the drag survives crossing it; drags that START inside the
+  // frame arrive from the probe as live-pan deltas instead.
+  useEffect(() => {
+    const el = apronRef.current;
+    if (!el) return;
+    let active = false;
+    const down = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      active = true;
+      setDragging(true);
+    };
+    const move = (e: MouseEvent) => {
+      if (!active) return;
+      setPan((p) => p && { x: p.x + e.movementX, y: p.y + e.movementY });
+    };
+    const up = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      active = false;
+      setDragging(false);
+    };
+    el.addEventListener("mousedown", down);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      el.removeEventListener("mousedown", down);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    // `live` gates the apron's existence — see the placement effect.
+  }, [live]);
+
   // Ctrl+wheel zoom, anchored on the cursor. The wheel arrives two ways —
   // relayed by the probe from inside the iframe (content coordinates), or
   // directly over the apron — and both funnel into zoomAt, which remembers
   // where the anchored content point sat on screen. After the new zoom
-  // renders, the layout effect scrolls the apron so that point hasn't moved.
-  const apronRef = useRef<HTMLDivElement>(null);
+  // renders, the layout effect shifts the pan so that point hasn't moved.
   const anchorRef = useRef<{ cx: number; cy: number; sx: number; sy: number } | null>(null);
   const zoomAt = useCallback(
     (dir: 1 | -1, cx: number, cy: number) => {
@@ -1626,20 +1676,34 @@ function LiveCanvas({
   );
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      const m = e.data as { uai?: boolean; type?: string; dir?: 1 | -1; x?: number; y?: number };
+      const m = e.data as { uai?: boolean; type?: string; dir?: 1 | -1; x?: number; y?: number; dx?: number; dy?: number };
       if (m?.uai && m.type === "live-zoom" && m.dir) {
         zoomAt(m.dir, m.x ?? width / 2, m.y ?? height / 2);
+      } else if (m?.uai && m.type === "live-pan") {
+        // Deltas are content px; the frame moves by their scaled size.
+        setPan((p) => p && { x: p.x + (m.dx ?? 0) * zoom, y: p.y + (m.dy ?? 0) * zoom });
       }
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [zoomAt, width, height]);
+  }, [zoomAt, width, height, zoom]);
   useEffect(() => {
     const el = apronRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
       e.preventDefault();
+      if (!e.ctrlKey) {
+        // The apron has no native scroll any more (pan is a transform), so
+        // plain wheel pans: vertical, Shift for horizontal, trackpad both.
+        setPan(
+          (p) =>
+            p && {
+              x: p.x - e.deltaX - (e.shiftKey ? e.deltaY : 0),
+              y: p.y - (e.shiftKey ? 0 : e.deltaY),
+            },
+        );
+        return;
+      }
       const rect = frameRef.current?.getBoundingClientRect();
       zoomAt(
         e.deltaY < 0 ? 1 : -1,
@@ -1651,19 +1715,18 @@ function LiveCanvas({
     // React's onWheel doesn't guarantee.
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [zoomAt, zoom, width, height, frameRef]);
+    // `live` gates the apron's existence — see the placement effect.
+  }, [zoomAt, zoom, width, height, frameRef, live]);
   useLayoutEffect(() => {
     const a = anchorRef.current;
     if (!a) return;
     anchorRef.current = null;
-    const apron = apronRef.current;
     const rect = frameRef.current?.getBoundingClientRect();
-    if (!apron || !rect) return;
-    // rect reflects the new scale at the old scroll; the difference from the
-    // remembered screen position is exactly the scroll correction. The
-    // browser clamps at the edges, where anchoring has no room anyway.
-    apron.scrollLeft += rect.left + a.cx * zoom - a.sx;
-    apron.scrollTop += rect.top + a.cy * zoom - a.sy;
+    if (!rect) return;
+    // rect reflects the new scale at the old pan; the difference from the
+    // remembered screen position is exactly the pan correction. Pan is
+    // unclamped, so anchoring works even at the edges.
+    setPan((p) => p && { x: p.x - (rect.left + a.cx * zoom - a.sx), y: p.y - (rect.top + a.cy * zoom - a.sy) });
   }, [zoom, frameRef]);
   const [draft, setDraft] = useState(path);
   useEffect(() => setDraft(path), [path]);
@@ -1741,8 +1804,21 @@ function LiveCanvas({
           </button>
         </div>
       )}
-      <div ref={apronRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>
-        <div style={{ width: width * zoom, height: height * zoom, margin: "0 auto" }}>
+      <div
+        ref={apronRef}
+        style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative", cursor: dragging ? "grabbing" : undefined }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: width * zoom,
+            height: height * zoom,
+            transform: pan ? `translate(${pan.x}px, ${pan.y}px)` : undefined,
+            visibility: pan ? "visible" : "hidden",
+          }}
+        >
           <iframe
             ref={frameRef}
             src={`${live.origin}${path}`}
@@ -1754,6 +1830,7 @@ function LiveCanvas({
               background: "#fff",
               transform: `scale(${zoom})`,
               transformOrigin: "top left",
+              pointerEvents: dragging ? "none" : undefined,
             }}
           />
         </div>
