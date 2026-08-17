@@ -114,8 +114,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 type CanvasMode = "component" | "live";
 
 /** Frame heights for the live canvas (the component canvas scrolls its own
- * stage, so it only ever needed widths). */
-const DEVICE_HEIGHT: Record<DeviceName, number> = { Desktop: 900, Tablet: 1112, Phone: 844 };
+ * stage, so it only ever needed widths). These are VIEWPORTS, not screens:
+ * Desktop is a 1440x900 display minus ~110px of tab strip, address bar and
+ * taskbar — what the page actually gets. */
+const DEVICE_HEIGHT: Record<DeviceName, number> = { Desktop: 790, Tablet: 1112, Phone: 844 };
 
 /** The one text slot an element can be edited in place through, or null when
  * its content is richer than a single JSXText child. */
