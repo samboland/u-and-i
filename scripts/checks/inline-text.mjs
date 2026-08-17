@@ -29,6 +29,8 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 try {
   await page.goto("http://localhost:4400", { waitUntil: "domcontentloaded" });
   await page.click(`[title="Open ${FILE}"]`);
+  // In-place editing lives on the component canvas — its workspace tab.
+  await page.getByRole("button", { name: "Component", exact: true }).click();
   await page.waitForTimeout(1500);
 
   const el = page.frameLocator("iframe").locator(`[data-uai="app:${FILE}::${NODE}"]`);

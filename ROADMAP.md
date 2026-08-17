@@ -55,11 +55,18 @@ Everything the canvas shows inside live mode is the real running app.
    CSP (its nonce + strict-dynamic would block our script), and injects
    `web/src/harness/live-probe.js` into every HTML response.
    `/api/project` reports the chosen origin as `live`.
-2. **Live canvas** — `Component / Live app` toggle in the canvas toolbar
-   (`LiveCanvas` in `App.tsx`). Device width + zoom are applied editor-side
-   (we can't inject a stage into a page we don't render). Steered by a path
-   bar and by clicking a route in the Routes tree. The probe reports where
-   the app actually landed, and a banner calls out redirects.
+2. **Live canvas** — `LiveCanvas` in `App.tsx`. Device width + zoom are
+   applied editor-side (we can't inject a stage into a page we don't
+   render). Steered by a path bar and by clicking a route in the Routes
+   tree. The probe reports where the app actually landed, and a banner
+   calls out redirects. The live app IS the Layout workspace's canvas —
+   there is no Component/Live toggle. The old per-component canvas moved
+   to a fourth workspace tab (`Component`, after Workshop) that reuses the
+   same body; `canvasMode` derives from the workspace, and workspace +
+   live path persist in the per-project session, so an editor reload (F5,
+   vite restart — server/*.ts are vite-config deps, editing them restarts
+   the running dev server and reloads the editor) always comes back to the
+   live view it was on.
 
 3. **Click → source** — clicking an element in the live canvas lands the
    editor on its file with the JSX node selected (outliner + Properties
@@ -104,7 +111,11 @@ Everything the canvas shows inside live mode is the real running app.
   mechanical link; the actual OAuth completion needs human credentials.
   The same investigation fixed the mirror forwarding `Transfer-Encoding`
   alongside its recomputed `Content-Length` — invalid HTTP that strict
-  clients reject.
+  clients reject. Verified in the real Electron shell (Playwright
+  `_electron`): the popup reaches GitHub's login with the right
+  `localhost:3000` callback, and a host-scoped `localhost` cookie set via
+  port 3000 is visible to the live iframe on the mirror port. The one
+  unautomatable hop is typing real GitHub credentials.
 - ~~The Next dev-tools badge shows in the corner of the live canvas.~~
   Fixed: the probe styles `#devtools-indicator` inside the `nextjs-portal`
   shadow root to `display:none` — only the badge; build-error overlays in

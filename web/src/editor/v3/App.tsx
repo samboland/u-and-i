@@ -53,9 +53,10 @@ const MIME_JSX = "application/x-uai-jsx";
 const APP_PREFIX = "app:";
 
 const WORKSPACES = [
-  { label: "Layout", hint: "edit the app's real components" },
+  { label: "Layout", hint: "edit the real running app" },
   { label: "Style", hint: "edit theme tokens with a live preview" },
   { label: "Workshop", hint: "build materials for the design system" },
+  { label: "Component", hint: "render one component alone with sample props" },
 ] as const;
 type Workspace = (typeof WORKSPACES)[number]["label"];
 
@@ -106,7 +107,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** Which canvas is on screen: one component we render ourselves, or the
- * target's own running app mirrored through the live proxy. */
+ * target's own running app mirrored through the live proxy. Not free state —
+ * it follows the workspace (Component renders alone; everything else is the
+ * live app), so an editor reload can never strand the user off the live
+ * view. */
 type CanvasMode = "component" | "live";
 
 /** Frame heights for the live canvas (the component canvas scrolls its own
@@ -150,6 +154,8 @@ interface ProjectSession {
   openFile?: string;
   device?: DeviceName;
   zoom?: number;
+  workspace?: Workspace;
+  livePath?: string;
 }
 function loadProjectSession(root: string): ProjectSession {
   try {
@@ -212,7 +218,7 @@ export function App() {
   // server/live-proxy.ts. `livePath` is the route we're showing; `liveUrl` is
   // where the app actually ended up (it redirects, e.g. /account → /signin).
   const [live, setLive] = useState<{ origin: string; upstream: string } | null>(null);
-  const [canvasMode, setCanvasMode] = useState<CanvasMode>("component");
+  const canvasMode: CanvasMode = workspace === "Component" ? "component" : "live";
   const canvasModeRef = useRef(canvasMode);
   canvasModeRef.current = canvasMode;
   const [livePath, setLivePath] = useState("/");
@@ -250,6 +256,10 @@ export function App() {
         const session = loadProjectSession(d.project.root);
         if (session.device && session.device in DEVICES) setDevice(session.device);
         if (session.zoom && ZOOMS.includes(session.zoom)) setZoom(session.zoom);
+        if (session.workspace && WORKSPACES.some((w) => w.label === session.workspace)) {
+          setWorkspace(session.workspace);
+        }
+        if (session.livePath?.startsWith("/")) setLivePath(session.livePath);
         if (loadPrefs().reopenLast && session.openFile) {
           void openFileRef.current(session.openFile).catch(() => {});
         }
@@ -277,12 +287,18 @@ export function App() {
       // Keep the last-known open file even while nothing is open (e.g. the
       // brief window during boot restore) — closing isn't a concept here.
       const existing = loadProjectSession(targetRoot);
-      const session: ProjectSession = { openFile: fileState?.file ?? existing.openFile, device, zoom };
+      const session: ProjectSession = {
+        openFile: fileState?.file ?? existing.openFile,
+        device,
+        zoom,
+        workspace,
+        livePath,
+      };
       localStorage.setItem(`uai:proj:${targetRoot}`, JSON.stringify(session));
     } catch {
       /* ditto */
     }
-  }, [targetRoot, fileState?.file, device, zoom]);
+  }, [targetRoot, fileState?.file, device, zoom, workspace, livePath]);
 
   // Shell analysis for the selected route.
   useEffect(() => {
@@ -687,7 +703,9 @@ export function App() {
       }
       if (c.mod && !c.shift && k === "z") undoAction();
       else if (c.mod && c.shift && k === "z") redoAction();
-      else if (c.key === "Tab" && workspace === "Layout") setInteract((v) => !v);
+      else if (c.key === "Tab" && (workspace === "Layout" || workspace === "Component")) {
+        setInteract((v) => !v);
+      }
       else if (c.key === "Escape") { setCtxMenu(null); setPrefsOpen(false); }
       // Application (chrome) zoom: Ctrl+Shift+± — canvas zoom: plain Ctrl+±.
       else if (c.mod && c.shift && (c.key === "+" || c.key === "=")) {
@@ -1070,7 +1088,7 @@ export function App() {
 
       {/* ---------------------------------------------------------- Body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        {workspace === "Layout" ? (
+        {workspace === "Layout" || workspace === "Component" ? (
           <>
             {/* Insert panel */}
             <div style={{ flex: "0 1 236px", minWidth: 180, display: "flex", flexDirection: "column", background: C.panel, borderRight: `1px solid ${C.border}`, minHeight: 0 }}>
@@ -1182,13 +1200,6 @@ export function App() {
             {/* Canvas region */}
             <div ref={canvasRegionRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 240, background: C.void }}>
               <div style={{ flex: "0 0 auto", minHeight: 30, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: `1px solid ${C.canvasEdge}`, background: C.canvasBar, minWidth: 0, position: "relative", zIndex: 25 }}>
-                <div title={live ? `Live app mirrors ${live.upstream}` : "Live app needs the target's dev server running"}>
-                  <Seg items={[
-                    { label: "Component", active: canvasMode === "component", onClick: () => setCanvasMode("component") },
-                    { label: "Live app", active: canvasMode === "live", onClick: () => setCanvasMode("live") },
-                  ]} />
-                </div>
-                <div style={{ ...vdiv, height: 16 }} />
                 <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
                 <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>{DEVICES[device].width}px</span>
                 <div style={{ ...vdiv, height: 16 }} />

@@ -40,9 +40,9 @@ try {
   await probePage.close();
   check(echoed.includes("uai-premise=shared"), `localhost cookie visible on the mirror port: "${echoed}"`);
 
+  // The Layout workspace IS the live canvas — nothing to switch to.
   await page.goto("http://localhost:4400/", { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2500);
-  await page.click('button:has-text("Live app")');
+  await page.waitForTimeout(4000);
   const pathInput = page.getByLabel("Live app path");
   await pathInput.fill(AUTHED_PATH);
   await pathInput.press("Enter");
