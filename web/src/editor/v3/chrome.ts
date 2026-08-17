@@ -45,8 +45,10 @@ export const SEL_COLOR = {
   none: C.muted,
 } as const;
 
+// Real hardware, like Tablet (iPad Air) and Phone (iPhone 12–14):
+// Desktop is the 1440×900 laptop class, not a made-to-fit rectangle.
 export const DEVICES = {
-  Desktop: { width: 1100, zoom: 0.62 },
+  Desktop: { width: 1440, zoom: 0.5 },
   Tablet: { width: 834, zoom: 0.75 },
   Phone: { width: 390, zoom: 1 },
 } as const;

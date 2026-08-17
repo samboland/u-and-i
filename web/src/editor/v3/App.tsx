@@ -115,7 +115,7 @@ type CanvasMode = "component" | "live";
 
 /** Frame heights for the live canvas (the component canvas scrolls its own
  * stage, so it only ever needed widths). */
-const DEVICE_HEIGHT: Record<DeviceName, number> = { Desktop: 820, Tablet: 1112, Phone: 844 };
+const DEVICE_HEIGHT: Record<DeviceName, number> = { Desktop: 900, Tablet: 1112, Phone: 844 };
 
 /** The one text slot an element can be edited in place through, or null when
  * its content is richer than a single JSXText child. */
@@ -568,6 +568,8 @@ export function App() {
           );
         } else if (live.type === "live-click" && live.url) {
           void resolveLiveClick(live as { url: string; line: number; column: number });
+        } else if (live.type === "live-zoom") {
+          zoomBy((live as unknown as { dir: 1 | -1 }).dir);
         }
         return;
       }
@@ -1283,6 +1285,7 @@ export function App() {
                     width={DEVICES[device].width}
                     height={DEVICE_HEIGHT[device]}
                     zoom={zoom}
+                    onZoom={zoomBy}
                   />
                 )}
                 {canvasMode === "component" && fileState && !fileState.renderable && !routeSel && (
@@ -1582,6 +1585,7 @@ function LiveCanvas({
   width,
   height,
   zoom,
+  onZoom,
 }: {
   live: { origin: string; upstream: string } | null;
   frameRef: React.RefObject<HTMLIFrameElement | null>;
@@ -1592,7 +1596,23 @@ function LiveCanvas({
   width: number;
   height: number;
   zoom: number;
+  onZoom: (dir: 1 | -1) => void;
 }) {
+  // Ctrl+wheel over the apron zooms like inside the frame (the probe covers
+  // the frame itself). Attached manually: preventDefault needs a
+  // non-passive listener, which React's onWheel doesn't guarantee.
+  const apronRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = apronRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      onZoom(e.deltaY < 0 ? 1 : -1);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [onZoom]);
   const [draft, setDraft] = useState(path);
   useEffect(() => setDraft(path), [path]);
   const [signingIn, setSigningIn] = useState(false);
@@ -1669,7 +1689,7 @@ function LiveCanvas({
           </button>
         </div>
       )}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>
+      <div ref={apronRef} style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 16 }}>
         <div style={{ width: width * zoom, height: height * zoom, margin: "0 auto" }}>
           <iframe
             ref={frameRef}

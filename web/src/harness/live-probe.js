@@ -113,6 +113,20 @@
     true,
   );
 
+  /** Ctrl+wheel is canvas zoom, same as the component harness — without
+   * this the iframe swallows the gesture and the editor never sees it.
+   * Forwarded in both select and interact modes; the page itself never
+   * needs pinch-zoom inside the canvas. */
+  window.addEventListener(
+    "wheel",
+    function (e) {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      post({ type: "live-zoom", dir: e.deltaY < 0 ? 1 : -1 });
+    },
+    { passive: false },
+  );
+
   /** Hide Next's dev-tools badge — and only the badge. It lives as
    * `#devtools-indicator` inside the open `nextjs-portal` shadow root;
    * build-error overlays are siblings in the same root and must stay
