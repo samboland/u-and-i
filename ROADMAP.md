@@ -101,6 +101,16 @@ Everything the canvas shows inside live mode is the real running app.
 
 - The probe's highlight box is a selection flash, not a tracked overlay —
   it goes stale on scroll. Fine for now; revisit with hover outlines.
+- **Hairlines at fractional zoom persist** (shelved 2026-08-17). Ruled out
+  so far: transform-scale compositing seams (switched to CSS `zoom`),
+  fractional pan/size at the frame edges (rendered translate rounds, the
+  wrapper floors + clips the scaled size — verified whole-px in Chrome,
+  Sam still sees lines in the Electron shell). Next suspects: Windows
+  display scaling (non-integer DPR adds another rounding layer inside the
+  child, `devicePixelRatio` in the zoomed child reads `zoom×scaling`), and
+  seams INSIDE the page between composited layers (shadowed/rounded
+  elements get own layers even under CSS zoom). Reproduce in the actual
+  Electron shell at Sam's display scaling, not in Chrome.
 - ~~The canvas has no session, so `/account` and `/waitlist` redirect to
   `/signin`.~~ Fixed: OAuth can't run inside the iframe (GitHub won't be
   framed), so the redirect banner's "Sign in…" opens the target's own
