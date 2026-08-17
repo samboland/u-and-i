@@ -292,15 +292,13 @@
    * Ctrl+middle is taken, leaving the page its native middle-click
    * behaviours (autoscroll, open-in-tab). Deltas are content px — the
    * editor scales them by its own zoom. */
-  // ⚠️ The child must report this drag — implicit mouse capture latches
-  // every move to the frame that took the mousedown, so the editor cannot
-  // take over mid-gesture. It reports clientX/Y ONLY: content px, the one
-  // coordinate space with defined units here (screenX/movementX units vary
-  // with Chromium version, display scaling and CSS zoom). The editor maps
-  // each sample to absolute editor coordinates against the frame's CURRENT
-  // rect — absolute positions are invariant to the frame moving under the
-  // cursor, so the pan applying never feeds back into the deltas.
-  var panDrag = false;
+  // ⚠️ Deltas come from screenX/Y, and the editor applies them 1:1 — moving
+  // the window with the cursor is a SCREEN-pixel relationship. clientX/Y
+  // won't do: they live in the iframe's scaled coordinate space, which the
+  // pan itself shifts under the cursor (feedback → half-speed jitter), and
+  // movementX/Y is raw device px, blind to the scale. Screen coords are
+  // immune to both.
+  var panDrag = null; // last {x, y} in screen px while middle-dragging
   window.addEventListener(
     "mousedown",
     function (e) {
@@ -308,10 +306,7 @@
       if (!selecting && !e.ctrlKey) return;
       e.preventDefault();
       e.stopPropagation();
-      panDrag = true;
-      // Carry the down position so the very first move already has a
-      // baseline — without it the opening step of every drag is swallowed.
-      post({ type: "live-pan-start", x: e.clientX, y: e.clientY });
+      panDrag = { x: e.screenX, y: e.screenY };
     },
     true,
   );
@@ -319,22 +314,20 @@
     "mousemove",
     function (e) {
       if (!panDrag) return;
-      post({ type: "live-pan-move", x: e.clientX, y: e.clientY });
+      post({ type: "live-pan", dx: e.screenX - panDrag.x, dy: e.screenY - panDrag.y });
+      panDrag = { x: e.screenX, y: e.screenY };
     },
     true,
   );
   window.addEventListener(
     "mouseup",
     function (e) {
-      if (e.button !== 1) return;
-      panDrag = false;
-      post({ type: "live-pan-end" });
+      if (e.button === 1) panDrag = null;
     },
     true,
   );
   window.addEventListener("blur", function () {
-    panDrag = false;
-    post({ type: "live-pan-end" });
+    panDrag = null;
   });
 
   /** Ctrl+wheel is canvas zoom, same as the component harness — without
@@ -374,18 +367,6 @@
     },
     true,
   );
-
-  /** The canvas is a design surface, not a browser: hide the ROOT
-   * scrollbar. The app forces `overflow-y: scroll` on html, so the track
-   * shows even when nothing scrolls — and it takes no layout space here
-   * (overlay style), so hiding it shifts nothing. Wheel scrolling still
-   * works; inner scrollable regions keep their own bars. */
-  (function () {
-    var s = document.createElement("style");
-    s.setAttribute("data-uai-no-scrollbar", "");
-    s.textContent = "html::-webkit-scrollbar{display:none}html{scrollbar-width:none}";
-    document.documentElement.appendChild(s);
-  })();
 
   /** Hide Next's dev-tools badge — and only the badge. It lives as
    * `#devtools-indicator` inside the open `nextjs-portal` shadow root;

@@ -52,38 +52,6 @@ export function reporter() {
   };
 }
 
-/**
- * Click an element inside the live frame by dispatching at its content
- * coordinates. Playwright's own click math is blind to the CSS `zoom` that
- * scales the live iframe, so its screen-coordinate clicks land off-target;
- * a click dispatched inside the child rides the same capture handler real
- * input does. `text` narrows the match; only visible elements count.
- * Returns whether something was hit.
- */
-export function clickInFrame(frame, selector, text) {
-  return frame.evaluate(
-    ([sel, txt]) => {
-      const el = [...document.querySelectorAll(sel)].find((e) => {
-        const r = e.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) return false;
-        return !txt || (e.textContent ?? "").includes(txt);
-      });
-      if (!el) return false;
-      const r = el.getBoundingClientRect();
-      document.dispatchEvent(
-        new MouseEvent("click", {
-          bubbles: true,
-          cancelable: true,
-          clientX: r.left + r.width / 2,
-          clientY: r.top + r.height / 2,
-        }),
-      );
-      return true;
-    },
-    [selector, text ?? null],
-  );
-}
-
 /** Where the live mirror is listening, straight from the running server. */
 export async function liveOrigin() {
   const r = await fetch("http://localhost:4400/api/project").then((x) => x.json());

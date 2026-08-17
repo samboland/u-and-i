@@ -1627,43 +1627,27 @@ function LiveCanvas({
   }, [pan, width, zoom, live]);
   useEffect(() => setPan(null), [width]);
 
-  // Middle-drag pans — ONE tracker for both origins. A drag that starts on
-  // the apron begins here directly; one that starts inside the frame is
-  // only ANNOUNCED by the probe (live-pan-start), because no coordinate
-  // the child can report survives CSS zoom + display scaling intact.
-  // Either way the iframe goes pointer-transparent, every subsequent move
-  // lands on this window, and the pan is measured in editor px — the same
-  // space the frame is positioned in, so tracking is 1:1 by construction.
-  const dragCtl = useRef({ begin: () => {}, end: () => {} });
-  const panCursorRef = useRef<{ x: number; y: number } | null>(null);
+  // Middle-drag pans. While dragging, the iframe stops eating pointer
+  // events so the drag survives crossing it; drags that START inside the
+  // frame arrive from the probe as live-pan deltas instead.
   useEffect(() => {
     const el = apronRef.current;
     if (!el) return;
     let active = false;
-    const begin = () => {
-      active = true;
-      // Straight onto the DOM — waiting for a React render here loses the
-      // first moves of a probe-announced drag into the still-solid iframe.
-      if (frameRef.current) frameRef.current.style.pointerEvents = "none";
-      setDragging(true);
-    };
-    const end = () => {
-      active = false;
-      if (frameRef.current) frameRef.current.style.pointerEvents = "";
-      setDragging(false);
-    };
-    dragCtl.current = { begin, end };
     const down = (e: MouseEvent) => {
       if (e.button !== 1) return;
       e.preventDefault();
-      begin();
+      active = true;
+      setDragging(true);
     };
     const move = (e: MouseEvent) => {
       if (!active) return;
       setPan((p) => p && { x: p.x + e.movementX, y: p.y + e.movementY });
     };
     const up = (e: MouseEvent) => {
-      if (e.button === 1) end();
+      if (e.button !== 1) return;
+      active = false;
+      setDragging(false);
     };
     el.addEventListener("mousedown", down);
     window.addEventListener("mousemove", move);
@@ -1695,25 +1679,10 @@ function LiveCanvas({
       const m = e.data as { uai?: boolean; type?: string; dir?: 1 | -1; x?: number; y?: number; dx?: number; dy?: number };
       if (m?.uai && m.type === "live-zoom" && m.dir) {
         zoomAt(m.dir, m.x ?? width / 2, m.y ?? height / 2);
-      } else if (m?.uai && m.type === "live-pan-start") {
-        const rect = frameRef.current?.getBoundingClientRect();
-        panCursorRef.current =
-          rect && typeof m.x === "number" && typeof m.y === "number"
-            ? { x: rect.left + m.x * zoom, y: rect.top + m.y * zoom }
-            : null;
-        dragCtl.current.begin();
-      } else if (m?.uai && m.type === "live-pan-move" && typeof m.x === "number" && typeof m.y === "number") {
-        // Content px → absolute editor px against the frame's CURRENT rect.
-        // Absolute tracking makes the applied pan cancel out of the deltas.
-        const rect = frameRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const cur = { x: rect.left + m.x * zoom, y: rect.top + m.y * zoom };
-        const prev = panCursorRef.current;
-        panCursorRef.current = cur;
-        if (prev) setPan((p) => p && { x: p.x + cur.x - prev.x, y: p.y + cur.y - prev.y });
-      } else if (m?.uai && m.type === "live-pan-end") {
-        panCursorRef.current = null;
-        dragCtl.current.end();
+      } else if (m?.uai && m.type === "live-pan") {
+        // Deltas are SCREEN px (see the probe) — applied 1:1, no zoom scaling,
+        // so the frame tracks the cursor exactly at any zoom.
+        setPan((p) => p && { x: p.x + (m.dx ?? 0), y: p.y + (m.dy ?? 0) });
       }
     };
     window.addEventListener("message", onMsg);
@@ -1845,16 +1814,9 @@ function LiveCanvas({
             position: "absolute",
             left: 0,
             top: 0,
-            // Whole-pixel geometry, or the frame's edges land between device
-            // pixels and blend into hairlines: translate rounds (pan itself
-            // stays exact for the zoom-anchor math), and the wrapper floors
-            // and CLIPS the scaled size so the fractional last row/column —
-            // where the iframe's white background would bleed through — is
-            // cut instead of composited.
-            width: Math.floor(width * zoom),
-            height: Math.floor(height * zoom),
-            overflow: "hidden",
-            transform: pan ? `translate(${Math.round(pan.x)}px, ${Math.round(pan.y)}px)` : undefined,
+            width: width * zoom,
+            height: height * zoom,
+            transform: pan ? `translate(${pan.x}px, ${pan.y}px)` : undefined,
             visibility: pan ? "visible" : "hidden",
           }}
         >
@@ -1867,12 +1829,8 @@ function LiveCanvas({
               height,
               border: "none",
               background: "#fff",
-              // CSS zoom, not transform: scale() — a fractional transform
-              // composites layers on non-integer boundaries and draws 1px
-              // seam lines between elements that touch at 100%. zoom scales
-              // at layout/paint with device-pixel snapping, so edges stay
-              // flush at any factor.
-              zoom,
+              transform: `scale(${zoom})`,
+              transformOrigin: "top left",
               pointerEvents: dragging ? "none" : undefined,
             }}
           />
