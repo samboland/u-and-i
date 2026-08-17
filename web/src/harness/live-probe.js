@@ -111,6 +111,30 @@
     return null;
   }
 
+  /** Every distinct selectable element in the stack under a point — the
+   * topmost hit first, then covered siblings and ancestors beneath it.
+   * Each entry has already been through the fiber walk, deduped by the
+   * element it lands on (a decorative wrapper usually resolves to the
+   * same element as what it covers). */
+  function candidatesAt(x, y) {
+    var els = document.elementsFromPoint(x, y);
+    var out = [];
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el === overlay || el === hoverBox || el === hoverChip || el === box) continue;
+      var tag = el.tagName ? el.tagName.toUpperCase() : "";
+      if (tag === "NEXTJS-PORTAL" || tag === "HTML") continue;
+      var hit = frameForClick(el);
+      if (!hit) continue;
+      var dup = false;
+      for (var j = 0; j < out.length; j++) {
+        if (out[j].el === hit.el) { dup = true; break; }
+      }
+      if (!dup) out.push(hit);
+    }
+    return out;
+  }
+
   /** Hover affordance: outline + tag chip on whatever a click would pick.
    * rAF-throttled; re-aimed on scroll so it never points at stale pixels. */
   var hoverXY = null;
@@ -126,6 +150,9 @@
     requestAnimationFrame(function () {
       hoverQueued = false;
       if (!hoverXY || !selecting) return;
+      // While the cursor sits on a drill spot, the selection flash and its
+      // depth chip own the pixels — hover would snap back to the top hit.
+      if (lastPick && Math.abs(hoverXY.x - lastPick.x) < 6 && Math.abs(hoverXY.y - lastPick.y) < 6) return;
       var el = hitAt(hoverXY.x, hoverXY.y);
       var hit = el ? frameForClick(el) : null;
       if (!hit) return hideHover();
@@ -181,22 +208,47 @@
       if (freezeStyle.parentNode) freezeStyle.parentNode.removeChild(freezeStyle);
       hideHover();
       if (box) box.style.display = "none";
+      lastPick = null;
     }
   }
 
   // The overlay owns the pointer in select mode, so clicks land on it —
   // hit-test through it for the real target. Capture phase as a backstop
   // for anything stacked above the overlay.
+  //
+  // Repeated clicks in the same spot drill through the stack: a fully
+  // covered element (image behind a gradient, card behind a stretched
+  // link) is unreachable from the top hit alone, so each click selects
+  // the next distinct element beneath the last, wrapping at the bottom.
+  var lastPick = null; // { x, y, i } of the previous select click
   document.addEventListener(
     "click",
     function (e) {
       if (!selecting) return;
       e.preventDefault();
       e.stopPropagation();
-      var target = hitAt(e.clientX, e.clientY) || e.target;
-      var hit = frameForClick(target);
+      var cands = candidatesAt(e.clientX, e.clientY);
+      var i = 0;
+      if (
+        cands.length &&
+        lastPick &&
+        Math.abs(lastPick.x - e.clientX) < 6 &&
+        Math.abs(lastPick.y - e.clientY) < 6
+      ) {
+        i = (lastPick.i + 1) % cands.length;
+      }
+      lastPick = { x: e.clientX, y: e.clientY, i: i };
+      var hit = cands[i] || null;
       if (hit) {
         highlight(hit.el);
+        hoverBox.style.display = "none";
+        // The chip doubles as a depth gauge while drilling.
+        var r = hit.el.getBoundingClientRect();
+        hoverChip.textContent =
+          (hit.el.tagName || "").toLowerCase() + (cands.length > 1 ? " · " + (i + 1) + "/" + cands.length : "");
+        hoverChip.style.left = Math.max(0, r.left) + "px";
+        hoverChip.style.top = (r.top >= 22 ? r.top - 20 : r.top + 2) + "px";
+        hoverChip.style.display = "block";
         post({
           type: "live-click",
           url: hit.frame.url,
