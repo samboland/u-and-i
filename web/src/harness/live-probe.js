@@ -130,6 +130,27 @@
     { passive: false },
   );
 
+  /** Tab is the editor's Edit/View toggle and must work while the live
+   * frame has focus (any click on the canvas focuses the iframe, and the
+   * parent window never sees keys after that). Captured before the page
+   * can move focus with it; real form fields keep their Tab. Escape
+   * forwards too so the editor can close its own popovers. */
+  window.addEventListener(
+    "keydown",
+    function (e) {
+      var t = e.target;
+      if (t && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+      if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        post({ type: "toggle-interact" });
+      } else if (e.key === "Escape") {
+        post({ type: "escape" });
+      }
+    },
+    true,
+  );
+
   /** Hide Next's dev-tools badge — and only the badge. It lives as
    * `#devtools-indicator` inside the open `nextjs-portal` shadow root;
    * build-error overlays are siblings in the same root and must stay

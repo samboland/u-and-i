@@ -571,6 +571,12 @@ export function App() {
           );
         } else if (live.type === "live-click" && live.url) {
           void resolveLiveClick(live as { url: string; line: number; column: number });
+        } else if (live.type === "toggle-interact") {
+          // Tab pressed while the live frame holds focus.
+          setInteract((v) => !v);
+        } else if (live.type === "escape") {
+          setCtxMenu(null);
+          setPrefsOpen(false);
         }
         // live-zoom is LiveCanvas's own affair — it needs the cursor anchor.
         return;
@@ -734,10 +740,13 @@ export function App() {
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
       if (handleChord({ key: e.key, mod: e.ctrlKey || e.metaKey, shift: e.shiftKey, alt: e.altKey })) {
         e.preventDefault();
+        e.stopPropagation();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase: chords like Tab must be ours before any focused
+    // control gets a chance to treat them as focus navigation.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [handleChord]);
 
   // Ctrl+scroll over the chrome's canvas region zooms the page.
