@@ -53,7 +53,9 @@ try {
   // still be compiling/hydrating — retry until a resolution arrives.
   const target = frame.locator("h1:visible, h2:visible, p:visible").first();
   for (let attempt = 0; attempt < 4 && !resolves.some((r) => r.ok); attempt++) {
-    await target.click();
+    // force: the select-mode overlay intercepts pointer events by design;
+    // the probe hit-tests through it, so click at the element's position.
+    await target.click({ force: true });
     await page.waitForTimeout(3000);
   }
   if (shot) await page.screenshot({ path: `${shot}-clicked.png` });

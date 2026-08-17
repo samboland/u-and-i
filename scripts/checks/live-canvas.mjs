@@ -47,6 +47,27 @@ try {
     });
   check(badge.portal && badge.styled && badge.hidden, `dev-tools badge hidden: ${JSON.stringify(badge)}`);
 
+  // Edit mode freezes the page behind a transparent overlay; View mode
+  // removes it (and the animation-freeze style) so the app is usable again.
+  const frame = () => page.frames().find((f) => f.url().startsWith(origin));
+  const freezeState = () =>
+    frame().evaluate(() => ({
+      overlay: (() => {
+        const o = document.querySelector("[data-uai-overlay]");
+        return o ? getComputedStyle(o).display : "missing";
+      })(),
+      frozen: !!document.querySelector("style[data-uai-freeze]"),
+    }));
+  let fz = await freezeState();
+  check(fz.overlay === "block" && fz.frozen, `edit mode freezes the page: ${JSON.stringify(fz)}`);
+  const modeSeg = page.locator('[title="Tab toggles between editing and using the app"]');
+  await modeSeg.getByRole("button", { name: "View" }).click();
+  await page.waitForTimeout(500);
+  fz = await freezeState();
+  check(fz.overlay === "none" && !fz.frozen, `view mode unfreezes the page: ${JSON.stringify(fz)}`);
+  await modeSeg.getByRole("button", { name: "Edit" }).click();
+  await page.waitForTimeout(500);
+
   const pathInput = page.getByLabel("Live app path");
   await pathInput.fill(OPEN_PATH);
   await pathInput.press("Enter");

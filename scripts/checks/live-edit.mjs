@@ -67,7 +67,9 @@ try {
   // A cold dev server can still be compiling/hydrating — retry the click
   // until a resolution arrives rather than trusting one fixed wait.
   for (let attempt = 0; attempt < 4 && !resolves.some((r) => r.ok && r.id); attempt++) {
-    await liveFrame().locator(`h2:has-text("${TEXT}")`).click();
+    // force: the select-mode overlay intercepts pointer events by design;
+    // the probe hit-tests through it, so click at the element's position.
+    await liveFrame().locator(`h2:has-text("${TEXT}")`).click({ force: true });
     await page.waitForTimeout(3000);
   }
 

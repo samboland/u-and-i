@@ -49,8 +49,16 @@
     return null;
   }
 
-  /** Select mode: clicks pick elements instead of reaching the app. */
+  /** Select (edit) mode freezes the page: a transparent overlay sits above
+   * everything, so hover states, cursor changes and clicks never reach the
+   * app, and we hit-test through it ourselves. Hovering outlines the
+   * element a click would select, with its tag as a chip. Interact (view)
+   * mode removes all of it and hands the page back. */
   var selecting = true;
+  var overlay = null;
+  var hoverBox = null;
+  var hoverChip = null;
+  var freezeStyle = null;
 
   /** One reusable outline box so the user sees what they picked. It tracks
    * nothing — any scroll or layout shift just leaves it until the next
@@ -89,13 +97,104 @@
     return null;
   }
 
+  /** The page element under a viewport point, looking through our own
+   * chrome (the overlay is always the topmost hit in select mode). */
+  function hitAt(x, y) {
+    var els = document.elementsFromPoint(x, y);
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el === overlay || el === hoverBox || el === hoverChip || el === box) continue;
+      var tag = el.tagName ? el.tagName.toUpperCase() : "";
+      if (tag === "NEXTJS-PORTAL" || tag === "HTML") continue;
+      return el;
+    }
+    return null;
+  }
+
+  /** Hover affordance: outline + tag chip on whatever a click would pick.
+   * rAF-throttled; re-aimed on scroll so it never points at stale pixels. */
+  var hoverXY = null;
+  var hoverQueued = false;
+  function hideHover() {
+    if (hoverBox) hoverBox.style.display = "none";
+    if (hoverChip) hoverChip.style.display = "none";
+  }
+  function queueHover(x, y) {
+    hoverXY = { x: x, y: y };
+    if (hoverQueued) return;
+    hoverQueued = true;
+    requestAnimationFrame(function () {
+      hoverQueued = false;
+      if (!hoverXY || !selecting) return;
+      var el = hitAt(hoverXY.x, hoverXY.y);
+      var hit = el ? frameForClick(el) : null;
+      if (!hit) return hideHover();
+      var r = hit.el.getBoundingClientRect();
+      hoverBox.style.left = r.left + "px";
+      hoverBox.style.top = r.top + "px";
+      hoverBox.style.width = r.width + "px";
+      hoverBox.style.height = r.height + "px";
+      hoverBox.style.display = "block";
+      hoverChip.textContent = (hit.el.tagName || "").toLowerCase();
+      hoverChip.style.left = Math.max(0, r.left) + "px";
+      hoverChip.style.top = (r.top >= 22 ? r.top - 20 : r.top + 2) + "px";
+      hoverChip.style.display = "block";
+    });
+  }
+
+  function ensureUI() {
+    if (overlay) return;
+    overlay = document.createElement("div");
+    overlay.setAttribute("data-uai-overlay", "");
+    overlay.style.cssText =
+      "position:fixed;inset:0;z-index:2147483645;background:transparent;cursor:default";
+    hoverBox = document.createElement("div");
+    hoverBox.setAttribute("data-uai-hover", "");
+    hoverBox.style.cssText =
+      "position:fixed;z-index:2147483646;pointer-events:none;display:none;" +
+      "border:1px solid rgba(74,158,255,0.85);background:rgba(74,158,255,0.05);border-radius:2px";
+    hoverChip = document.createElement("div");
+    hoverChip.style.cssText =
+      "position:fixed;z-index:2147483646;pointer-events:none;display:none;" +
+      "background:#4a9eff;color:#fff;font:11px/1.7 system-ui,sans-serif;" +
+      "padding:0 6px;border-radius:3px;white-space:nowrap";
+    // Freeze the page while editing: paused animations, no transitions.
+    freezeStyle = document.createElement("style");
+    freezeStyle.setAttribute("data-uai-freeze", "");
+    freezeStyle.textContent =
+      "*,*::before,*::after{animation-play-state:paused !important;transition:none !important}";
+    overlay.addEventListener("mousemove", function (e) {
+      queueHover(e.clientX, e.clientY);
+    });
+    overlay.addEventListener("mouseleave", hideHover);
+    document.documentElement.appendChild(overlay);
+    document.documentElement.appendChild(hoverBox);
+    document.documentElement.appendChild(hoverChip);
+  }
+
+  function applyMode() {
+    ensureUI();
+    overlay.style.display = selecting ? "block" : "none";
+    if (selecting) {
+      if (!freezeStyle.parentNode) document.documentElement.appendChild(freezeStyle);
+    } else {
+      if (freezeStyle.parentNode) freezeStyle.parentNode.removeChild(freezeStyle);
+      hideHover();
+      if (box) box.style.display = "none";
+    }
+  }
+
+  // The overlay owns the pointer in select mode, so clicks land on it —
+  // hit-test through it for the real target. Capture phase as a backstop
+  // for anything stacked above the overlay.
   document.addEventListener(
     "click",
     function (e) {
       if (!selecting) return;
       e.preventDefault();
       e.stopPropagation();
-      var hit = frameForClick(e.target);
+      var target = hitAt(e.clientX, e.clientY) || e.target;
+      var hit = frameForClick(target);
       if (hit) {
         highlight(hit.el);
         post({
@@ -111,6 +210,17 @@
       }
     },
     true,
+  );
+
+  // Scrolling still works in select mode (the wheel's default action
+  // scrolls the document past the fixed overlay), but the hover outline
+  // must chase the content as it moves.
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (selecting && hoverXY) queueHover(hoverXY.x, hoverXY.y);
+    },
+    { passive: true, capture: true },
   );
 
   /** Ctrl+wheel is canvas zoom, same as the component harness — without
@@ -178,7 +288,7 @@
     if (!msg || !msg.uaiCmd) return;
     if (msg.uaiCmd === "set-interact") {
       selecting = !msg.on;
-      if (selecting === false && box) box.style.display = "none";
+      applyMode();
     } else if (msg.uaiCmd === "ping") {
       var el = document.querySelector("main, #__next, body");
       var frame = el ? ownerFrame(fiberOf(el)) : null;
@@ -186,5 +296,6 @@
     }
   });
 
+  applyMode();
   post({ type: "live-ready", url: location.href, title: document.title });
 })();
