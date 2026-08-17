@@ -3,19 +3,20 @@
 Where u-and-i is and what's next. Update this as priorities shift — it's the
 first thing a new session should read after CLAUDE.md.
 
-## Where we are (2026-08-15)
+## Where we are (2026-08-16)
 
 Code-is-truth editor serving one real Next.js app (adventure-alerts).
 Working today: route interpretation + follow-the-shell, live rendering of
 client components with sample props, full structural AST editing (insert/
 delete/move/duplicate/drag-drop with import management + fidelity guard),
 in-place text editing on the canvas, byte-perfect undo, per-project session
-+ preferences, Style/Workshop writing to the app's real globals.css.
++ preferences, Style/Workshop writing to the app's real globals.css, and
+**live mode**: the target's own running `next dev` mirrored on the canvas,
+click-to-source selection through its source maps, and edits that HMR back
+into the live page (see "Render the real app" below).
 
 ## Next (near-term, high value)
 
-- **Render the real app** — IN PROGRESS, the headline work. See the
-  dedicated section below before touching anything else.
 - **Editing dynamic regions** — the biggest editability gap. Map callbacks,
   ternary branches, expression props, dynamic `style`/`className` are
   read-only pseudo-content today. Start with the safest slices: editing
@@ -30,7 +31,7 @@ in-place text editing on the canvas, byte-perfect undo, per-project session
   from the edit-engine milestone for reprint risk; the fidelity guard makes
   it safe to attempt now.
 
-## Render the real app (in progress — read this first)
+## Render the real app (core loop DONE — rough edges remain)
 
 **Why.** `npm run dev` eats real data, so u-and-i should too. Pages that
 load data (`/account` is the reference case) never rendered on the canvas.
@@ -79,17 +80,20 @@ Everything the canvas shows inside live mode is the real running app.
    (column often 0), which is why `nodeAtPosition` prefers "element
    starting on that line" over strict containment.
 
-### Next: step 4 — edit through a live selection
-
-- A live click selects; edits then flow through the normal funnel. The
-  file changes under the running `next dev` — HMR should reload the live
-  frame. STILL UNVERIFIED: fidelity guard + undo behaviour when the app
-  reloads mid-edit, and whether the selection survives the reload.
-- The probe's highlight box is a selection flash, not a tracked overlay —
-  it goes stale on scroll. Fine for now; revisit with hover outlines.
+4. **Edit through a live selection** — verified, no new machinery needed:
+   the funnel writes the file, the target's own HMR carries the change into
+   the live frame within a few seconds, undo (byte-verbatim restore) rolls
+   it back the same way, the file ends git-clean, and the editor's open
+   file + selection survive the reload. Standing check:
+   `scripts/checks/live-edit.mjs` (needs both dev servers). F2 in-place
+   editing is component-canvas-only (guarded — the live iframe is a page we
+   don't render into); the Properties Content field is the live-mode path
+   for text.
 
 ### Known rough edges
 
+- The probe's highlight box is a selection flash, not a tracked overlay —
+  it goes stale on scroll. Fine for now; revisit with hover outlines.
 - The canvas has no session, so `/account` and `/waitlist` redirect to
   `/signin`. Signing in inside the canvas should stick (cookies ignore
   port), but this is untested.

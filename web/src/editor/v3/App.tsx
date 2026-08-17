@@ -213,6 +213,8 @@ export function App() {
   // where the app actually ended up (it redirects, e.g. /account → /signin).
   const [live, setLive] = useState<{ origin: string; upstream: string } | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("component");
+  const canvasModeRef = useRef(canvasMode);
+  canvasModeRef.current = canvasMode;
   const [livePath, setLivePath] = useState("/");
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
   const liveFrameRef = useRef<HTMLIFrameElement>(null);
@@ -424,6 +426,10 @@ export function App() {
    * elements) keeps to the Properties card, where slots are explicit. */
   const beginTextEdit = useCallback(
     (id?: string | null) => {
+      // In-place editing lives in the component canvas; in live mode that
+      // iframe is hidden, so F2 would open an invisible caret. The
+      // Properties Content field is the live-mode path for text.
+      if (canvasModeRef.current === "live") return;
       const fs = fileStateRef.current;
       const target = id ?? fileFocusRef.current;
       if (!fs || !target || !target.startsWith(`${fs.canvasKey}::`)) return;
