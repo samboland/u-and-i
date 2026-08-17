@@ -17,6 +17,13 @@ into the live page (see "Render the real app" below).
 
 ## Next (near-term, high value)
 
+- **Docking windows** (Sam, 2026-08-17: next session's feature) — Blender/
+  VS Code-style docking for the editor chrome: panels (Insert, Outliner,
+  Properties, canvas) draggable into splits/tabs instead of the fixed
+  three-column layout. Open questions to settle at design time: what's
+  dockable (whole workspaces vs individual cards), persistence (layout
+  belongs in the per-project session), and whether the live canvas can be
+  more than one pane.
 - **Editing dynamic regions** — the biggest editability gap. Map callbacks,
   ternary branches, expression props, dynamic `style`/`className` are
   read-only pseudo-content today. Start with the safest slices: editing
