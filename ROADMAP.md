@@ -97,7 +97,10 @@ Everything the canvas shows inside live mode is the real running app.
 - The canvas has no session, so `/account` and `/waitlist` redirect to
   `/signin`. Signing in inside the canvas should stick (cookies ignore
   port), but this is untested.
-- The Next dev-tools badge shows in the corner of the live canvas.
+- ~~The Next dev-tools badge shows in the corner of the live canvas.~~
+  Fixed: the probe styles `#devtools-indicator` inside the `nextjs-portal`
+  shadow root to `display:none` — only the badge; build-error overlays in
+  the same root stay visible.
 - `Preview` and the component canvas are unchanged and still per-component.
 
 ## Later

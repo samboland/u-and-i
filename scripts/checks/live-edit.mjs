@@ -64,8 +64,12 @@ try {
   await page.waitForTimeout(5000);
 
   check(!!liveFrame(), `live frame present: ${liveFrame()?.url()}`);
-  await liveFrame().locator(`h2:has-text("${TEXT}")`).click();
-  await page.waitForTimeout(3000);
+  // A cold dev server can still be compiling/hydrating — retry the click
+  // until a resolution arrives rather than trusting one fixed wait.
+  for (let attempt = 0; attempt < 4 && !resolves.some((r) => r.ok && r.id); attempt++) {
+    await liveFrame().locator(`h2:has-text("${TEXT}")`).click();
+    await page.waitForTimeout(3000);
+  }
 
   const hit = resolves.find((r) => r.ok && r.id);
   check(!!hit, `click resolved: ${JSON.stringify(resolves.at(-1) ?? null)}`);

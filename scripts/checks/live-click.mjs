@@ -50,10 +50,13 @@ try {
   if (!frame) throw new Error("no live frame");
 
   // Click a real content element (`:visible` skips Next's hidden route
-  // announcer) so the fiber walk has something real.
+  // announcer) so the fiber walk has something real. A cold dev server can
+  // still be compiling/hydrating — retry until a resolution arrives.
   const target = frame.locator("h1:visible, h2:visible, p:visible").first();
-  await target.click();
-  await page.waitForTimeout(4000);
+  for (let attempt = 0; attempt < 4 && !resolves.some((r) => r.ok); attempt++) {
+    await target.click();
+    await page.waitForTimeout(3000);
+  }
   if (shot) await page.screenshot({ path: `${shot}-clicked.png` });
 
   const hit = resolves.find((r) => r.ok && r.file);

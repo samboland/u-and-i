@@ -113,6 +113,28 @@
     true,
   );
 
+  /** Hide Next's dev-tools badge — and only the badge. It lives as
+   * `#devtools-indicator` inside the open `nextjs-portal` shadow root;
+   * build-error overlays are siblings in the same root and must stay
+   * visible, so this styles the one id rather than the portal. The
+   * observer catches the portal mounting late or being remounted. */
+  function hideDevBadge() {
+    var portals = document.querySelectorAll("nextjs-portal");
+    for (var i = 0; i < portals.length; i++) {
+      var root = portals[i].shadowRoot;
+      if (!root || root.querySelector("style[data-uai-hide-badge]")) continue;
+      var style = document.createElement("style");
+      style.setAttribute("data-uai-hide-badge", "");
+      style.textContent = "#devtools-indicator{display:none !important}";
+      root.appendChild(style);
+    }
+  }
+  hideDevBadge();
+  new MutationObserver(hideDevBadge).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
   window.addEventListener("message", function (e) {
     var msg = e.data;
     if (!msg || !msg.uaiCmd) return;

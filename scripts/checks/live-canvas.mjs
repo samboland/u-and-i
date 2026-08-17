@@ -31,6 +31,23 @@ try {
   check(liveFrames().length === 1, `live frame present: ${liveFrames()[0]}`);
   check(!(await page.locator("canvas").count()), "rulers hidden in live mode");
 
+  // The probe hides Next's dev-tools badge (only the badge — error
+  // overlays in the same shadow root must survive).
+  const badge = await page
+    .frames()
+    .find((f) => f.url().startsWith(origin))
+    .evaluate(() => {
+      const p = document.querySelector("nextjs-portal");
+      if (!p || !p.shadowRoot) return { portal: false };
+      const el = p.shadowRoot.querySelector("#devtools-indicator");
+      return {
+        portal: true,
+        styled: !!p.shadowRoot.querySelector("style[data-uai-hide-badge]"),
+        hidden: !el || getComputedStyle(el).display === "none",
+      };
+    });
+  check(badge.portal && badge.styled && badge.hidden, `dev-tools badge hidden: ${JSON.stringify(badge)}`);
+
   const pathInput = page.getByLabel("Live app path");
   await pathInput.fill(OPEN_PATH);
   await pathInput.press("Enter");
