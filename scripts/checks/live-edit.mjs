@@ -7,7 +7,7 @@
  *
  *   node scripts/checks/live-edit.mjs [screenshot-prefix]
  */
-import { playwright, reporter, liveOrigin, isDirty } from "./_shared.mjs";
+import { playwright, reporter, liveOrigin, isDirty, clickInFrame } from "./_shared.mjs";
 
 const { chromium } = playwright();
 const { check, done } = reporter();
@@ -67,9 +67,7 @@ try {
   // A cold dev server can still be compiling/hydrating — retry the click
   // until a resolution arrives rather than trusting one fixed wait.
   for (let attempt = 0; attempt < 4 && !resolves.some((r) => r.ok && r.id); attempt++) {
-    // force: the select-mode overlay intercepts pointer events by design;
-    // the probe hit-tests through it, so click at the element's position.
-    await liveFrame().locator(`h2:has-text("${TEXT}")`).click({ force: true });
+    await clickInFrame(liveFrame(), "h2", TEXT);
     await page.waitForTimeout(3000);
   }
 

@@ -1829,8 +1829,12 @@ function LiveCanvas({
               height,
               border: "none",
               background: "#fff",
-              transform: `scale(${zoom})`,
-              transformOrigin: "top left",
+              // CSS zoom, not transform: scale() — a fractional transform
+              // composites layers on non-integer boundaries and draws 1px
+              // seam lines between elements that touch at 100%. zoom scales
+              // at layout/paint with device-pixel snapping, so edges stay
+              // flush at any factor.
+              zoom,
               pointerEvents: dragging ? "none" : undefined,
             }}
           />
