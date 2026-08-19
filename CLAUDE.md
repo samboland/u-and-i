@@ -43,6 +43,10 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   selection to focusId → push undo → touched-files). Undo = byte-verbatim
   `/api/restore` of `before`/`after`. `FileMode.tsx` = JSX outliner + node
   card. Sample render props live in localStorage only.
+  `dock.tsx` = the docking layout: panels are cards in a pure-data
+  split/tab tree, dragged by their tabs, persisted per project. Layout and
+  Component **share one tree** so the harness iframe survives that switch;
+  panel bodies are the `renderPanel` switch in `App.tsx`.
 - `web/src/harness/` — canvas iframe. One stage: void apron, device width,
   cursor-anchored zoom, middle-drag pan. Modules load via dynamic
   `/@fs/` imports (no compile-time globs). Clicks post `selected` with the

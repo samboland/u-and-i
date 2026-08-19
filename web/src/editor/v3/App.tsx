@@ -7,10 +7,12 @@
  * module through the next/* shims, and every mutation is an AST edit
  * written straight into the file — undo restores exact prior bytes.
  *
- * Regions: TopBar (menus + workspace tabs) · DocumentRow · workspace main
- * (Layout: Insert | Canvas; Style; Workshop) · right column (Outliner over
- * Properties) · StatusBar. All file mutations flow through one editFile
- * funnel — that funnel IS the undo feature.
+ * Regions: TopBar (menus + workspace tabs) · DocumentRow · a docked body ·
+ * StatusBar. The body is a `Dock` (see dock.tsx): panels — Insert, Canvas,
+ * Outliner, Properties, Style, Workshop — live in a split/tab tree the user
+ * rearranges by dragging tabs. Each workspace keeps its own tree, and the
+ * trees ride along in the per-project session. All file mutations flow
+ * through one editFile funnel — that funnel IS the undo feature.
  */
 import {
   useCallback,
@@ -37,6 +39,18 @@ import {
   type DeviceName,
 } from "./chrome";
 import { Field, Row, Seg, Sym } from "./controls";
+import {
+  Dock,
+  addPanel,
+  basePanel,
+  closePanel,
+  isDockNode,
+  leaf,
+  nextInstanceId,
+  panelsIn,
+  split,
+  type DockNode,
+} from "./dock";
 import { FileNodeCard, FileOutliner } from "./FileMode";
 import { OutlinerRow } from "./OutlinerRow";
 import { RouteTree, routeId, type RouteNode } from "./RouteTree";
@@ -60,6 +74,58 @@ const WORKSPACES = [
   { label: "Component", hint: "render one component alone with sample props" },
 ] as const;
 type Workspace = (typeof WORKSPACES)[number]["label"];
+
+// --------------------------------------------------------------- dock panels
+
+/**
+ * Panel titles. Instance ids ("canvas#2") share their base panel's title —
+ * see `basePanel`. Only the canvas may appear more than once; the extras are
+ * additional live views of the running app, each with its own path.
+ */
+const PANEL_TITLE: Record<string, string> = {
+  insert: "Insert",
+  canvas: "Canvas",
+  outliner: "Outliner",
+  properties: "Properties",
+  style: "Style",
+  workshop: "Workshop",
+};
+
+/**
+ * Layout and Component share one tree. They hold the same panels and differ
+ * only in what the canvas draws — and sharing keeps the canvas leaf in the
+ * same place across the switch, so the harness iframe (with its mounted
+ * module and sample props) survives it, exactly as it did before docking.
+ */
+type LayoutGroup = "edit" | "Style" | "Workshop";
+const LAYOUT_GROUPS: LayoutGroup[] = ["edit", "Style", "Workshop"];
+function groupOf(ws: Workspace): LayoutGroup {
+  return ws === "Style" || ws === "Workshop" ? ws : "edit";
+}
+
+/** The panel a group is built around; it can't be closed away. */
+const GROUP_MAIN: Record<LayoutGroup, string> = {
+  edit: "canvas",
+  Style: "style",
+  Workshop: "workshop",
+};
+
+/** Which panels a group offers in View ▸ Panels, in menu order. */
+function groupPanels(g: LayoutGroup): string[] {
+  return g === "edit" ? ["insert", "canvas", "outliner", "properties"] : [GROUP_MAIN[g], "outliner", "properties"];
+}
+
+/** The pre-dock three-column arrangement, as a starting tree. */
+function defaultLayout(g: LayoutGroup): DockNode {
+  const side = split("col", [leaf(["outliner"]), leaf(["properties"])], [0.44, 0.56]);
+  return g === "edit"
+    ? split("row", [leaf(["insert"]), leaf(["canvas"]), side], [0.15, 0.66, 0.19])
+    : split("row", [leaf([GROUP_MAIN[g]]), side], [0.81, 0.19]);
+}
+
+function defaultLayouts(): Record<LayoutGroup, DockNode> {
+  return { edit: defaultLayout("edit"), Style: defaultLayout("Style"), Workshop: defaultLayout("Workshop") };
+}
 
 const PRIMITIVES: { label: string; icon: string; jsx: string }[] = [
   { label: "Container", icon: "▤", jsx: '<div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}></div>' },
@@ -159,6 +225,22 @@ interface ProjectSession {
   zoom?: number;
   workspace?: Workspace;
   livePath?: string;
+  /** Dock tree per layout group. Anything malformed falls back to the default. */
+  layouts?: Partial<Record<LayoutGroup, DockNode>>;
+  /** Path per extra live canvas pane, keyed by panel instance id. */
+  extraLivePaths?: Record<string, string>;
+}
+
+/** Merge persisted trees over the defaults, dropping any that don't parse. */
+function layoutsFromSession(saved: ProjectSession["layouts"]): Record<LayoutGroup, DockNode> {
+  const out = defaultLayouts();
+  for (const g of LAYOUT_GROUPS) {
+    const t = saved?.[g];
+    // A tree that lost its group's main panel would strand the user with no
+    // canvas and no way back except Reset layout — take the default.
+    if (isDockNode(t) && panelsIn(t).includes(GROUP_MAIN[g])) out[g] = t;
+  }
+  return out;
 }
 function loadProjectSession(root: string): ProjectSession {
   try {
@@ -218,15 +300,38 @@ export function App() {
   const interactRef = useRef(interact);
   interactRef.current = interact;
   // Live canvas: the target's own running dev server, mirrored by
-  // server/live-proxy.ts. `livePath` is the route we're showing; `liveUrl` is
-  // where the app actually ended up (it redirects, e.g. /account → /signin).
+  // server/live-proxy.ts. `livePath` is the route the primary canvas shows;
+  // where the app actually ended up (it redirects, e.g. /account → /signin)
+  // is per-frame, so each LiveCanvas tracks its own.
   const [live, setLive] = useState<{ origin: string; upstream: string } | null>(null);
   const canvasMode: CanvasMode = workspace === "Component" ? "component" : "live";
   const canvasModeRef = useRef(canvasMode);
   canvasModeRef.current = canvasMode;
   const [livePath, setLivePath] = useState("/");
-  const [liveUrl, setLiveUrl] = useState<string | null>(null);
-  const liveFrameRef = useRef<HTMLIFrameElement>(null);
+  // Every mounted live frame, primary and extras alike: commands the probe
+  // understands (set-interact) go to all of them.
+  const liveFrames = useRef(new Set<HTMLIFrameElement>());
+  const registerLiveFrame = useCallback((el: HTMLIFrameElement | null, on: boolean) => {
+    if (!el) return;
+    if (on) liveFrames.current.add(el);
+    else liveFrames.current.delete(el);
+  }, []);
+  const postLive = useCallback((msg: unknown) => {
+    for (const f of liveFrames.current) f.contentWindow?.postMessage(msg, "*");
+  }, []);
+  const [extraLivePaths, setExtraLivePaths] = useState<Record<string, string>>({});
+  const setExtraLivePath = useCallback((id: string, p: string) => {
+    setExtraLivePaths((m) => ({ ...m, [id]: p }));
+  }, []);
+
+  // Docking: one tree per layout group, rearranged by dragging tabs.
+  const [layouts, setLayouts] = useState<Record<LayoutGroup, DockNode>>(defaultLayouts);
+  const group = groupOf(workspace);
+  const layout = layouts[group];
+  const setLayout = useCallback(
+    (next: DockNode) => setLayouts((all) => ({ ...all, [group]: next })),
+    [group],
+  );
   const [styleEdits, setStyleEdits] = useState(0);
   const [wsMat, setWsMat] = useState<WorkshopState>(WS_INITIAL);
   const [appZoom, setAppZoom] = useState(() => loadPrefs().appZoom);
@@ -263,6 +368,8 @@ export function App() {
           setWorkspace(session.workspace);
         }
         if (session.livePath?.startsWith("/")) setLivePath(session.livePath);
+        setLayouts(layoutsFromSession(session.layouts));
+        if (session.extraLivePaths) setExtraLivePaths(session.extraLivePaths);
         if (loadPrefs().reopenLast && session.openFile) {
           void openFileRef.current(session.openFile).catch(() => {});
         }
@@ -296,12 +403,14 @@ export function App() {
         zoom,
         workspace,
         livePath,
+        layouts,
+        extraLivePaths,
       };
       localStorage.setItem(`uai:proj:${targetRoot}`, JSON.stringify(session));
     } catch {
       /* ditto */
     }
-  }, [targetRoot, fileState?.file, device, zoom, workspace, livePath]);
+  }, [targetRoot, fileState?.file, device, zoom, workspace, livePath, layouts, extraLivePaths]);
 
   // Shell analysis for the selected route.
   useEffect(() => {
@@ -510,8 +619,8 @@ export function App() {
   useEffect(() => send({ type: "set-interact", on: interact }), [interact, send]);
   // The live probe honours the same toggle (select is its default).
   useEffect(() => {
-    liveFrameRef.current?.contentWindow?.postMessage({ uaiCmd: "set-interact", on: interact }, "*");
-  }, [interact]);
+    postLive({ uaiCmd: "set-interact", on: interact });
+  }, [interact, postLive]);
   useEffect(() => {
     send({
       type: "set-session",
@@ -563,12 +672,10 @@ export function App() {
       if ((msg as { uai?: boolean }).uai) {
         const live = msg as unknown as { type: string; url?: string | null; line?: number; column?: number };
         if (live.type === "live-ready" && live.url) {
-          setLiveUrl(live.url);
-          // A fresh page load resets the probe; re-send the toggle state.
-          liveFrameRef.current?.contentWindow?.postMessage(
-            { uaiCmd: "set-interact", on: interactRef.current },
-            "*",
-          );
+          // A fresh page load resets that frame's probe; re-send the toggle
+          // state. Which frame it was is LiveCanvas's business (it matches on
+          // event.source) — cheap enough to tell them all.
+          postLive({ uaiCmd: "set-interact", on: interactRef.current });
         } else if (live.type === "live-click" && live.url) {
           void resolveLiveClick(live as { url: string; line: number; column: number });
         } else if (live.type === "toggle-interact") {
@@ -901,6 +1008,20 @@ export function App() {
           action: () => setWorkspace(w.label),
         })),
         { sep: true },
+        ...groupPanels(group).map((id) => {
+          const open = panelsIn(layout).includes(id);
+          return {
+            label: `Panel: ${PANEL_TITLE[id]}`,
+            check: tick(open),
+            disabled: id === GROUP_MAIN[group],
+            action: () => setLayout(open ? closePanel(layout, id) : addPanel(layout, id, GROUP_MAIN[group])),
+          };
+        }),
+        ...(group === "edit"
+          ? [{ label: "New canvas pane", action: () => setLayout(addPanel(layout, nextInstanceId(layout, "canvas"), "canvas")) }]
+          : []),
+        { label: "Reset layout", action: () => setLayout(defaultLayout(group)) },
+        { sep: true },
         { label: "Outliner: file", check: dot(outlinerMode === "File"), action: () => setOutlinerMode("File") },
         { label: "Outliner: routes", check: dot(outlinerMode === "Routes"), action: () => setOutlinerMode("Routes") },
         { sep: true },
@@ -938,6 +1059,365 @@ export function App() {
     },
   ];
 
+  // ------------------------------------------------------------ dock panels
+
+  /**
+   * One panel's body. Sizing, the tab strip and the borders belong to the
+   * dock; a panel just fills the column it is handed.
+   */
+  const renderPanel = (id: string) => {
+    switch (basePanel(id)) {
+      // ------------------------------------------------------------ Insert
+      case "insert":
+        return (
+          <>
+            {/* No title row: the dock tab already says Insert. */}
+            <div style={{ padding: "7px 10px 5px", fontSize: 10, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {fileState ? "drag or click to insert" : "open a file first"}
+            </div>
+            <div style={{ padding: "0 10px 8px" }}>
+              <input className="fc" type="text" placeholder="Search components" value={search} onChange={(e) => setSearch(e.target.value)} style={inputStyle} />
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
+              <div style={{ borderTop: `1px solid ${C.softDiv}` }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
+                  <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>Primitives</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>plain html</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 10px" }}>
+                  {PRIMITIVES.map((p) => (
+                    <button
+                      key={p.label}
+                      className="hv-ctl-border"
+                      draggable={!!fileState}
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = "copy";
+                        e.dataTransfer.setData(MIME_JSX, JSON.stringify({ jsx: p.jsx }));
+                      }}
+                      onClick={() => insertIntoFile(p.jsx)}
+                      disabled={!fileState}
+                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: fileState ? C.body : C.faint, cursor: fileState ? "grab" : "default", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap" }}
+                    >
+                      <span style={{ flex: "0 0 auto", color: C.blueLight, width: 13, textAlign: "center" }}>{p.icon}</span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{p.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(() => {
+                if (!components) {
+                  return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
+                }
+                const q = search.trim().toLowerCase();
+                const groups = new Map<string, string[]>();
+                for (const f of components.files) {
+                  const short = f.replace(/^src\/components\//, "");
+                  if (q && !short.toLowerCase().includes(q)) continue;
+                  const dir = short.includes("/") ? short.split("/")[0] : "root";
+                  (groups.get(dir) ?? groups.set(dir, []).get(dir)!).push(f);
+                }
+                if (groups.size === 0) {
+                  return <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>;
+                }
+                return [...groups.entries()].map(([dir, files]) => (
+                  <div key={dir} style={{ borderTop: `1px solid ${C.softDiv}` }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
+                      <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>{dir}</span>
+                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>{files.length}</span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px" }}>
+                      {files.map((f) => {
+                        const meta = components.meta[f];
+                        const serverOnly = meta?.serverOnly;
+                        const name = f.split("/").pop()!.replace(/\.tsx$/, "");
+                        const active = fileState?.file === f;
+                        const insertable = !!fileState && !serverOnly && !!meta?.exportName;
+                        const importSpec = meta?.exportName
+                          ? [{ source: `@/${f.replace(/^src\//, "").replace(/\.tsx$/, "")}`, named: [meta.exportName] }]
+                          : undefined;
+                        return (
+                          <div key={f} style={{ display: "flex", gap: 3 }}>
+                            <button
+                              className={serverOnly ? undefined : "hv-ctl-border"}
+                              disabled={serverOnly}
+                              draggable={insertable}
+                              onDragStart={(e) => {
+                                if (!insertable) return;
+                                e.dataTransfer.effectAllowed = "copy";
+                                e.dataTransfer.setData(MIME_JSX, JSON.stringify({ jsx: `<${meta!.exportName} />`, imports: importSpec }));
+                              }}
+                              title={serverOnly ? "Server component — can't render in the canvas" : `Open ${f}`}
+                              onClick={() => void openFile(f)}
+                              style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
+                            >
+                              <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
+                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                              {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
+                            </button>
+                            {insertable && (
+                              <button
+                                className="hv-ctl-border"
+                                title={`Insert <${meta!.exportName} /> into ${fileState!.file.split("/").pop()}`}
+                                onClick={() => insertIntoFile(`<${meta!.exportName} />`, importSpec)}
+                                style={{ flex: "0 0 22px", display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.blueLight, cursor: "pointer" }}
+                              >
+                                +
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+          </>
+        );
+
+      // ------------------------------------------------------------ Canvas
+      case "canvas":
+        // Extra canvas panes are extra views of the live app: the component
+        // harness is a single iframe (one mounted module, one set of sample
+        // props), so it stays with the primary pane.
+        if (id !== "canvas") {
+          return (
+            <LiveCanvas
+              live={live}
+              registerFrame={registerLiveFrame}
+              path={extraLivePaths[id] ?? livePath}
+              setPath={(p) => setExtraLivePath(id, p)}
+              width={DEVICES[device].width}
+              height={DEVICE_HEIGHT[device]}
+              zoom={zoom}
+              onZoom={zoomBy}
+            />
+          );
+        }
+        return (
+          <div ref={canvasRegionRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: C.void }}>
+            <div style={{ flex: "0 0 auto", minHeight: 30, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: `1px solid ${C.canvasEdge}`, background: C.canvasBar, minWidth: 0, position: "relative", zIndex: 25 }}>
+              <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
+              <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>{DEVICES[device].width}px</span>
+              <div style={{ ...vdiv, height: 16 }} />
+              <div style={{ flex: "0 0 auto", position: "relative", whiteSpace: "nowrap" }}>
+                <button
+                  className="hv-ctl-border"
+                  style={{ display: "flex", alignItems: "center", gap: 7, height: 22, padding: "0 8px", background: previewOpen ? C.ctl : "transparent", border: `1px solid ${previewOpen ? C.borderHover : C.border}`, borderRadius: 5, color: C.body, cursor: "pointer" }}
+                  onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
+                  title="Canvas context (P)"
+                >
+                  <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Context</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11 }}>{role} · {themeDark ? "Abyss" : "Parchment"}</span>
+                  <span style={{ fontSize: 8, color: C.faint }}>▼</span>
+                </button>
+                {previewOpen && (
+                  <div style={{ position: "absolute", top: 26, left: 0, minWidth: 230, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 30 }} onClick={(e) => e.stopPropagation()}>
+                    {[
+                      { title: "Session role", items: ROLES.map((r) => ({ label: r, on: role === r, act: () => setRole(r) })) },
+                      { title: "Theme", items: [
+                        { label: "Parchment", on: !themeDark, act: () => setThemeDark(false) },
+                        { label: "Abyss", on: themeDark, act: () => setThemeDark(true) },
+                      ]},
+                    ].map((g, gi) => (
+                      <div key={g.title}>
+                        {gi > 0 && <div style={{ height: 1, background: C.border, margin: "4px 0" }} />}
+                        <div style={{ padding: "3px 10px 2px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>{g.title}</div>
+                        {g.items.map((it) => (
+                          <button key={it.label} className="hv-menu" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }} onClick={it.act}>
+                            <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.on ? "•" : ""}</span>
+                            <span style={{ flex: 1 }}>{it.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: "1 1 0", minWidth: 8 }} />
+              <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Mode</span>
+              <div title="Tab toggles between editing and using the app">
+                <Seg items={[
+                  { label: "Edit", active: !interact, onClick: () => setInteract(false) },
+                  { label: "View", active: interact, onClick: () => setInteract(true) },
+                ]} />
+              </div>
+            </div>
+
+            {/* Rulers measure the component stage; the live app frames itself. */}
+            {rulersOn && canvasMode === "component" && (
+              <div style={{ flex: "0 0 16px", display: "flex", background: C.canvasBar, borderBottom: `1px solid ${C.canvasEdge}`, overflow: "hidden" }}>
+                <button
+                  title="Ruler units (px / rem)"
+                  onClick={() => setRulerUnit((u) => (u === "px" ? "rem" : "px"))}
+                  style={{ flex: "0 0 16px", padding: 0, background: "none", border: "none", borderRight: `1px solid ${C.canvasEdge}`, color: C.faint, fontSize: 7, fontFamily: MONO, cursor: "pointer", lineHeight: 1 }}
+                >
+                  {rulerUnit}
+                </button>
+                <canvas ref={hRuler} style={{ flex: 1, minWidth: 0, height: 16 }} />
+              </div>
+            )}
+            <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative" }}>
+              {rulersOn && canvasMode === "component" && (
+                <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
+              )}
+              {/* The component canvas stays mounted across a mode switch —
+                  reloading the harness would drop the rendered component
+                  and the sample props with it. */}
+              <iframe
+                ref={iframeRef}
+                src="/harness.html"
+                title="canvas"
+                style={{ flex: 1, border: "none", background: C.void, display: canvasMode === "live" ? "none" : "block" }}
+              />
+              {canvasMode === "live" && (
+                <LiveCanvas
+                  live={live}
+                  registerFrame={registerLiveFrame}
+                  path={livePath}
+                  setPath={setLivePath}
+                  width={DEVICES[device].width}
+                  height={DEVICE_HEIGHT[device]}
+                  zoom={zoom}
+                  onZoom={zoomBy}
+                />
+              )}
+              {canvasMode === "component" && fileState && !fileState.renderable && !routeSel && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
+                  <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                    <span style={{ fontFamily: MONO, fontSize: 13, color: "#fff" }}>{fileState.file.split("/").pop()}</span>
+                    <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+                      Server component — no live preview here. Edits still apply to the real code
+                      (see them in <span style={{ fontFamily: MONO, fontSize: 10.5 }}>next dev</span>); use the Outliner to pick elements.
+                    </div>
+                  </div>
+                </div>
+              )}
+              {canvasMode === "component" && routeSel && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
+                  <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                      <span style={{ fontFamily: MONO, fontSize: 14, color: "#fff" }}>{routeSel.urlPath}</span>
+                      <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: C.muted }}>
+                        {routeSel.files.page ? "page" : "API route"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
+                      {routeSel.files.page
+                        ? "Open the page's view or its code from the Properties panel."
+                        : "Route handler — nothing to draw."}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+      // ---------------------------------------------------------- Outliner
+      case "outliner":
+        return (
+          <>
+            {/* No title row: the dock tab already says Outliner. */}
+            <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "7px 10px 6px", whiteSpace: "nowrap" }}>
+              <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />
+              <div style={{ flex: "1 1 0", minWidth: 4 }} />
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8 }}>
+              {outlinerMode === "File" && fileState && (
+                <>
+                  <div style={{ padding: "4px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileState.file}>
+                    {fileState.file.split("/").pop()}
+                  </div>
+                  <FileOutliner
+                    model={fileState.model}
+                    focusId={fileFocusId}
+                    collapsed={fileCollapsed}
+                    onToggle={(id) =>
+                      setFileCollapsed((c) => {
+                        const next = new Set(c);
+                        if (next.has(id)) next.delete(id);
+                        else next.add(id);
+                        return next;
+                      })
+                    }
+                    onSelect={(m) => {
+                      setFileFocusId(m.id);
+                      send({ type: "select", id: m.id });
+                    }}
+                  />
+                </>
+              )}
+              {outlinerMode === "File" && !fileState && (
+                <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
+                  No file open. Pick a component from Insert or a route from the Routes tree.
+                </div>
+              )}
+              {outlinerMode === "Routes" && routeTree && (
+                <RouteTree
+                  tree={routeTree}
+                  selectedId={routeSel ? routeId(routeSel) : null}
+                  onSelect={(n) => {
+                    setRouteSel(n);
+                    setFileFocusId(null);
+                    // In the live canvas a route is a place to go, not just a
+                    // set of files to read. Dynamic segments have no concrete
+                    // URL, so they stay put.
+                    if (canvasMode === "live" && n.files.page && !n.urlPath.includes("[")) {
+                      setLivePath(n.urlPath);
+                    }
+                  }}
+                />
+              )}
+              {outlinerMode === "Routes" && !routeTree && (
+                <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
+                  No route tree — is the target folder a Next.js app?
+                </div>
+              )}
+            </div>
+          </>
+        );
+
+      // -------------------------------------------------------- Properties
+      case "properties":
+        return (
+          <>
+            <div style={{ flex: "0 0 auto", padding: "8px 10px 7px", borderBottom: `1px solid ${C.softDiv}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+                <span style={{ flex: "0 0 auto", width: 7, height: 7, background: fileNode ? C.orange : routeSel ? C.blueLight : C.muted, borderRadius: 2 }} />
+                <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 12, color: "#fff", fontWeight: 600 }}>{selTitle}</span>
+              </div>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+              {routeSel ? (
+                <RouteCard route={routeSel} shell={routeShell} openFile={(f) => void openFile(f)} />
+              ) : fileNode && fileState ? (
+                <FileNodeCard
+                  file={fileState.file}
+                  node={fileNode}
+                  onEdit={editFile}
+                  onOpenSource={(src) => void openFile(src)}
+                />
+              ) : fileState ? (
+                <SamplePropsCard state={fileState} setSampleProp={setSampleProp} />
+              ) : (
+                <div style={{ padding: "12px 10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
+                  Nothing open. The Routes tree shows the app's structure; Insert lists its components.
+                </div>
+              )}
+            </div>
+          </>
+        );
+
+      case "style":
+        return <StyleBody tokens={styleTokens} dark={themeDark} />;
+      case "workshop":
+        return <WorkshopBody ws={wsMat} setWs={setWsMat} />;
+      default:
+        return null;
+    }
+  };
+
   // ------------------------------------------------------------------ render
 
   return (
@@ -952,6 +1432,7 @@ export function App() {
           <div key={m.label} style={{ flex: "0 0 auto", position: "relative" }}>
             <button
               className="hv-ctl"
+              data-menu={m.label}
               style={{ height: 32, padding: "0 9px", background: openMenu === m.label ? C.ctlHover : "transparent", border: "none", color: openMenu === m.label ? "#fff" : C.body, cursor: "default" }}
               onClick={(e) => { e.stopPropagation(); setOpenMenu(openMenu === m.label ? null : m.label); }}
               onMouseEnter={() => { if (openMenu && openMenu !== m.label) setOpenMenu(m.label); }}
@@ -1101,332 +1582,13 @@ export function App() {
 
       {/* ---------------------------------------------------------- Body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        {workspace === "Layout" || workspace === "Component" ? (
-          <>
-            {/* Insert panel */}
-            <div style={{ flex: "0 1 236px", minWidth: 180, display: "flex", flexDirection: "column", background: C.panel, borderRight: `1px solid ${C.border}`, minHeight: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 6px", whiteSpace: "nowrap" }}>
-                <h2 style={{ ...sectionHeader, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>Insert</h2>
-                <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint }}>
-                  {fileState ? "drag or click" : "open a file first"}
-                </span>
-              </div>
-              <div style={{ padding: "0 10px 8px" }}>
-                <input className="fc" type="text" placeholder="Search components" value={search} onChange={(e) => setSearch(e.target.value)} style={inputStyle} />
-              </div>
-              <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
-                <div style={{ borderTop: `1px solid ${C.softDiv}` }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
-                    <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>Primitives</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>plain html</span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 10px" }}>
-                    {PRIMITIVES.map((p) => (
-                      <button
-                        key={p.label}
-                        className="hv-ctl-border"
-                        draggable={!!fileState}
-                        onDragStart={(e) => {
-                          e.dataTransfer.effectAllowed = "copy";
-                          e.dataTransfer.setData(MIME_JSX, JSON.stringify({ jsx: p.jsx }));
-                        }}
-                        onClick={() => insertIntoFile(p.jsx)}
-                        disabled={!fileState}
-                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 7px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: fileState ? C.body : C.faint, cursor: fileState ? "grab" : "default", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap" }}
-                      >
-                        <span style={{ flex: "0 0 auto", color: C.blueLight, width: 13, textAlign: "center" }}>{p.icon}</span>
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{p.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                {(() => {
-                  if (!components) {
-                    return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
-                  }
-                  const q = search.trim().toLowerCase();
-                  const groups = new Map<string, string[]>();
-                  for (const f of components.files) {
-                    const short = f.replace(/^src\/components\//, "");
-                    if (q && !short.toLowerCase().includes(q)) continue;
-                    const dir = short.includes("/") ? short.split("/")[0] : "root";
-                    (groups.get(dir) ?? groups.set(dir, []).get(dir)!).push(f);
-                  }
-                  if (groups.size === 0) {
-                    return <div style={{ margin: 10, padding: 10, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 11, color: C.faint }}>Nothing matches that search.</div>;
-                  }
-                  return [...groups.entries()].map(([dir, files]) => (
-                    <div key={dir} style={{ borderTop: `1px solid ${C.softDiv}` }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
-                        <span style={{ flex: "0 0 auto", fontSize: 11, color: C.body, fontWeight: 600 }}>{dir}</span>
-                        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 10, color: C.faint }}>{files.length}</span>
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "0 10px" }}>
-                        {files.map((f) => {
-                          const meta = components.meta[f];
-                          const serverOnly = meta?.serverOnly;
-                          const name = f.split("/").pop()!.replace(/\.tsx$/, "");
-                          const active = fileState?.file === f;
-                          const insertable = !!fileState && !serverOnly && !!meta?.exportName;
-                          const importSpec = meta?.exportName
-                            ? [{ source: `@/${f.replace(/^src\//, "").replace(/\.tsx$/, "")}`, named: [meta.exportName] }]
-                            : undefined;
-                          return (
-                            <div key={f} style={{ display: "flex", gap: 3 }}>
-                              <button
-                                className={serverOnly ? undefined : "hv-ctl-border"}
-                                disabled={serverOnly}
-                                draggable={insertable}
-                                onDragStart={(e) => {
-                                  if (!insertable) return;
-                                  e.dataTransfer.effectAllowed = "copy";
-                                  e.dataTransfer.setData(MIME_JSX, JSON.stringify({ jsx: `<${meta!.exportName} />`, imports: importSpec }));
-                                }}
-                                title={serverOnly ? "Server component — can't render in the canvas" : `Open ${f}`}
-                                onClick={() => void openFile(f)}
-                                style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 6, padding: "4px 7px", background: active ? C.ctlHover : C.ctl, border: `1px solid ${active ? C.blue : C.border}`, borderRadius: 5, color: serverOnly ? C.faint : C.body, cursor: serverOnly ? "default" : "pointer", textAlign: "left", overflow: "hidden", whiteSpace: "nowrap", opacity: serverOnly ? 0.6 : 1 }}
-                              >
-                                <span style={{ flex: "0 0 auto", color: serverOnly ? C.faint : C.blueLight, width: 13, textAlign: "center" }}>⧉</span>
-                                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
-                                {serverOnly && <span style={{ flex: "0 0 auto", fontSize: 9, color: C.faint, textTransform: "uppercase", letterSpacing: "0.05em" }}>server</span>}
-                              </button>
-                              {insertable && (
-                                <button
-                                  className="hv-ctl-border"
-                                  title={`Insert <${meta!.exportName} /> into ${fileState!.file.split("/").pop()}`}
-                                  onClick={() => insertIntoFile(`<${meta!.exportName} />`, importSpec)}
-                                  style={{ flex: "0 0 22px", display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.blueLight, cursor: "pointer" }}
-                                >
-                                  +
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ));
-                })()}
-              </div>
-            </div>
-
-            {/* Canvas region */}
-            <div ref={canvasRegionRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 240, background: C.void }}>
-              <div style={{ flex: "0 0 auto", minHeight: 30, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: `1px solid ${C.canvasEdge}`, background: C.canvasBar, minWidth: 0, position: "relative", zIndex: 25 }}>
-                <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
-                <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>{DEVICES[device].width}px</span>
-                <div style={{ ...vdiv, height: 16 }} />
-                <div style={{ flex: "0 0 auto", position: "relative", whiteSpace: "nowrap" }}>
-                  <button
-                    className="hv-ctl-border"
-                    style={{ display: "flex", alignItems: "center", gap: 7, height: 22, padding: "0 8px", background: previewOpen ? C.ctl : "transparent", border: `1px solid ${previewOpen ? C.borderHover : C.border}`, borderRadius: 5, color: C.body, cursor: "pointer" }}
-                    onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
-                    title="Canvas context (P)"
-                  >
-                    <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Context</span>
-                    <span style={{ fontFamily: MONO, fontSize: 11 }}>{role} · {themeDark ? "Abyss" : "Parchment"}</span>
-                    <span style={{ fontSize: 8, color: C.faint }}>▼</span>
-                  </button>
-                  {previewOpen && (
-                    <div style={{ position: "absolute", top: 26, left: 0, minWidth: 230, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 30 }} onClick={(e) => e.stopPropagation()}>
-                      {[
-                        { title: "Session role", items: ROLES.map((r) => ({ label: r, on: role === r, act: () => setRole(r) })) },
-                        { title: "Theme", items: [
-                          { label: "Parchment", on: !themeDark, act: () => setThemeDark(false) },
-                          { label: "Abyss", on: themeDark, act: () => setThemeDark(true) },
-                        ]},
-                      ].map((g, gi) => (
-                        <div key={g.title}>
-                          {gi > 0 && <div style={{ height: 1, background: C.border, margin: "4px 0" }} />}
-                          <div style={{ padding: "3px 10px 2px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>{g.title}</div>
-                          {g.items.map((it) => (
-                            <button key={it.label} className="hv-menu" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }} onClick={it.act}>
-                              <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.on ? "•" : ""}</span>
-                              <span style={{ flex: 1 }}>{it.label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div style={{ flex: "1 1 0", minWidth: 8 }} />
-                <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Mode</span>
-                <div title="Tab toggles between editing and using the app">
-                  <Seg items={[
-                    { label: "Edit", active: !interact, onClick: () => setInteract(false) },
-                    { label: "View", active: interact, onClick: () => setInteract(true) },
-                  ]} />
-                </div>
-              </div>
-
-              {/* Rulers measure the component stage; the live app frames itself. */}
-              {rulersOn && canvasMode === "component" && (
-                <div style={{ flex: "0 0 16px", display: "flex", background: C.canvasBar, borderBottom: `1px solid ${C.canvasEdge}`, overflow: "hidden" }}>
-                  <button
-                    title="Ruler units (px / rem)"
-                    onClick={() => setRulerUnit((u) => (u === "px" ? "rem" : "px"))}
-                    style={{ flex: "0 0 16px", padding: 0, background: "none", border: "none", borderRight: `1px solid ${C.canvasEdge}`, color: C.faint, fontSize: 7, fontFamily: MONO, cursor: "pointer", lineHeight: 1 }}
-                  >
-                    {rulerUnit}
-                  </button>
-                  <canvas ref={hRuler} style={{ flex: 1, minWidth: 0, height: 16 }} />
-                </div>
-              )}
-              <div style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden", position: "relative" }}>
-                {rulersOn && canvasMode === "component" && (
-                  <canvas ref={vRuler} style={{ flex: "0 0 16px", width: 16, background: C.canvasBar, borderRight: `1px solid ${C.canvasEdge}` }} />
-                )}
-                {/* The component canvas stays mounted across a mode switch —
-                    reloading the harness would drop the rendered component
-                    and the sample props with it. */}
-                <iframe
-                  ref={iframeRef}
-                  src="/harness.html"
-                  title="canvas"
-                  style={{ flex: 1, border: "none", background: C.void, display: canvasMode === "live" ? "none" : "block" }}
-                />
-                {canvasMode === "live" && (
-                  <LiveCanvas
-                    live={live}
-                    frameRef={liveFrameRef}
-                    path={livePath}
-                    setPath={setLivePath}
-                    at={liveUrl}
-                    width={DEVICES[device].width}
-                    height={DEVICE_HEIGHT[device]}
-                    zoom={zoom}
-                    onZoom={zoomBy}
-                  />
-                )}
-                {canvasMode === "component" && fileState && !fileState.renderable && !routeSel && (
-                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
-                    <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-                      <span style={{ fontFamily: MONO, fontSize: 13, color: "#fff" }}>{fileState.file.split("/").pop()}</span>
-                      <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
-                        Server component — no live preview here. Edits still apply to the real code
-                        (see them in <span style={{ fontFamily: MONO, fontSize: 10.5 }}>next dev</span>); use the Outliner to pick elements.
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {canvasMode === "component" && routeSel && (
-                  <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: C.void }}>
-                    <div style={{ maxWidth: 420, padding: "18px 20px", background: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                        <span style={{ fontFamily: MONO, fontSize: 14, color: "#fff" }}>{routeSel.urlPath}</span>
-                        <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", color: C.muted }}>
-                          {routeSel.files.page ? "page" : "API route"}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.55 }}>
-                        {routeSel.files.page
-                          ? "Open the page's view or its code from the panel on the right."
-                          : "Route handler — nothing to draw."}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        ) : workspace === "Style" ? (
-          <StyleBody tokens={styleTokens} dark={themeDark} />
-        ) : (
-          <WorkshopBody ws={wsMat} setWs={setWsMat} />
-        )}
-
-        {/* ---------------------------------------------------- Right column */}
-        <div style={{ flex: "0 1 302px", minWidth: 230, display: "flex", flexDirection: "column", background: C.panel, borderLeft: `1px solid ${C.border}`, minHeight: 0 }}>
-          {/* Outliner */}
-          <div style={{ flex: "0 0 44%", minHeight: 132, display: "flex", flexDirection: "column", borderBottom: `1px solid ${C.border}` }}>
-            <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "8px 10px 6px", whiteSpace: "nowrap" }}>
-              <h2 style={sectionHeader}>Outliner</h2>
-              <div style={{ flex: "1 1 0", minWidth: 4 }} />
-              <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8 }}>
-              {outlinerMode === "File" && fileState && (
-                <>
-                  <div style={{ padding: "4px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileState.file}>
-                    {fileState.file.split("/").pop()}
-                  </div>
-                  <FileOutliner
-                    model={fileState.model}
-                    focusId={fileFocusId}
-                    collapsed={fileCollapsed}
-                    onToggle={(id) =>
-                      setFileCollapsed((c) => {
-                        const next = new Set(c);
-                        if (next.has(id)) next.delete(id);
-                        else next.add(id);
-                        return next;
-                      })
-                    }
-                    onSelect={(m) => {
-                      setFileFocusId(m.id);
-                      send({ type: "select", id: m.id });
-                    }}
-                  />
-                </>
-              )}
-              {outlinerMode === "File" && !fileState && (
-                <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
-                  No file open. Pick a component from Insert or a route from the Routes tree.
-                </div>
-              )}
-              {outlinerMode === "Routes" && routeTree && (
-                <RouteTree
-                  tree={routeTree}
-                  selectedId={routeSel ? routeId(routeSel) : null}
-                  onSelect={(n) => {
-                    setRouteSel(n);
-                    setFileFocusId(null);
-                    // In the live canvas a route is a place to go, not just a
-                    // set of files to read. Dynamic segments have no concrete
-                    // URL, so they stay put.
-                    if (canvasMode === "live" && n.files.page && !n.urlPath.includes("[")) {
-                      setLivePath(n.urlPath);
-                    }
-                  }}
-                />
-              )}
-              {outlinerMode === "Routes" && !routeTree && (
-                <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
-                  No route tree — is the target folder a Next.js app?
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Properties */}
-          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-            <div style={{ flex: "0 0 auto", padding: "8px 10px 7px", borderBottom: `1px solid ${C.softDiv}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                <span style={{ flex: "0 0 auto", width: 7, height: 7, background: fileNode ? C.orange : routeSel ? C.blueLight : C.muted, borderRadius: 2 }} />
-                <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 12, color: "#fff", fontWeight: 600 }}>{selTitle}</span>
-              </div>
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-              {routeSel ? (
-                <RouteCard route={routeSel} shell={routeShell} openFile={(f) => void openFile(f)} />
-              ) : fileNode && fileState ? (
-                <FileNodeCard
-                  file={fileState.file}
-                  node={fileNode}
-                  onEdit={editFile}
-                  onOpenSource={(src) => void openFile(src)}
-                />
-              ) : fileState ? (
-                <SamplePropsCard state={fileState} setSampleProp={setSampleProp} />
-              ) : (
-                <div style={{ padding: "12px 10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
-                  Nothing open. The Routes tree shows the app's structure; Insert lists its components.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <Dock
+          layout={layout}
+          onLayout={setLayout}
+          title={(id) => PANEL_TITLE[basePanel(id)] ?? id}
+          closable={(id) => id !== GROUP_MAIN[group]}
+          render={renderPanel}
+        />
       </div>
 
       {/* ---------------------------------------------------------- Context menu */}
@@ -1589,26 +1751,37 @@ export function App() {
  */
 function LiveCanvas({
   live,
-  frameRef,
+  registerFrame,
   path,
   setPath,
-  at,
   width,
   height,
   zoom,
   onZoom,
 }: {
   live: { origin: string; upstream: string } | null;
-  frameRef: React.RefObject<HTMLIFrameElement | null>;
+  /** Publish this pane's frame so App can broadcast probe commands to it. */
+  registerFrame: (el: HTMLIFrameElement | null, on: boolean) => void;
   path: string;
   setPath: (p: string) => void;
-  /** Where the app actually ended up — it redirects (e.g. /account → /signin). */
-  at: string | null;
   width: number;
   height: number;
   zoom: number;
   onZoom: (dir: 1 | -1) => void;
 }) {
+  // There can be several live panes; every probe message reaches all of them,
+  // so each one filters on `event.source` being its own frame. Where the app
+  // actually landed (it redirects, e.g. /account → /signin) is per-pane too.
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [at, setAt] = useState<string | null>(null);
+  const attach = useCallback(
+    (el: HTMLIFrameElement | null) => {
+      if (frameRef.current) registerFrame(frameRef.current, false);
+      frameRef.current = el;
+      if (el) registerFrame(el, true);
+    },
+    [registerFrame],
+  );
   // The frame floats freely on the apron: `pan` is its top-left corner in
   // apron px, unclamped — a real canvas lets the window sit with void on
   // every side, which scroll-based centering (clamped at 0) never could.
@@ -1676,10 +1849,15 @@ function LiveCanvas({
   );
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      const m = e.data as { uai?: boolean; type?: string; dir?: 1 | -1; x?: number; y?: number; dx?: number; dy?: number };
-      if (m?.uai && m.type === "live-zoom" && m.dir) {
+      const m = e.data as { uai?: boolean; type?: string; url?: string | null; dir?: 1 | -1; x?: number; y?: number; dx?: number; dy?: number };
+      if (!m?.uai) return;
+      // Not ours: another live pane's probe.
+      if (e.source !== frameRef.current?.contentWindow) return;
+      if (m.type === "live-ready" && m.url) {
+        setAt(m.url);
+      } else if (m.type === "live-zoom" && m.dir) {
         zoomAt(m.dir, m.x ?? width / 2, m.y ?? height / 2);
-      } else if (m?.uai && m.type === "live-pan") {
+      } else if (m.type === "live-pan") {
         // Deltas are SCREEN px (see the probe) — applied 1:1, no zoom scaling,
         // so the frame tracks the cursor exactly at any zoom.
         setPan((p) => p && { x: p.x + (m.dx ?? 0), y: p.y + (m.dy ?? 0) });
@@ -1821,7 +1999,7 @@ function LiveCanvas({
           }}
         >
           <iframe
-            ref={frameRef}
+            ref={attach}
             src={`${live.origin}${path}`}
             title="live app"
             style={{

@@ -3,6 +3,34 @@
 Where u-and-i is and what's next. Update this as priorities shift — it's the
 first thing a new session should read after CLAUDE.md.
 
+## Docking windows (DONE — 2026-08-18)
+
+The three fixed columns are gone. Panels — Insert, Canvas, Outliner,
+Properties, Style, Workshop — are cards in a split/tab tree
+(`web/src/editor/v3/dock.tsx`); drag a tab onto another pane's tab strip to
+stack them, or onto a pane's edge to split it. Drag to the dock's outer edge
+for a full-height column. Splitters resize; the × closes a panel and View ▸
+Panels reopens it (plus **New canvas pane** and **Reset layout**).
+
+Decisions Sam settled at design time: **individual cards**, not whole
+workspaces; cards always dock somewhere — nothing floats FL-Studio-style;
+the arrangement saves itself into the per-project session; and yes, the
+canvas may be more than one pane.
+
+Two things worth knowing:
+
+- **Layout and Component share one tree.** They hold the same panels and
+  differ only in what the canvas draws. Sharing keeps the canvas leaf in the
+  same position across that switch, so the harness iframe (mounted module +
+  sample props) survives it — as it did before docking. Style and Workshop
+  keep their own trees.
+- **Extra canvas panes are extra *live* views**, each with its own path.
+  The component harness is a single iframe (one mounted module), so it stays
+  with the primary pane. Probe messages reach every live frame, so each pane
+  filters on `event.source` being its own.
+
+Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
+
 ## Where we are (2026-08-16)
 
 Code-is-truth editor serving one real Next.js app (adventure-alerts).
@@ -17,13 +45,6 @@ into the live page (see "Render the real app" below).
 
 ## Next (near-term, high value)
 
-- **Docking windows** (Sam, 2026-08-17: next session's feature) — Blender/
-  VS Code-style docking for the editor chrome: panels (Insert, Outliner,
-  Properties, canvas) draggable into splits/tabs instead of the fixed
-  three-column layout. Open questions to settle at design time: what's
-  dockable (whole workspaces vs individual cards), persistence (layout
-  belongs in the per-project session), and whether the live canvas can be
-  more than one pane.
 - **Editing dynamic regions** — the biggest editability gap. Map callbacks,
   ternary branches, expression props, dynamic `style`/`className` are
   read-only pseudo-content today. Start with the safest slices: editing
