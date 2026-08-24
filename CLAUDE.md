@@ -83,6 +83,10 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
 - Rollup's `resolve` won't extension-infer absolute paths — do it manually.
 - Two React copies break hooks: `resolve.dedupe` react/react-dom;
   react-query aliases to the *target's* node_modules copy.
+- A pointer over an **iframe** delivers its events to that document, not
+  ours — any pointer-drag that crosses the canvas needs a transparent shield
+  over it for the drag's duration, or the parent silently stops updating
+  (`dock.tsx`, and `LiveCanvas`'s middle-drag pan, both do this).
 - Editor and harness share localStorage (same origin, port 4400).
 - Vite hands importers outside its root as absolute, `/@fs/`, *or*
   relative paths — match on the directory-name marker.

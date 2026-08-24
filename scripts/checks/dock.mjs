@@ -41,6 +41,26 @@ async function dragTabTo(tabId, x, y) {
   await page.waitForTimeout(150);
 }
 
+/** The persisted tree, as a compact shape string. */
+const shape = () =>
+  page.evaluate(() => {
+    const k = Object.keys(localStorage).find((s) => s.startsWith("uai:proj:"));
+    const t = JSON.parse(localStorage.getItem(k)).layouts.edit;
+    const s = (n) => (n.kind === "leaf" ? n.tabs.join("+") : `${n.dir}[${n.children.map(s).join(", ")}]`);
+    return s(t);
+  });
+
+/** Hold a drag over a point and report the drop zone the dock computed. */
+async function zoneAt(x, y) {
+  await page.mouse.move(x, y, { steps: 4 });
+  await page.mouse.move(x + 0.5, y);
+  await page.waitForTimeout(110);
+  return page.evaluate(() => {
+    const el = document.querySelector("[data-dock-zone]");
+    return el && { zone: el.getAttribute("data-dock-zone"), target: el.getAttribute("data-dock-target") };
+  });
+}
+
 try {
   await page.goto(URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-dock-leaf]", { timeout: 15000 });
@@ -209,16 +229,72 @@ try {
     `Reset layout restores the default: ${JSON.stringify(reset)}`,
   );
 
-  // --- a header inside the outer-edge band still stacks --------------------
-  // The top row's headers sit within the dock's outer-edge drop band. The
-  // edge used to win there, so those panes could never be stacked onto.
-  const insertHdr = await box('[data-dock-leaf] [data-dock-tab="insert"]');
-  await dragTabTo("outliner", insertHdr.x + insertHdr.width + 40, insertHdr.y + insertHdr.height / 2);
+  // --- every pane can still be stacked onto --------------------------------
+  // A top-row pane's header lies under the dock's top edge strip, which now
+  // wins there. Nothing is lost: a pane's middle means "add a tab" too, so
+  // the arrangement is still reachable — which is the property worth pinning.
+  const ins = await page.evaluate(() => {
+    const l = [...document.querySelectorAll("[data-dock-leaf]")].find((n) =>
+      [...n.querySelectorAll("[data-dock-tab]")].some((t) => t.getAttribute("data-dock-tab") === "insert"),
+    );
+    const r = l.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await dragTabTo("outliner", ins.x, ins.y);
   const topStack = await leafMap();
   check(
     topStack.length === 3 && topStack.some((l) => l.tabs.includes("insert") && l.tabs.includes("outliner")),
-    `a top-row header stacks rather than splitting: ${JSON.stringify(topStack.map((l) => l.tabs))}`,
+    `a top-row pane can still be stacked onto, via its middle: ${JSON.stringify(topStack.map((l) => l.tabs))}`,
   );
+  await viewMenuItem("Reset layout");
+
+  // --- drop zones stay live over the canvas iframe -------------------------
+  // A pointer over an iframe delivers events to that document, so the preview
+  // used to freeze at whatever it read before the cursor crossed the frame.
+  // A shield over the dock during the drag keeps the moves coming.
+  const cv = await page.evaluate(() => {
+    const l = [...document.querySelectorAll("[data-dock-leaf]")].find((n) =>
+      [...n.querySelectorAll("[data-dock-tab]")].some((t) => t.getAttribute("data-dock-tab") === "canvas"),
+    );
+    const r = l.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  const outlinerTab = await box('[data-dock-tab="outliner"]');
+  await page.mouse.move(outlinerTab.x + outlinerTab.width / 2, outlinerTab.y + outlinerTab.height / 2);
+  await page.mouse.down();
+  const zones = {};
+  for (const [name, u, v] of [
+    ["centre", 0.5, 0.5],
+    ["top", 0.5, 0.12],
+    ["bottom", 0.5, 0.88],
+    ["left", 0.12, 0.5],
+    ["right", 0.88, 0.5],
+  ]) {
+    zones[name] = (await zoneAt(cv.x + cv.w * u, cv.y + cv.h * v))?.zone;
+  }
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  check(
+    JSON.stringify(zones) === JSON.stringify({ centre: "center", top: "top", bottom: "bottom", left: "left", right: "right" }),
+    `drop zones track the pointer across the canvas iframe: ${JSON.stringify(zones)}`,
+  );
+
+  // --- the outer strips reach every full-span arrangement ------------------
+  const root = await page.evaluate(() => {
+    const r = document.querySelector("[data-dock-leaf]").parentElement.parentElement.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  for (const [name, x, y, want] of [
+    ["top", root.x + root.w / 2, root.y + 8, "col[outliner, row[insert, canvas, properties]]"],
+    ["bottom", root.x + root.w / 2, root.y + root.h - 8, "col[row[insert, canvas, properties], outliner]"],
+    ["left", root.x + 8, root.y + root.h / 2, "row[outliner, insert, canvas, properties]"],
+  ]) {
+    await viewMenuItem("Reset layout");
+    await dragTabTo("outliner", x, y);
+    const got = await shape();
+    check(got === want, `outer ${name} strip makes a full-span band: ${got}`);
+  }
   await viewMenuItem("Reset layout");
 
   if (shot) await page.screenshot({ path: `${shot}-dock.png` });

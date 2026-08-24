@@ -20,9 +20,25 @@ tooltips. That folded four title bars into the tab strip and bought back a
 row per pane (Insert's search box, the Outliner's File/Routes switch, the
 Properties selection name and the whole canvas toolbar all moved up there).
 
-One thing that bit us: a pane's header can sit inside the dock's outer-edge
-drop band, and the edge used to win — so the top row of panes could never be
-stacked onto. Header hits now beat edge hits outright.
+**Drop targeting** (reworked 2026-08-18 after Sam found drags "weird" and
+some arrangements unreachable). Three bugs, all now covered by checks:
+
+- **The canvas iframe ate the drag.** A pointer over an iframe delivers its
+  events to *that* document, so the preview froze at whatever it read just
+  before the cursor crossed the frame — and the canvas is most of the window.
+  A transparent shield over the dock for the duration of the drag fixes it.
+  Any future pointer-drag across the canvas needs the same treatment.
+- **The outer top edge was unreachable**, so no full-width top band. The
+  invisible edge band and the top row's headers overlapped and the header
+  won. The four outer strips are now *drawn* during a drag, and take
+  precedence — visible precedence is honest; invisible precedence is a trap.
+  Nothing is lost: a pane's middle also means "add a tab".
+- **Zones were pixel bands**, so a 240px sidebar behaved unlike a 900px
+  canvas — the side bands nearly met and the middle was a sliver. Zones are
+  proportional now: middle two-fifths tabs, the rest splits.
+
+Highlights distinguish the two outcomes: a solid bar over a pane's header
+means "becomes a tab here", a band means "splits here".
 
 Decisions Sam settled at design time: **individual cards**, not whole
 workspaces; cards always dock somewhere — nothing floats FL-Studio-style;

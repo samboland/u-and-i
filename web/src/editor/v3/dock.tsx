@@ -231,12 +231,21 @@ const MIN_PANE = 120;
 /** Pointer travel before a tab press becomes a drag. */
 const DRAG_SLOP = 5;
 
+/** Width of the dock's outer drop strips — drawn during a drag, see EdgeStrips. */
+const EDGE = 22;
+
 interface DragState {
   id: string;
   x: number;
   y: number;
   /** null until the pointer clears the slop threshold. */
-  over: { path: Path; zone: DropZone; rect: DOMRect } | null;
+  over: {
+    path: Path;
+    zone: DropZone;
+    rect: DOMRect;
+    /** The pane's header, when the drop would add a tab to it. */
+    headerRect?: DOMRect;
+  } | null;
 }
 
 /** A leaf's key is its path joined by dots — "" for a lone root leaf. */
@@ -244,20 +253,50 @@ function pathOfKey(key: string): Path {
   return key === "" ? [] : key.split(".").map(Number);
 }
 
-function zoneOf(rect: DOMRect, x: number, y: number, tabBarBottom: number): DropZone {
-  if (y <= tabBarBottom) return "center";
-  const bandX = Math.min(rect.width * 0.3, 90);
-  const bandY = Math.min(rect.height * 0.3, 90);
-  const dl = x - rect.left;
-  const dr = rect.right - x;
-  const dt = y - rect.top;
-  const db = rect.bottom - y;
-  const min = Math.min(dl < bandX ? dl : Infinity, dr < bandX ? dr : Infinity, dt < bandY ? dt : Infinity, db < bandY ? db : Infinity);
-  if (min === Infinity) return "center";
-  if (min === dl) return "left";
-  if (min === dr) return "right";
-  if (min === dt) return "top";
+/**
+ * Which zone of a pane the pointer is in, as proportions rather than pixel
+ * bands. Fixed bands behaved differently in a 240px sidebar than in a 900px
+ * canvas — in a narrow pane the two side bands nearly met and the middle
+ * was a sliver. Proportions make every zone the same shape everywhere:
+ * the middle two-fifths is "dock as a tab", the rest belongs to the nearest
+ * edge.
+ */
+function zoneOf(rect: DOMRect, x: number, y: number): DropZone {
+  const u = (x - rect.left) / (rect.width || 1);
+  const v = (y - rect.top) / (rect.height || 1);
+  if (u >= 0.3 && u <= 0.7 && v >= 0.3 && v <= 0.7) return "center";
+  const m = Math.min(u, 1 - u, v, 1 - v);
+  if (m === u) return "left";
+  if (m === 1 - u) return "right";
+  if (m === v) return "top";
   return "bottom";
+}
+
+/**
+ * The dock's outer drop strips, drawn for the duration of a drag. Their job
+ * is half hit-target, half signage: a full-span band is the one arrangement
+ * you cannot reach by aiming at a pane, so the option has to be visible.
+ */
+function EdgeStrips({ width, height, active }: { width: number; height: number; active: DropZone | null }) {
+  const strip = (z: DropZone): CSSProperties => ({
+    position: "absolute",
+    pointerEvents: "none",
+    zIndex: 62,
+    transition: "background 90ms",
+    background: active === z ? "rgba(50,142,193,0.62)" : "rgba(50,142,193,0.12)",
+    // The inset outline is what makes an idle strip legible at all: a wash
+    // this faint vanishes against the chrome, and then the strips stop being
+    // signage and go back to being a hidden trap.
+    boxShadow: `inset 0 0 0 1px ${active === z ? C.blueLight : "rgba(111,184,234,0.4)"}`,
+  });
+  return (
+    <>
+      <div data-dock-edge="top" style={{ ...strip("top"), left: 0, top: 0, width, height: EDGE }} />
+      <div data-dock-edge="bottom" style={{ ...strip("bottom"), left: 0, top: height - EDGE, width, height: EDGE }} />
+      <div data-dock-edge="left" style={{ ...strip("left"), left: 0, top: EDGE, width: EDGE, height: height - EDGE * 2 }} />
+      <div data-dock-edge="right" style={{ ...strip("right"), left: width - EDGE, top: EDGE, width: EDGE, height: height - EDGE * 2 }} />
+    </>
+  );
 }
 
 /** Preview rectangle (relative to the dock root) for a pending drop. */
@@ -328,30 +367,34 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
     };
 
     const hit = (x: number, y: number): DragState["over"] => {
-      const leafHit = under(x, y);
-      const bar = leafHit?.el.querySelector<HTMLElement>("[data-dock-tabbar]");
-      const barBottom = bar ? bar.getBoundingClientRect().bottom : -Infinity;
-
-      // A pane's own header always means "dock here as a tab". It has to win
-      // outright: the top row's headers sit inside the dock's outer-edge band,
-      // and letting the edge win there made stacking onto them impossible.
-      if (leafHit && y <= barBottom) {
-        return { path: pathOfKey(leafHit.key), zone: "center", rect: leafHit.rect };
-      }
-
-      // Outer edges of the whole dock: how you pull a panel out to a
-      // full-width/height band of its own.
+      // 1. The dock's outer strips, for a band spanning the whole dock. They
+      //    are DRAWN during the drag (EdgeStrips), so taking precedence over
+      //    the pane beneath is honest rather than a hidden trap — the earlier
+      //    invisible band silently shadowed the top row's headers and made a
+      //    full-width top band unreachable.
       const rootRect = rootRef.current?.getBoundingClientRect();
       if (rootRect) {
-        const edge = 18;
-        if (x - rootRect.left < edge) return { path: [], zone: "left", rect: rootRect };
-        if (rootRect.right - x < edge) return { path: [], zone: "right", rect: rootRect };
-        if (y - rootRect.top < edge) return { path: [], zone: "top", rect: rootRect };
-        if (rootRect.bottom - y < edge) return { path: [], zone: "bottom", rect: rootRect };
+        if (x - rootRect.left < EDGE) return { path: [], zone: "left", rect: rootRect };
+        if (rootRect.right - x < EDGE) return { path: [], zone: "right", rect: rootRect };
+        if (y - rootRect.top < EDGE) return { path: [], zone: "top", rect: rootRect };
+        if (rootRect.bottom - y < EDGE) return { path: [], zone: "bottom", rect: rootRect };
       }
 
+      const leafHit = under(x, y);
       if (!leafHit) return null;
-      return { path: pathOfKey(leafHit.key), zone: zoneOf(leafHit.rect, x, y, barBottom), rect: leafHit.rect };
+      const path = pathOfKey(leafHit.key);
+      const bar = leafHit.el.querySelector<HTMLElement>("[data-dock-tabbar]");
+      const headerRect = bar?.getBoundingClientRect();
+
+      // 2. A pane's header means "add a tab here". Nothing is lost to the
+      //    strips above: the pane's middle says the same thing (see zoneOf).
+      if (headerRect && y <= headerRect.bottom) {
+        return { path, zone: "center", rect: leafHit.rect, headerRect };
+      }
+
+      // 3. Otherwise, the pane's own five zones.
+      const zone = zoneOf(leafHit.rect, x, y);
+      return { path, zone, rect: leafHit.rect, headerRect: zone === "center" ? headerRect : undefined };
     };
 
     const move = (e: PointerEvent) => {
@@ -405,18 +448,56 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
         dragging={drag?.id ?? null}
       />
 
+      {/* A pointer over an iframe delivers its events to THAT document, not
+          ours — so dragging across the canvas silently froze the drop preview
+          at whatever it read just before the cursor crossed the frame edge.
+          This shield sits above the panes for the duration of the drag so the
+          moves keep arriving. It must stay below the previews, which are
+          pointer-transparent anyway. */}
+      {drag && (
+        <div style={{ position: "absolute", inset: 0, zIndex: 55, cursor: "grabbing" }} />
+      )}
+
+      {/* The four outer strips, visible for the whole drag so the user can see
+          where a full-span band is available before aiming at one. */}
+      {drag && rootRect && (
+        <EdgeStrips width={rootRect.width} height={rootRect.height} active={drag.over?.path.length === 0 ? drag.over.zone : null} />
+      )}
+
       {drag?.over && rootRect && (
-        <div
-          style={{
-            position: "absolute",
-            ...previewBox(drag.over.rect, rootRect, drag.over.zone),
-            background: "rgba(50,142,193,0.18)",
-            border: `1px solid ${C.blue}`,
-            borderRadius: 3,
-            pointerEvents: "none",
-            zIndex: 60,
-          }}
-        />
+        <>
+          <div
+            data-dock-zone={drag.over.zone}
+            data-dock-target={drag.over.path.length === 0 ? "dock" : drag.over.path.join(".")}
+            style={{
+              position: "absolute",
+              ...previewBox(drag.over.rect, rootRect, drag.over.zone),
+              background: "rgba(50,142,193,0.16)",
+              border: `2px solid ${C.blue}`,
+              borderRadius: 3,
+              pointerEvents: "none",
+              zIndex: 60,
+            }}
+          />
+          {/* A solid bar over the header says "this becomes a tab of that
+              pane", which a plain full-pane wash could not distinguish from
+              "this replaces that pane". */}
+          {drag.over.headerRect && (
+            <div
+              style={{
+                position: "absolute",
+                left: drag.over.headerRect.left - rootRect.left,
+                top: drag.over.headerRect.top - rootRect.top,
+                width: drag.over.headerRect.width,
+                height: drag.over.headerRect.height,
+                background: "rgba(50,142,193,0.55)",
+                borderBottom: `2px solid ${C.blueLight}`,
+                pointerEvents: "none",
+                zIndex: 61,
+              }}
+            />
+          )}
+        </>
       )}
       {drag && (
         <div
@@ -513,20 +594,41 @@ function DockSplitView({ node, path, ...rest }: BranchProps & { node: DockSplit 
   );
 }
 
+/**
+ * The seam between two panes. Painted as a single dark hairline — panes are
+ * lighter than the gap, so the line reads as space between raised surfaces.
+ * The grab area is much wider than the line: a 1px target would be miserable
+ * to hit, and a 6px slab of near-panel grey (what this used to be, on top of
+ * each pane's own border) just looked like a smudge.
+ */
 function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEvent) => void }) {
   const [hot, setHot] = useState(false);
   return (
     <div
+      data-dock-splitter={row ? "col" : "row"}
       onPointerDown={onDown}
       onPointerEnter={() => setHot(true)}
       onPointerLeave={() => setHot(false)}
       style={{
-        flex: "0 0 4px",
-        background: hot ? C.blue : C.border,
+        flex: "0 0 7px",
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "center",
+        flexDirection: row ? "row" : "column",
+        background: "transparent",
         cursor: row ? "col-resize" : "row-resize",
-        transition: "background 90ms",
+        zIndex: 6,
       }}
-    />
+    >
+      <div
+        style={{
+          flex: `0 0 ${hot ? 3 : 1}px`,
+          background: hot ? C.blue : C.void,
+          borderRadius: 2,
+          transition: "flex-basis 90ms, background 90ms",
+        }}
+      />
+    </div>
   );
 }
 
@@ -580,7 +682,9 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
     <div
       ref={ref}
       data-dock-leaf={key}
-      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: C.panel, borderRight: `1px solid ${C.border}`, overflow: "hidden" }}
+      // No border of its own: the seam between panes is the Splitter, and
+      // doubling them made one mushy band instead of a clean line.
+      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: C.panel, overflow: "hidden" }}
     >
       <div
         data-dock-tabbar
