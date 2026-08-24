@@ -44,9 +44,13 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   `/api/restore` of `before`/`after`. `FileMode.tsx` = JSX outliner + node
   card. Sample render props live in localStorage only.
   `dock.tsx` = the docking layout: panels are cards in a pure-data
-  split/tab tree, dragged by their tabs, persisted per project. Layout and
-  Component **share one tree** so the harness iframe survives that switch;
-  panel bodies are the `renderPanel` switch in `App.tsx`.
+  split/tab tree, dragged by their header icon, persisted per project.
+  Layout and Component **share one tree** so the harness iframe survives
+  that switch. Blender-style chrome: one header row per pane — icon
+  dropdown, then that panel's own controls inline — so panels split into
+  `renderPanelHeader` + `renderPanel` in `App.tsx`. Panel names appear only
+  in the dropdown and tooltips; the icons are Material Symbols ligatures,
+  so a tab's `textContent` IS its icon name (bites test selectors).
 - `web/src/harness/` — canvas iframe. One stage: void apron, device width,
   cursor-anchored zoom, middle-drag pan. Modules load via dynamic
   `/@fs/` imports (no compile-time globs). Clicks post `selected` with the

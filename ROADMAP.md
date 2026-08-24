@@ -7,10 +7,22 @@ first thing a new session should read after CLAUDE.md.
 
 The three fixed columns are gone. Panels — Insert, Canvas, Outliner,
 Properties, Style, Workshop — are cards in a split/tab tree
-(`web/src/editor/v3/dock.tsx`); drag a tab onto another pane's tab strip to
-stack them, or onto a pane's edge to split it. Drag to the dock's outer edge
-for a full-height column. Splitters resize; the × closes a panel and View ▸
-Panels reopens it (plus **New canvas pane** and **Reset layout**).
+(`web/src/editor/v3/dock.tsx`); drag a pane's icon onto another pane's header
+to stack them, or onto a pane's edge to split it. Drag to the dock's outer
+edge for a full-width/height band. Splitters resize; the × closes a panel and
+View ▸ Panels reopens it (plus **New canvas pane** and **Reset layout**).
+
+**Headers follow Blender, not VS Code** (Sam, 2026-08-18: text tabs ate too
+much room). Each pane has ONE header row: a small icon dropdown naming the
+panel, then that panel's own controls inline beside it. Panels sharing a pane
+show as bare icons — no labels anywhere, names live in the dropdown and in
+tooltips. That folded four title bars into the tab strip and bought back a
+row per pane (Insert's search box, the Outliner's File/Routes switch, the
+Properties selection name and the whole canvas toolbar all moved up there).
+
+One thing that bit us: a pane's header can sit inside the dock's outer-edge
+drop band, and the edge used to win — so the top row of panes could never be
+stacked onto. Header hits now beat edge hits outright.
 
 Decisions Sam settled at design time: **individual cards**, not whole
 workspaces; cards always dock somewhere — nothing floats FL-Studio-style;

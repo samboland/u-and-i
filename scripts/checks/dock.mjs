@@ -55,16 +55,31 @@ try {
   );
   check(start.length === 4, `each panel starts in its own leaf (${start.length})`);
 
-  // The Canvas tab can't be closed away — it is the workspace's reason to be.
-  const closers = await page.evaluate(() =>
-    [...document.querySelectorAll("[data-dock-tab]")].map((t) => [
-      t.getAttribute("data-dock-tab"),
-      t.children.length > 0,
-    ]),
+  // Blender-style header: exactly one type dropdown per pane, and the panel's
+  // own controls sit in that same row rather than a title bar below it.
+  const headers = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-dock-leaf]")].map((l) => {
+      const bar = l.querySelector("[data-dock-tabbar]");
+      return {
+        active: bar.querySelector("[data-dock-type]")?.getAttribute("data-dock-tab"),
+        types: bar.querySelectorAll("[data-dock-type]").length,
+        closable: !!bar.querySelector(".hv-close"),
+        height: Math.round(bar.getBoundingClientRect().height),
+      };
+    }),
   );
   check(
-    closers.every(([id, hasX]) => (id === "canvas" ? !hasX : hasX)),
-    `only the canvas tab lacks a close button: ${JSON.stringify(closers)}`,
+    headers.every((h) => h.types === 1),
+    `one type dropdown per pane: ${JSON.stringify(headers.map((h) => h.active))}`,
+  );
+  check(
+    headers.every((h) => h.height <= 34),
+    `pane headers stay one row tall: ${JSON.stringify(headers.map((h) => h.height))}`,
+  );
+  // The Canvas pane can't be closed away — it is the workspace's reason to be.
+  check(
+    headers.every((h) => (h.active === "canvas" ? !h.closable : h.closable)),
+    `only the canvas pane lacks a close button: ${JSON.stringify(headers.map((h) => [h.active, h.closable]))}`,
   );
 
   // --- drag a tab onto another leaf's tab strip: they stack as tabs --------
@@ -77,11 +92,61 @@ try {
     `dropping on a tab strip stacks the panels: ${JSON.stringify(stacked.map((l) => l.tabs))}`,
   );
 
-  // Insert became the active tab, so its search box is the one on screen.
+  // Insert became the active panel, so its search box — which lives in the
+  // pane header now — is the one on screen.
   check(
-    await page.locator('input[placeholder="Search components"]').first().isVisible(),
-    "the dropped panel becomes the active tab",
+    await page.locator('[data-dock-tabbar] input[aria-label="Search components"]').first().isVisible(),
+    "the dropped panel becomes active, and its controls are in the pane header",
   );
+
+  // The panel it landed on is still there, as a bare icon beside the dropdown.
+  // Material Symbols are a ligature font, so a tab's textContent IS its icon
+  // name — anything beyond that (and the dropdown caret) would be a label.
+  const sharing = await page.evaluate(() => {
+    const bar = [...document.querySelectorAll("[data-dock-tabbar]")].find(
+      (b) => b.querySelectorAll("[data-dock-tab]").length > 1,
+    );
+    return [...bar.querySelectorAll("[data-dock-tab]")].map((t) => ({
+      id: t.getAttribute("data-dock-tab"),
+      isType: t.hasAttribute("data-dock-type"),
+      glyph: t.querySelector(".material-symbols-rounded")?.textContent ?? "",
+      text: t.textContent.replace("▼", "").trim(),
+    }));
+  });
+  check(
+    sharing.length === 2 &&
+      sharing.filter((t) => t.isType).length === 1 &&
+      sharing.every((t) => t.text === t.glyph && t.glyph !== ""),
+    `the other panel shows as a bare icon, no label: ${JSON.stringify(sharing)}`,
+  );
+
+  // The type dropdown names the panels and switches which one the pane shows.
+  const sharedType = page
+    .locator("[data-dock-leaf]", { has: page.locator("[data-dock-tab]").nth(1) })
+    .locator("[data-dock-type]")
+    .last();
+  await sharedType.click();
+  await page.waitForTimeout(250);
+  // Menu rows read "<bullet><icon-ligature><Name>" for the same font reason.
+  const menuNames = await page.evaluate(() =>
+    [...document.querySelectorAll("[data-dock-typemenu] button")].map((b) =>
+      [...b.children].at(-1).textContent.trim(),
+    ),
+  );
+  check(
+    ["Insert", "Canvas", "Outliner", "Properties"].every((n) => menuNames.includes(n)),
+    `type dropdown lists panels by name: ${JSON.stringify(menuNames)}`,
+  );
+
+  await page.locator("[data-dock-typemenu] button", { hasText: "Properties" }).last().click();
+  await page.waitForTimeout(300);
+  const nowActive = await page.evaluate(() => {
+    const bar = [...document.querySelectorAll("[data-dock-tabbar]")].find(
+      (b) => b.querySelectorAll("[data-dock-tab]").length > 1,
+    );
+    return bar?.querySelector("[data-dock-type]")?.getAttribute("data-dock-tab");
+  });
+  check(nowActive === "properties", `picking from the dropdown switches the pane: ${nowActive}`);
 
   // --- switching tabs keeps both mounted (the canvas iframe must not reload)
   await page.locator('[data-dock-tab="properties"]').first().click();
@@ -143,6 +208,18 @@ try {
     JSON.stringify(reset) === JSON.stringify(["insert", "canvas", "outliner", "properties"]),
     `Reset layout restores the default: ${JSON.stringify(reset)}`,
   );
+
+  // --- a header inside the outer-edge band still stacks --------------------
+  // The top row's headers sit within the dock's outer-edge drop band. The
+  // edge used to win there, so those panes could never be stacked onto.
+  const insertHdr = await box('[data-dock-leaf] [data-dock-tab="insert"]');
+  await dragTabTo("outliner", insertHdr.x + insertHdr.width + 40, insertHdr.y + insertHdr.height / 2);
+  const topStack = await leafMap();
+  check(
+    topStack.length === 3 && topStack.some((l) => l.tabs.includes("insert") && l.tabs.includes("outliner")),
+    `a top-row header stacks rather than splitting: ${JSON.stringify(topStack.map((l) => l.tabs))}`,
+  );
+  await viewMenuItem("Reset layout");
 
   if (shot) await page.screenshot({ path: `${shot}-dock.png` });
 } catch (err) {

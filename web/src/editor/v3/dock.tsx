@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { C, MONO } from "./chrome";
+import { Sym } from "./controls";
 
 // ---------------------------------------------------------------- the tree
 
@@ -279,14 +280,24 @@ export interface DockProps {
   onLayout: (next: DockNode) => void;
   /** Display name per panel id (instance ids included). */
   title: (id: string) => string;
+  /** Material Symbols glyph name per panel id. */
+  icon: (id: string) => string;
   /** Panel body. Every tab in a leaf stays mounted; inactive ones are hidden,
    *  so switching tabs never reloads the canvas iframe. */
   render: (id: string) => ReactNode;
-  /** Panels the user may close from the tab strip. Default: all. */
+  /**
+   * The active panel's own controls, laid inline in the pane header — the
+   * Blender arrangement: one header row per pane, not a tab strip above a
+   * title bar. Panels with no controls return null.
+   */
+  renderHeader?: (id: string) => ReactNode;
+  /** Panels offered by the pane's type dropdown, in menu order. */
+  panelMenu?: string[];
+  /** Panels the user may close from the header. Default: all. */
   closable?: (id: string) => boolean;
 }
 
-export function Dock({ layout, onLayout, title, render, closable }: DockProps) {
+export function Dock({ layout, onLayout, title, icon, render, renderHeader, panelMenu, closable }: DockProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const leaves = useRef(new Map<string, HTMLElement>());
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -300,14 +311,36 @@ export function Dock({ layout, onLayout, title, render, closable }: DockProps) {
 
   // --- tab drag ------------------------------------------------------------
 
-  const startDrag = useCallback((id: string, ev: React.PointerEvent) => {
+  /** `onTap` fires when the pointer went down and up without ever clearing
+   *  the drag threshold — that is a click, and the header uses it to open the
+   *  pane's type dropdown. */
+  const startDrag = useCallback((id: string, ev: React.PointerEvent, onTap?: () => void) => {
     if (ev.button !== 0) return;
     const origin = { x: ev.clientX, y: ev.clientY };
     let armed = false;
 
+    const under = (x: number, y: number): { key: string; el: HTMLElement; rect: DOMRect } | null => {
+      for (const [key, el] of leaves.current) {
+        const rect = el.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return { key, el, rect };
+      }
+      return null;
+    };
+
     const hit = (x: number, y: number): DragState["over"] => {
-      // Outer edges of the whole dock win over any leaf: that is how you get
-      // a panel back out to a full-height column.
+      const leafHit = under(x, y);
+      const bar = leafHit?.el.querySelector<HTMLElement>("[data-dock-tabbar]");
+      const barBottom = bar ? bar.getBoundingClientRect().bottom : -Infinity;
+
+      // A pane's own header always means "dock here as a tab". It has to win
+      // outright: the top row's headers sit inside the dock's outer-edge band,
+      // and letting the edge win there made stacking onto them impossible.
+      if (leafHit && y <= barBottom) {
+        return { path: pathOfKey(leafHit.key), zone: "center", rect: leafHit.rect };
+      }
+
+      // Outer edges of the whole dock: how you pull a panel out to a
+      // full-width/height band of its own.
       const rootRect = rootRef.current?.getBoundingClientRect();
       if (rootRect) {
         const edge = 18;
@@ -316,14 +349,9 @@ export function Dock({ layout, onLayout, title, render, closable }: DockProps) {
         if (y - rootRect.top < edge) return { path: [], zone: "top", rect: rootRect };
         if (rootRect.bottom - y < edge) return { path: [], zone: "bottom", rect: rootRect };
       }
-      for (const [key, el] of leaves.current) {
-        const rect = el.getBoundingClientRect();
-        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
-        const bar = el.querySelector<HTMLElement>("[data-dock-tabbar]");
-        const barBottom = bar ? bar.getBoundingClientRect().bottom : rect.top;
-        return { path: pathOfKey(key), zone: zoneOf(rect, x, y, barBottom), rect };
-      }
-      return null;
+
+      if (!leafHit) return null;
+      return { path: pathOfKey(leafHit.key), zone: zoneOf(leafHit.rect, x, y, barBottom), rect: leafHit.rect };
     };
 
     const move = (e: PointerEvent) => {
@@ -334,6 +362,10 @@ export function Dock({ layout, onLayout, title, render, closable }: DockProps) {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      if (!armed) {
+        onTap?.();
+        return;
+      }
       const d = dragRef.current;
       setDrag(null);
       if (d?.over) onLayout(dockTab(layout, d.id, d.over.path, d.over.zone));
@@ -363,7 +395,10 @@ export function Dock({ layout, onLayout, title, render, closable }: DockProps) {
         layout={layout}
         onLayout={onLayout}
         title={title}
+        icon={icon}
         render={render}
+        renderHeader={renderHeader}
+        panelMenu={panelMenu}
         closable={closable}
         registerLeaf={registerLeaf}
         onTabDown={startDrag}
@@ -398,8 +433,12 @@ export function Dock({ layout, onLayout, title, render, closable }: DockProps) {
             pointerEvents: "none",
             zIndex: 200,
             boxShadow: "0 8px 20px rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
           }}
         >
+          <Sym name={icon(drag.id)} size={13} />
           {title(drag.id)}
         </div>
       )}
@@ -413,10 +452,13 @@ interface BranchProps {
   layout: DockNode;
   onLayout: (n: DockNode) => void;
   title: (id: string) => string;
+  icon: (id: string) => string;
   render: (id: string) => ReactNode;
+  renderHeader?: (id: string) => ReactNode;
+  panelMenu?: string[];
   closable?: (id: string) => boolean;
   registerLeaf: (key: string, el: HTMLElement | null) => void;
-  onTabDown: (id: string, ev: React.PointerEvent) => void;
+  onTabDown: (id: string, ev: React.PointerEvent, onTap?: () => void) => void;
   dragging: string | null;
 }
 
@@ -488,13 +530,51 @@ function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEven
   );
 }
 
-function DockLeafView({ node, path, title, render, closable, registerLeaf, onTabDown, dragging, layout, onLayout }: BranchProps & { node: DockLeaf }) {
+/** Square icon button — the header's whole vocabulary. */
+function iconBtn(active: boolean, faded: boolean): CSSProperties {
+  return {
+    flex: "0 0 auto",
+    display: "flex",
+    alignItems: "center",
+    gap: 1,
+    height: 20,
+    padding: "0 3px",
+    background: active ? C.ctlHover : "transparent",
+    border: "none",
+    borderRadius: 4,
+    color: active ? "#fff" : C.muted,
+    cursor: "grab",
+    opacity: faded ? 0.4 : 1,
+    userSelect: "none",
+  };
+}
+
+/**
+ * One pane. Blender's arrangement: a single header row whose leftmost control
+ * is a small icon dropdown naming the panel, with that panel's own buttons
+ * inline to its right. Other panels docked here sit beside it as bare icons —
+ * no wide text tabs, and no separate title bar underneath.
+ */
+function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu, closable, registerLeaf, onTabDown, dragging, layout, onLayout }: BranchProps & { node: DockLeaf }) {
   const key = path.join(".");
   const ref = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => {
     registerLeaf(key, ref.current);
     return () => registerLeaf(key, null);
   }, [key, registerLeaf]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    // Capture phase: the menu's own buttons stopPropagation, everything else
+    // (including a click in another pane) dismisses.
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [menuOpen]);
+
+  const others = node.tabs.filter((t) => t !== node.active);
+  const header = renderHeader?.(node.active);
 
   return (
     <div
@@ -504,49 +584,86 @@ function DockLeafView({ node, path, title, render, closable, registerLeaf, onTab
     >
       <div
         data-dock-tabbar
-        style={{ flex: "0 0 24px", display: "flex", alignItems: "stretch", background: C.sunken, borderBottom: `1px solid ${C.border}`, overflowX: "auto", overflowY: "hidden" }}
+        style={{ flex: "0 0 auto", minHeight: 26, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, padding: "3px 6px", background: C.sunken, borderBottom: `1px solid ${C.border}`, minWidth: 0 }}
       >
-        {node.tabs.map((id) => {
-          const active = id === node.active;
-          return (
+        {/* Panel type: icon + caret, click to switch, drag to re-dock. */}
+        <div style={{ flex: "0 0 auto", position: "relative" }}>
+          <button
+            className="hv-ctl"
+            data-dock-tab={node.active}
+            data-dock-type
+            title={`${title(node.active)} — click to switch, drag to move`}
+            onPointerDown={(e) => onTabDown(node.active, e, () => setMenuOpen((v) => !v))}
+            onClick={(e) => e.stopPropagation()}
+            style={iconBtn(true, dragging === node.active)}
+          >
+            <Sym name={icon(node.active)} size={15} />
+            <span style={{ fontSize: 7, color: C.faint, lineHeight: 1 }}>▼</span>
+          </button>
+          {menuOpen && panelMenu && (
             <div
-              key={id}
-              data-dock-tab={id}
-              onPointerDown={(e) => { onLayout(focusPanel(layout, id)); onTabDown(id, e); }}
-              title={title(id)}
-              style={{
-                flex: "0 0 auto",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "0 8px",
-                background: active ? C.panel : "transparent",
-                borderRight: `1px solid ${C.border}`,
-                color: active ? "#fff" : C.muted,
-                fontSize: 10.5,
-                textTransform: "uppercase",
-                letterSpacing: "0.07em",
-                cursor: "grab",
-                opacity: dragging === id ? 0.4 : 1,
-                whiteSpace: "nowrap",
-                userSelect: "none",
-              }}
+              data-dock-typemenu
+              onClick={(e) => e.stopPropagation()}
+              style={{ position: "absolute", top: 23, left: 0, minWidth: 170, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 50 }}
             >
-              {title(id)}
-              {(closable?.(id) ?? true) && (
-                <span
-                  className="hv-close"
-                  onPointerDown={(e) => { e.stopPropagation(); }}
-                  onClick={(e) => { e.stopPropagation(); onLayout(closePanel(layout, id)); }}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 13, height: 13, borderRadius: 3, color: C.faint, fontFamily: MONO, fontSize: 10, cursor: "pointer" }}
-                >
-                  ×
-                </span>
-              )}
+              {panelMenu.map((id) => {
+                const here = node.tabs.includes(id);
+                return (
+                  <button
+                    key={id}
+                    className="hv-menu"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      // Already in this pane? Just show it. Otherwise pull it
+                      // here from wherever it lives.
+                      onLayout(here ? focusPanel(layout, id) : dockTab(layout, id, path, "center"));
+                    }}
+                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: here ? "#fff" : C.body, cursor: "pointer", textAlign: "left" }}
+                  >
+                    <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{id === node.active ? "•" : ""}</span>
+                    <Sym name={icon(id)} size={14} />
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{title(id)}</span>
+                  </button>
+                );
+              })}
             </div>
-          );
-        })}
-        <div style={{ flex: 1 }} />
+          )}
+        </div>
+
+        {/* Panels sharing this pane: icon only, exactly as Sam asked. */}
+        {others.map((id) => (
+          <button
+            key={id}
+            className="hv-ctl"
+            data-dock-tab={id}
+            title={title(id)}
+            onPointerDown={(e) => onTabDown(id, e, () => onLayout(focusPanel(layout, id)))}
+            onClick={(e) => e.stopPropagation()}
+            style={iconBtn(false, dragging === id)}
+          >
+            <Sym name={icon(id)} size={15} />
+          </button>
+        ))}
+
+        {header && <div style={{ flex: "0 0 auto", width: 1, height: 15, background: C.border, margin: "0 1px" }} />}
+
+        {/* The active panel's own controls, inline — the point of the exercise.
+            The panel owns the spacing inside this box, so a toolbar that wants
+            something flushed right (the canvas's Mode switch) still gets it. */}
+        <div style={{ flex: "1 1 0", minWidth: 0, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+          {header}
+        </div>
+
+        {(closable?.(node.active) ?? true) && (
+          <button
+            className="hv-close"
+            title={`Close ${title(node.active)}`}
+            onClick={(e) => { e.stopPropagation(); onLayout(closePanel(layout, node.active)); }}
+            style={{ flex: "0 0 auto", display: "flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, background: "none", border: "none", borderRadius: 3, color: C.faint, fontFamily: MONO, fontSize: 11, cursor: "pointer" }}
+          >
+            ×
+          </button>
+        )}
       </div>
       {node.tabs.map((id) => (
         <div

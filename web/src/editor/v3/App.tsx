@@ -91,6 +91,16 @@ const PANEL_TITLE: Record<string, string> = {
   workshop: "Workshop",
 };
 
+/** Material Symbols glyph per panel — the pane header is icon-only. */
+const PANEL_ICON: Record<string, string> = {
+  insert: "widgets",
+  canvas: "desktop_windows",
+  outliner: "account_tree",
+  properties: "tune",
+  style: "palette",
+  workshop: "handyman",
+};
+
 /**
  * Layout and Component share one tree. They hold the same panels and differ
  * only in what the canvas draws — and sharing keeps the canvas leaf in the
@@ -1062,7 +1072,95 @@ export function App() {
   // ------------------------------------------------------------ dock panels
 
   /**
-   * One panel's body. Sizing, the tab strip and the borders belong to the
+   * A panel's own controls, laid inline in the pane header next to its type
+   * icon. Keeping them here rather than in a title bar of their own is what
+   * buys back the vertical room the old three-column headers ate.
+   */
+  const renderPanelHeader = (id: string) => {
+    switch (basePanel(id)) {
+      case "insert":
+        return (
+          <input
+            className="fc"
+            type="text"
+            aria-label="Search components"
+            placeholder={fileState ? "Search components" : "open a file first"}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ ...inputStyle, flex: "1 1 90px", minWidth: 70, height: 20, fontSize: 11 }}
+          />
+        );
+
+      case "outliner":
+        return <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />;
+
+      case "properties":
+        return (
+          <>
+            <span style={{ flex: "0 0 auto", width: 7, height: 7, background: fileNode ? C.orange : routeSel ? C.blueLight : C.muted, borderRadius: 2 }} />
+            <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11.5, color: "#fff", fontWeight: 600 }} title={selTitle}>
+              {selTitle}
+            </span>
+          </>
+        );
+
+      case "canvas":
+        // Secondary panes are plain live views; their path bar is their header.
+        if (id !== "canvas") return null;
+        return (
+          <>
+            <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
+            <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{DEVICES[device].width}px</span>
+            <div style={{ flex: "0 0 auto", position: "relative", whiteSpace: "nowrap" }}>
+              <button
+                className="hv-ctl-border"
+                style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 7px", background: previewOpen ? C.ctl : "transparent", border: `1px solid ${previewOpen ? C.borderHover : C.border}`, borderRadius: 5, color: C.body, cursor: "pointer" }}
+                onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
+                title="Canvas context (P)"
+              >
+                <span style={{ fontFamily: MONO, fontSize: 10.5 }}>{role} · {themeDark ? "Abyss" : "Parchment"}</span>
+                <span style={{ fontSize: 7, color: C.faint }}>▼</span>
+              </button>
+              {previewOpen && (
+                <div style={{ position: "absolute", top: 24, left: 0, minWidth: 230, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 30 }} onClick={(e) => e.stopPropagation()}>
+                  {[
+                    { title: "Session role", items: ROLES.map((r) => ({ label: r, on: role === r, act: () => setRole(r) })) },
+                    { title: "Theme", items: [
+                      { label: "Parchment", on: !themeDark, act: () => setThemeDark(false) },
+                      { label: "Abyss", on: themeDark, act: () => setThemeDark(true) },
+                    ]},
+                  ].map((g, gi) => (
+                    <div key={g.title}>
+                      {gi > 0 && <div style={{ height: 1, background: C.border, margin: "4px 0" }} />}
+                      <div style={{ padding: "3px 10px 2px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>{g.title}</div>
+                      {g.items.map((it) => (
+                        <button key={it.label} className="hv-menu" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }} onClick={it.act}>
+                          <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.on ? "•" : ""}</span>
+                          <span style={{ flex: 1 }}>{it.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ flex: "1 1 0", minWidth: 4 }} />
+            <div title="Tab toggles between editing and using the app">
+              <Seg items={[
+                { label: "Edit", active: !interact, onClick: () => setInteract(false) },
+                { label: "View", active: interact, onClick: () => setInteract(true) },
+              ]} />
+            </div>
+          </>
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  /**
+   * One panel's body. Sizing, the header row and the borders belong to the
    * dock; a panel just fills the column it is handed.
    */
   const renderPanel = (id: string) => {
@@ -1071,13 +1169,7 @@ export function App() {
       case "insert":
         return (
           <>
-            {/* No title row: the dock tab already says Insert. */}
-            <div style={{ padding: "7px 10px 5px", fontSize: 10, color: C.faint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {fileState ? "drag or click to insert" : "open a file first"}
-            </div>
-            <div style={{ padding: "0 10px 8px" }}>
-              <input className="fc" type="text" placeholder="Search components" value={search} onChange={(e) => setSearch(e.target.value)} style={inputStyle} />
-            </div>
+            {/* No title row and no search row: both live in the pane header. */}
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 10 }}>
               <div style={{ borderTop: `1px solid ${C.softDiv}` }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "8px 10px 5px", whiteSpace: "nowrap" }}>
@@ -1196,53 +1288,7 @@ export function App() {
         }
         return (
           <div ref={canvasRegionRef} style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: C.void }}>
-            <div style={{ flex: "0 0 auto", minHeight: 30, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: `1px solid ${C.canvasEdge}`, background: C.canvasBar, minWidth: 0, position: "relative", zIndex: 25 }}>
-              <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
-              <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 11, color: C.faint }}>{DEVICES[device].width}px</span>
-              <div style={{ ...vdiv, height: 16 }} />
-              <div style={{ flex: "0 0 auto", position: "relative", whiteSpace: "nowrap" }}>
-                <button
-                  className="hv-ctl-border"
-                  style={{ display: "flex", alignItems: "center", gap: 7, height: 22, padding: "0 8px", background: previewOpen ? C.ctl : "transparent", border: `1px solid ${previewOpen ? C.borderHover : C.border}`, borderRadius: 5, color: C.body, cursor: "pointer" }}
-                  onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
-                  title="Canvas context (P)"
-                >
-                  <span style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: "0.08em" }}>Context</span>
-                  <span style={{ fontFamily: MONO, fontSize: 11 }}>{role} · {themeDark ? "Abyss" : "Parchment"}</span>
-                  <span style={{ fontSize: 8, color: C.faint }}>▼</span>
-                </button>
-                {previewOpen && (
-                  <div style={{ position: "absolute", top: 26, left: 0, minWidth: 230, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 30 }} onClick={(e) => e.stopPropagation()}>
-                    {[
-                      { title: "Session role", items: ROLES.map((r) => ({ label: r, on: role === r, act: () => setRole(r) })) },
-                      { title: "Theme", items: [
-                        { label: "Parchment", on: !themeDark, act: () => setThemeDark(false) },
-                        { label: "Abyss", on: themeDark, act: () => setThemeDark(true) },
-                      ]},
-                    ].map((g, gi) => (
-                      <div key={g.title}>
-                        {gi > 0 && <div style={{ height: 1, background: C.border, margin: "4px 0" }} />}
-                        <div style={{ padding: "3px 10px 2px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>{g.title}</div>
-                        {g.items.map((it) => (
-                          <button key={it.label} className="hv-menu" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }} onClick={it.act}>
-                            <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.on ? "•" : ""}</span>
-                            <span style={{ flex: 1 }}>{it.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div style={{ flex: "1 1 0", minWidth: 8 }} />
-              <span style={{ flex: "0 0 auto", fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: "0.06em" }}>Mode</span>
-              <div title="Tab toggles between editing and using the app">
-                <Seg items={[
-                  { label: "Edit", active: !interact, onClick: () => setInteract(false) },
-                  { label: "View", active: interact, onClick: () => setInteract(true) },
-                ]} />
-              </div>
-            </div>
+            {/* Toolbar moved into the pane header (see renderPanelHeader). */}
 
             {/* Rulers measure the component stage; the live app frames itself. */}
             {rulersOn && canvasMode === "component" && (
@@ -1318,12 +1364,8 @@ export function App() {
       case "outliner":
         return (
           <>
-            {/* No title row: the dock tab already says Outliner. */}
-            <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, padding: "7px 10px 6px", whiteSpace: "nowrap" }}>
-              <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />
-              <div style={{ flex: "1 1 0", minWidth: 4 }} />
-            </div>
-            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8 }}>
+            {/* No title row: the File/Routes switch lives in the pane header. */}
+            <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8, paddingTop: 4 }}>
               {outlinerMode === "File" && fileState && (
                 <>
                   <div style={{ padding: "4px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileState.file}>
@@ -1382,12 +1424,7 @@ export function App() {
       case "properties":
         return (
           <>
-            <div style={{ flex: "0 0 auto", padding: "8px 10px 7px", borderBottom: `1px solid ${C.softDiv}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-                <span style={{ flex: "0 0 auto", width: 7, height: 7, background: fileNode ? C.orange : routeSel ? C.blueLight : C.muted, borderRadius: 2 }} />
-                <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 12, color: "#fff", fontWeight: 600 }}>{selTitle}</span>
-              </div>
-            </div>
+            {/* No title row: the selection name lives in the pane header. */}
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
               {routeSel ? (
                 <RouteCard route={routeSel} shell={routeShell} openFile={(f) => void openFile(f)} />
@@ -1586,7 +1623,10 @@ export function App() {
           layout={layout}
           onLayout={setLayout}
           title={(id) => PANEL_TITLE[basePanel(id)] ?? id}
+          icon={(id) => PANEL_ICON[basePanel(id)] ?? "square"}
+          panelMenu={groupPanels(group)}
           closable={(id) => id !== GROUP_MAIN[group]}
+          renderHeader={renderPanelHeader}
           render={renderPanel}
         />
       </div>
