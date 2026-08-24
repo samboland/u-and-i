@@ -37,8 +37,27 @@ some arrangements unreachable). Three bugs, all now covered by checks:
   canvas — the side bands nearly met and the middle was a sliver. Zones are
   proportional now: middle two-fifths tabs, the rest splits.
 
-Highlights distinguish the two outcomes: a solid bar over a pane's header
-means "becomes a tab here", a band means "splits here".
+**Drop feedback follows VS Code** (Sam, 2026-08-18, pointing out VSCodium is
+open source — so the numbers below are read off `editordroptarget.css` and
+`editorDropTarget.ts`, not eyeballed):
+
+- One flat translucent panel, `rgba(83,89,93,0.5)` — their dark-theme
+  `editorGroup.dropBackground`, a neutral wash rather than an accent tint.
+  No border, no radius.
+- It *glides* between targets: `top/left/width/height` at 70ms ease-out,
+  opacity at 150ms. The move transition is enabled only **after** the overlay
+  first appears, so it fades in where it belongs instead of sliding in from
+  wherever it last sat. Copy that if you ever rebuild this.
+- Their merge-vs-split rule is the middle 30–70% on both axes, which is what
+  `zoneOf` already did.
+- Aimed at a pane header, a **caret** shows the exact insertion point in the
+  tab order — which is also how tabs are re-ordered, previously impossible.
+- The dock has a `GUTTER` so the outer drop zone sits beside the panes rather
+  than on top of the top row's headers, which had made a caret drop there
+  nearly unhittable.
+
+We keep a 32% split rather than VS Code's 50%, because the preview must match
+what you actually get and a half-and-half sidebar is wrong for this app.
 
 Decisions Sam settled at design time: **individual cards**, not whole
 workspaces; cards always dock somewhere — nothing floats FL-Studio-style;

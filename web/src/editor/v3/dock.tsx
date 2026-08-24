@@ -134,12 +134,14 @@ function dropTabFrom(root: DockNode, id: string): DockNode {
 /** Fraction a freshly split-off pane takes from its neighbour. */
 const NEW_PANE = 0.32;
 
-function insertInto(root: DockNode, path: Path, zone: DropZone, id: string): DockNode {
+function insertInto(root: DockNode, path: Path, zone: DropZone, id: string, index?: number): DockNode {
   const target = nodeAt(root, path);
   if (!target) return root;
   if (zone === "center") {
     if (target.kind !== "leaf") return root;
-    return replaceAt(root, path, { kind: "leaf", tabs: [...target.tabs, id], active: id });
+    const tabs = [...target.tabs];
+    tabs.splice(index ?? tabs.length, 0, id);
+    return replaceAt(root, path, { kind: "leaf", tabs, active: id });
   }
   const dir = zone === "left" || zone === "right" ? "row" : "col";
   const first = zone === "left" || zone === "top";
@@ -157,10 +159,12 @@ function insertInto(root: DockNode, path: Path, zone: DropZone, id: string): Doc
  * dock's outer edge). Insert-then-remove via a sentinel keeps `path` valid:
  * removing first could restructure the tree under our feet.
  */
-export function dockTab(root: DockNode, id: string, path: Path, zone: DropZone): DockNode {
+export function dockTab(root: DockNode, id: string, path: Path, zone: DropZone, index?: number): DockNode {
   const SENTINEL = "__uai_moving__";
   const marked = renameTab(root, id, SENTINEL);
-  const inserted = insertInto(marked, path, zone, id);
+  // The sentinel still occupies the source slot here, which is exactly what
+  // keeps `index` honest when a tab is being re-ordered inside its own pane.
+  const inserted = insertInto(marked, path, zone, id, index);
   return normalize(dropTabFrom(inserted, SENTINEL)) ?? leaf([id]);
 }
 
@@ -231,8 +235,14 @@ const MIN_PANE = 120;
 /** Pointer travel before a tab press becomes a drag. */
 const DRAG_SLOP = 5;
 
-/** Width of the dock's outer drop strips — drawn during a drag, see EdgeStrips. */
-const EDGE = 22;
+/**
+ * How close to the dock's outer border buys a band spanning the whole dock,
+ * and the gutter that keeps most of that zone off the panes themselves. The
+ * top row's headers start at the dock's top edge, so without the gutter the
+ * edge zone sat right on them and made a caret drop there nearly unhittable.
+ */
+const EDGE = 12;
+const GUTTER = 6;
 
 interface DragState {
   id: string;
@@ -243,8 +253,10 @@ interface DragState {
     path: Path;
     zone: DropZone;
     rect: DOMRect;
-    /** The pane's header, when the drop would add a tab to it. */
-    headerRect?: DOMRect;
+    /** Where in the target pane's tab order the panel lands. */
+    index?: number;
+    /** Insertion caret, when the drop is aimed at a pane's header. */
+    line?: { left: number; top: number; height: number };
   } | null;
 }
 
@@ -273,28 +285,65 @@ function zoneOf(rect: DOMRect, x: number, y: number): DropZone {
 }
 
 /**
- * The dock's outer drop strips, drawn for the duration of a drag. Their job
- * is half hit-target, half signage: a full-span band is the one arrangement
- * you cannot reach by aiming at a pane, so the option has to be visible.
+ * The drop feedback, modelled on VS Code's editor drop target
+ * (`editordroptarget.css` + `editorDropTarget.ts`): one flat translucent
+ * panel that glides between targets rather than four competing highlights.
+ *
+ * Their numbers, kept deliberately: fill `#53595D` at 50% for dark themes —
+ * a neutral wash, not an accent colour; no border and no radius; position
+ * and size ease at 70ms, opacity at 150ms. The move transition is switched
+ * on only AFTER the overlay has appeared, so it fades in where it belongs
+ * instead of sliding in from wherever it last sat.
  */
-function EdgeStrips({ width, height, active }: { width: number; height: number; active: DropZone | null }) {
-  const strip = (z: DropZone): CSSProperties => ({
-    position: "absolute",
-    pointerEvents: "none",
-    zIndex: 62,
-    transition: "background 90ms",
-    background: active === z ? "rgba(50,142,193,0.62)" : "rgba(50,142,193,0.12)",
-    // The inset outline is what makes an idle strip legible at all: a wash
-    // this faint vanishes against the chrome, and then the strips stop being
-    // signage and go back to being a hidden trap.
-    boxShadow: `inset 0 0 0 1px ${active === z ? C.blueLight : "rgba(111,184,234,0.4)"}`,
-  });
+function DropOverlay({ over, root }: { over: DragState["over"]; root: DOMRect }) {
+  const [eased, setEased] = useState(false);
+  const visible = !!over;
+  const lastBox = useRef<CSSProperties>({ left: 0, top: 0, width: 0, height: 0 });
+  if (over) lastBox.current = previewBox(over.rect, root, over.zone);
+
+  useEffect(() => {
+    if (!visible) {
+      setEased(false);
+      return;
+    }
+    const f = requestAnimationFrame(() => setEased(true));
+    return () => cancelAnimationFrame(f);
+  }, [visible]);
+
+  const move = "top 70ms ease-out, left 70ms ease-out, width 70ms ease-out, height 70ms ease-out, ";
   return (
     <>
-      <div data-dock-edge="top" style={{ ...strip("top"), left: 0, top: 0, width, height: EDGE }} />
-      <div data-dock-edge="bottom" style={{ ...strip("bottom"), left: 0, top: height - EDGE, width, height: EDGE }} />
-      <div data-dock-edge="left" style={{ ...strip("left"), left: 0, top: EDGE, width: EDGE, height: height - EDGE * 2 }} />
-      <div data-dock-edge="right" style={{ ...strip("right"), left: width - EDGE, top: EDGE, width: EDGE, height: height - EDGE * 2 }} />
+      <div
+        data-dock-zone={over?.zone ?? ""}
+        data-dock-target={over ? (over.path.length === 0 ? "dock" : over.path.join(".")) : ""}
+        style={{
+          position: "absolute",
+          ...lastBox.current,
+          background: "rgba(83,89,93,0.5)",
+          opacity: visible ? 1 : 0,
+          pointerEvents: "none",
+          zIndex: 60,
+          transition: `${eased ? move : ""}opacity 150ms ease-out`,
+        }}
+      />
+      {/* Aimed at a header: a caret showing exactly where in the tab order it
+          lands. This is also the only way to re-order tabs. */}
+      <div
+        data-dock-caret={over?.index ?? ""}
+        style={{
+          position: "absolute",
+          left: (over?.line?.left ?? 0) - root.left,
+          top: (over?.line?.top ?? 0) - root.top,
+          width: 2,
+          height: over?.line?.height ?? 0,
+          background: C.blueLight,
+          borderRadius: 1,
+          opacity: over?.line ? 1 : 0,
+          pointerEvents: "none",
+          zIndex: 61,
+          transition: `${eased ? move : ""}opacity 100ms ease-out`,
+        }}
+      />
     </>
   );
 }
@@ -367,11 +416,9 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
     };
 
     const hit = (x: number, y: number): DragState["over"] => {
-      // 1. The dock's outer strips, for a band spanning the whole dock. They
-      //    are DRAWN during the drag (EdgeStrips), so taking precedence over
-      //    the pane beneath is honest rather than a hidden trap — the earlier
-      //    invisible band silently shadowed the top row's headers and made a
-      //    full-width top band unreachable.
+      // 1. Hard against the dock's border: a band spanning the whole dock.
+      //    Kept narrow so it barely eats into the top row's headers, and the
+      //    overlay shows the full-span result the moment you arrive.
       const rootRect = rootRef.current?.getBoundingClientRect();
       if (rootRect) {
         if (x - rootRect.left < EDGE) return { path: [], zone: "left", rect: rootRect };
@@ -386,15 +433,30 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
       const bar = leafHit.el.querySelector<HTMLElement>("[data-dock-tabbar]");
       const headerRect = bar?.getBoundingClientRect();
 
-      // 2. A pane's header means "add a tab here". Nothing is lost to the
-      //    strips above: the pane's middle says the same thing (see zoneOf).
-      if (headerRect && y <= headerRect.bottom) {
-        return { path, zone: "center", rect: leafHit.rect, headerRect };
+      // 2. A pane's header: add a tab, at the position the caret shows. The
+      //    icons render in model order, so the icon index IS the tab index.
+      if (bar && headerRect && y <= headerRect.bottom) {
+        const icons = [...bar.querySelectorAll<HTMLElement>("[data-dock-tab]")];
+        let index = icons.length;
+        for (let i = 0; i < icons.length; i++) {
+          const r = icons[i].getBoundingClientRect();
+          if (x < r.left + r.width / 2) {
+            index = i;
+            break;
+          }
+        }
+        const anchor = index < icons.length ? icons[index].getBoundingClientRect().left - 3 : (icons.at(-1)?.getBoundingClientRect().right ?? headerRect.left) + 2;
+        return {
+          path,
+          zone: "center",
+          rect: leafHit.rect,
+          index,
+          line: { left: anchor, top: headerRect.top + 3, height: headerRect.height - 6 },
+        };
       }
 
       // 3. Otherwise, the pane's own five zones.
-      const zone = zoneOf(leafHit.rect, x, y);
-      return { path, zone, rect: leafHit.rect, headerRect: zone === "center" ? headerRect : undefined };
+      return { path, zone: zoneOf(leafHit.rect, x, y), rect: leafHit.rect };
     };
 
     const move = (e: PointerEvent) => {
@@ -411,7 +473,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
       }
       const d = dragRef.current;
       setDrag(null);
-      if (d?.over) onLayout(dockTab(layout, d.id, d.over.path, d.over.zone));
+      if (d?.over) onLayout(dockTab(layout, d.id, d.over.path, d.over.zone, d.over.index));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -431,7 +493,11 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
   const rootRect = rootRef.current?.getBoundingClientRect();
 
   return (
-    <div ref={rootRef} style={{ flex: 1, position: "relative", display: "flex", minWidth: 0, minHeight: 0 }}>
+    <div
+      ref={rootRef}
+      data-dock-root
+      style={{ flex: 1, position: "relative", display: "flex", minWidth: 0, minHeight: 0, padding: GUTTER, background: C.void }}
+    >
       <DockBranch
         node={layout}
         path={[]}
@@ -458,47 +524,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
         <div style={{ position: "absolute", inset: 0, zIndex: 55, cursor: "grabbing" }} />
       )}
 
-      {/* The four outer strips, visible for the whole drag so the user can see
-          where a full-span band is available before aiming at one. */}
-      {drag && rootRect && (
-        <EdgeStrips width={rootRect.width} height={rootRect.height} active={drag.over?.path.length === 0 ? drag.over.zone : null} />
-      )}
-
-      {drag?.over && rootRect && (
-        <>
-          <div
-            data-dock-zone={drag.over.zone}
-            data-dock-target={drag.over.path.length === 0 ? "dock" : drag.over.path.join(".")}
-            style={{
-              position: "absolute",
-              ...previewBox(drag.over.rect, rootRect, drag.over.zone),
-              background: "rgba(50,142,193,0.16)",
-              border: `2px solid ${C.blue}`,
-              borderRadius: 3,
-              pointerEvents: "none",
-              zIndex: 60,
-            }}
-          />
-          {/* A solid bar over the header says "this becomes a tab of that
-              pane", which a plain full-pane wash could not distinguish from
-              "this replaces that pane". */}
-          {drag.over.headerRect && (
-            <div
-              style={{
-                position: "absolute",
-                left: drag.over.headerRect.left - rootRect.left,
-                top: drag.over.headerRect.top - rootRect.top,
-                width: drag.over.headerRect.width,
-                height: drag.over.headerRect.height,
-                background: "rgba(50,142,193,0.55)",
-                borderBottom: `2px solid ${C.blueLight}`,
-                pointerEvents: "none",
-                zIndex: 61,
-              }}
-            />
-          )}
-        </>
-      )}
+      {drag && rootRect && <DropOverlay over={drag.over} root={rootRect} />}
       {drag && (
         <div
           style={{
@@ -675,7 +701,6 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
     return () => window.removeEventListener("click", close);
   }, [menuOpen]);
 
-  const others = node.tabs.filter((t) => t !== node.active);
   const header = renderHeader?.(node.active);
 
   return (
@@ -690,8 +715,12 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
         data-dock-tabbar
         style={{ flex: "0 0 auto", minHeight: 26, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, padding: "3px 6px", background: C.sunken, borderBottom: `1px solid ${C.border}`, minWidth: 0 }}
       >
-        {/* Panel type: icon + caret, click to switch, drag to re-dock. */}
-        <div style={{ flex: "0 0 auto", position: "relative" }}>
+        {/* Tabs in MODEL order, so a drop's insertion line means what it looks
+            like it means. The active one is the type dropdown, wherever it
+            happens to sit; the rest are bare icons. */}
+        {node.tabs.map((id) =>
+          id === node.active ? (
+        <div key={id} style={{ flex: "0 0 auto", position: "relative" }}>
           <button
             className="hv-ctl"
             data-dock-tab={node.active}
@@ -733,21 +762,20 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
             </div>
           )}
         </div>
-
-        {/* Panels sharing this pane: icon only, exactly as Sam asked. */}
-        {others.map((id) => (
-          <button
-            key={id}
-            className="hv-ctl"
-            data-dock-tab={id}
-            title={title(id)}
-            onPointerDown={(e) => onTabDown(id, e, () => onLayout(focusPanel(layout, id)))}
-            onClick={(e) => e.stopPropagation()}
-            style={iconBtn(false, dragging === id)}
-          >
-            <Sym name={icon(id)} size={15} />
-          </button>
-        ))}
+          ) : (
+            <button
+              key={id}
+              className="hv-ctl"
+              data-dock-tab={id}
+              title={title(id)}
+              onPointerDown={(e) => onTabDown(id, e, () => onLayout(focusPanel(layout, id)))}
+              onClick={(e) => e.stopPropagation()}
+              style={iconBtn(false, dragging === id)}
+            >
+              <Sym name={icon(id)} size={15} />
+            </button>
+          ),
+        )}
 
         {header && <div style={{ flex: "0 0 auto", width: 1, height: 15, background: C.border, margin: "0 1px" }} />}
 

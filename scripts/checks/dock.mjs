@@ -281,14 +281,16 @@ try {
   );
 
   // --- the outer strips reach every full-span arrangement ------------------
+  // The dock root, not the split container inside its gutter — the outer drop
+  // zone is measured from the root's border.
   const root = await page.evaluate(() => {
-    const r = document.querySelector("[data-dock-leaf]").parentElement.parentElement.getBoundingClientRect();
+    const r = document.querySelector("[data-dock-root]").getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   });
   for (const [name, x, y, want] of [
-    ["top", root.x + root.w / 2, root.y + 8, "col[outliner, row[insert, canvas, properties]]"],
-    ["bottom", root.x + root.w / 2, root.y + root.h - 8, "col[row[insert, canvas, properties], outliner]"],
-    ["left", root.x + 8, root.y + root.h / 2, "row[outliner, insert, canvas, properties]"],
+    ["top", root.x + root.w / 2, root.y + 4, "col[outliner, row[insert, canvas, properties]]"],
+    ["bottom", root.x + root.w / 2, root.y + root.h - 4, "col[row[insert, canvas, properties], outliner]"],
+    ["left", root.x + 4, root.y + root.h / 2, "row[outliner, insert, canvas, properties]"],
   ]) {
     await viewMenuItem("Reset layout");
     await dragTabTo("outliner", x, y);
@@ -296,6 +298,40 @@ try {
     check(got === want, `outer ${name} strip makes a full-span band: ${got}`);
   }
   await viewMenuItem("Reset layout");
+
+  // --- header drops carry a position, so tabs can be re-ordered ------------
+  const olHdr = await box('[data-dock-tab="outliner"]');
+  await dragTabTo("properties", olHdr.x + olHdr.width + 20, olHdr.y + olHdr.height / 2);
+  check((await shape()).includes("outliner+properties"), `a header drop lands after the icon it passed: ${await shape()}`);
+
+  const bar = await page.evaluate(() => {
+    const l = [...document.querySelectorAll("[data-dock-leaf]")].find(
+      (n) => n.querySelectorAll("[data-dock-tab]").length > 1,
+    );
+    const r = l.querySelector("[data-dock-tabbar]").getBoundingClientRect();
+    return { x: r.x, y: r.y + r.height / 2 };
+  });
+  await dragTabTo("properties", bar.x + 8, bar.y);
+  check((await shape()).includes("properties+outliner"), `dragging a tab to the front re-orders it: ${await shape()}`);
+  await viewMenuItem("Reset layout");
+
+  // --- the overlay is one element that eases between targets ---------------
+  const cvTab = await box('[data-dock-tab="canvas"]');
+  await page.mouse.move(cvTab.x + cvTab.width / 2, cvTab.y + cvTab.height / 2);
+  await page.mouse.down();
+  await zoneAt(root.x + root.w * 0.4, root.y + root.h * 0.8);
+  const overlay = await page.evaluate(() => {
+    const els = document.querySelectorAll("[data-dock-zone]");
+    const s = els[0]?.style;
+    return { count: els.length, background: s?.background, transition: s?.transition };
+  });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  check(
+    overlay.count === 1 && /70ms ease-out/.test(overlay.transition ?? "") && /150ms ease-out/.test(overlay.transition ?? ""),
+    `one overlay, easing on VS Code's timings: ${JSON.stringify(overlay)}`,
+  );
 
   if (shot) await page.screenshot({ path: `${shot}-dock.png` });
 } catch (err) {
