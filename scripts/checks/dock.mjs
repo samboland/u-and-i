@@ -515,6 +515,61 @@ try {
   await page.waitForTimeout(150);
   await viewMenuItem("Reset layout");
 
+  // --- overlays must survive the app's CSS zoom ----------------------------
+  // The shell carries `zoom: appZoom`, so getBoundingClientRect reports visual
+  // pixels while an absolutely-positioned overlay is laid out in local ones.
+  // At 1.3 the split phantom used to sit 75px right of the pane it described.
+  await page.evaluate(() => {
+    const p = JSON.parse(localStorage.getItem("uai:prefs") ?? "{}");
+    localStorage.setItem("uai:prefs", JSON.stringify({ ...p, appZoom: 1.3 }));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2500);
+
+  const zCanvas = (await leafMap()).find((l) => l.tabs.includes("canvas")).box;
+
+  // the drop overlay, aimed at a pane's middle, should cover that pane exactly
+  const zTab = await box('[data-dock-tab="outliner"]');
+  await page.mouse.move(zTab.x + zTab.width / 2, zTab.y + zTab.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(zCanvas.x + zCanvas.width / 2, zCanvas.y + zCanvas.height / 2, { steps: 6 });
+  await page.mouse.move(zCanvas.x + zCanvas.width / 2, zCanvas.y + zCanvas.height / 2);
+  await page.waitForTimeout(200);
+  const zOverlay = await page.evaluate(() => {
+    const o = document.querySelector("[data-dock-zone]");
+    const r = o.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  check(
+    Math.abs(zOverlay.x - zCanvas.x) < 1.5 && Math.abs(zOverlay.w - zCanvas.width) < 1.5,
+    `zoomed: the drop overlay covers the pane it targets: overlay ${zOverlay.x.toFixed(1)}/${zOverlay.w.toFixed(1)} vs pane ${zCanvas.x.toFixed(1)}/${zCanvas.width.toFixed(1)}`,
+  );
+
+  // and the split phantom should start exactly at that pane's edge
+  await openSash('[data-dock-splitter="vertical"]');
+  await page.locator("[data-dock-areamenu] button", { hasText: "Horizontal Split" }).click();
+  await page.mouse.move(zCanvas.x + zCanvas.width / 2, zCanvas.y + zCanvas.height * 0.3);
+  await page.waitForTimeout(150);
+  const zGhost = await page.evaluate(() => {
+    const g = document.querySelector('[data-dock-splitghost="first"]');
+    const r = g.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  check(
+    Math.abs(zGhost.x - zCanvas.x) < 1.5 && Math.abs(zGhost.w - zCanvas.width) < 1.5,
+    `zoomed: the split phantom sits on the pane it splits: ghost ${zGhost.x.toFixed(1)}/${zGhost.w.toFixed(1)} vs pane ${zCanvas.x.toFixed(1)}/${zCanvas.width.toFixed(1)}`,
+  );
+
+  await page.evaluate(() => {
+    const p = JSON.parse(localStorage.getItem("uai:prefs") ?? "{}");
+    localStorage.setItem("uai:prefs", JSON.stringify({ ...p, appZoom: 1 }));
+  });
+
   if (shot) await page.screenshot({ path: `${shot}-dock.png` });
 } catch (err) {
   // Without this an exception would skip the remaining checks and still exit

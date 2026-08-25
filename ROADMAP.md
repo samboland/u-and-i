@@ -137,6 +137,28 @@ Checked against Blender's own source (`editors/screen/screen_ops.cc`,
     global chord handler stand down; without it App's Tab (toggle interact)
     `stopPropagation`s the flip before the modal's own listener runs.
 
+**Overlay geometry** (Sam, 2026-08-25: *"the outlines are misaligned with where
+the windows actually appear"*). Two causes, both fixed:
+
+- The shell carries `zoom: appZoom` (App.tsx), so `getBoundingClientRect()`
+  reports **visual** pixels while an absolutely-positioned overlay is laid out
+  in **local** ones. At 1.3 the split phantom sat 75px right of the pane it
+  described and was 30% too wide; the VS Code drop overlay and the tab caret
+  were wrong the same way. Everything measured now goes through `zoomOf()` /
+  `localRect()`; constants like GAP and RADIUS are already local and must not
+  be divided. `position: fixed` inside the zoomed subtree needs it too — the
+  drag label and the sash menu.
+- The committed `factor` ignored the splitter that appears between the halves.
+  A `flexBasis` child shrinks to make room for it, so a plain
+  cursor-over-pane fraction landed ~2px off the drawn line. `factor` is now
+  the fraction of the *gapless* span with the cursor as the seam's centre, and
+  the ghosts are drawn from that same definition.
+
+Remaining, known: a split whose axis matches its parent's is flattened into
+that parent, which gains a splitter and re-flows its siblings by 1–2px. The
+phantom describes the pane being split, not its neighbours' reaction to the
+commit. Splits that nest (a different axis) are pixel-exact.
+
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 
 ## Where we are (2026-08-16)

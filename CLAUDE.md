@@ -91,6 +91,11 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   `stopPropagation`s anything it claims — so a component that binds the same
   key later never sees it. Anything modal must make App stand down first
   (`dockModalActive()`), not just register its own listener.
+- The app shell has a CSS `zoom` (appZoom pref), so `getBoundingClientRect()`
+  gives **visual** px while style values on absolutely-positioned children are
+  **local** px. Any overlay drawn from a measurement must divide by the
+  effective zoom (`zoomOf`/`localRect` in `dock.tsx`); `position: fixed`
+  inside the zoomed subtree is not exempt.
 - Editor and harness share localStorage (same origin, port 4400).
 - Vite hands importers outside its root as absolute, `/@fs/`, *or*
   relative paths — match on the directory-name marker.

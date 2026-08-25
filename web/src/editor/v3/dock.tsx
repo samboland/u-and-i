@@ -275,7 +275,9 @@ export function splitLeafAt(
   } else {
     return root;
   }
-  const f = Math.min(0.9, Math.max(0.1, factor));
+  // Caller-side clamping is the meaningful one (it knows the pane's pixels);
+  // this only keeps a degenerate value out of the tree.
+  const f = Math.min(0.98, Math.max(0.02, factor));
   return normalize(replaceAt(root, path, split(dir, [rest, leaf([moved])], [f, 1 - f]))) ?? root;
 }
 
@@ -368,6 +370,35 @@ interface DragState {
   } | null;
 }
 
+/**
+ * The app shell carries a CSS `zoom` (App.tsx, from the appZoom pref). Under
+ * `zoom`, `getBoundingClientRect()` reports VISUAL pixels while a style value
+ * on an absolutely-positioned child is read as LOCAL ones — so every measured
+ * length has to come back through here before it can be used as a style, or
+ * the overlays drift further from the panes the further they are from the
+ * dock's origin. Anything already written as a constant (GAP, RADIUS) is
+ * local by construction and must NOT be divided.
+ */
+function zoomOf(el: HTMLElement | null | undefined): number {
+  if (!el) return 1;
+  // Chrome exposes the accumulated ancestor zoom directly; the ratio is the
+  // fallback (clientWidth is integral, so it is very slightly lossy).
+  const z = (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom;
+  if (typeof z === "number" && z > 0) return z;
+  const r = el.getBoundingClientRect();
+  return el.clientWidth > 0 ? r.width / el.clientWidth : 1;
+}
+
+/** A measured rect, expressed in the dock root's own layout pixels. */
+function localRect(rect: DOMRect, root: DOMRect, scale: number) {
+  return {
+    left: (rect.left - root.left) / scale,
+    top: (rect.top - root.top) / scale,
+    width: rect.width / scale,
+    height: rect.height / scale,
+  };
+}
+
 /** A leaf's key is its path joined by dots — "" for a lone root leaf. */
 function pathOfKey(key: string): Path {
   return key === "" ? [] : key.split(".").map(Number);
@@ -403,11 +434,11 @@ function zoneOf(rect: DOMRect, x: number, y: number): DropZone {
  * on only AFTER the overlay has appeared, so it fades in where it belongs
  * instead of sliding in from wherever it last sat.
  */
-function DropOverlay({ over, root }: { over: DragState["over"]; root: DOMRect }) {
+function DropOverlay({ over, root, scale }: { over: DragState["over"]; root: DOMRect; scale: number }) {
   const [eased, setEased] = useState(false);
   const visible = !!over;
   const lastBox = useRef<CSSProperties>({ left: 0, top: 0, width: 0, height: 0 });
-  if (over) lastBox.current = previewBox(over.rect, root, over.zone);
+  if (over) lastBox.current = previewBox(over.rect, root, over.zone, scale);
 
   useEffect(() => {
     if (!visible) {
@@ -440,10 +471,10 @@ function DropOverlay({ over, root }: { over: DragState["over"]; root: DOMRect })
         data-dock-caret={over?.index ?? ""}
         style={{
           position: "absolute",
-          left: (over?.line?.left ?? 0) - root.left,
-          top: (over?.line?.top ?? 0) - root.top,
+          left: ((over?.line?.left ?? 0) - root.left) / scale,
+          top: ((over?.line?.top ?? 0) - root.top) / scale,
           width: 2,
-          height: over?.line?.height ?? 0,
+          height: (over?.line?.height ?? 0) / scale,
           background: C.blueLight,
           borderRadius: 1,
           opacity: over?.line ? 1 : 0,
@@ -456,12 +487,9 @@ function DropOverlay({ over, root }: { over: DragState["over"]; root: DOMRect })
   );
 }
 
-/** Preview rectangle (relative to the dock root) for a pending drop. */
-function previewBox(rect: DOMRect, root: DOMRect, zone: DropZone): CSSProperties {
-  const left = rect.left - root.left;
-  const top = rect.top - root.top;
-  const w = rect.width;
-  const h = rect.height;
+/** Preview rectangle (in the dock root's layout pixels) for a pending drop. */
+function previewBox(rect: DOMRect, root: DOMRect, zone: DropZone, scale: number): CSSProperties {
+  const { left, top, width: w, height: h } = localRect(rect, root, scale);
   if (zone === "center") return { left, top, width: w, height: h };
   if (zone === "left") return { left, top, width: w * NEW_PANE, height: h };
   if (zone === "right") return { left: left + w * (1 - NEW_PANE), top, width: w * NEW_PANE, height: h };
@@ -495,22 +523,23 @@ interface SplitAim {
 
 /** Blender snaps to twelfths of the area, and to any other edge that lines up.
  *  Ours has no free vertices, so the second half is the other panes' sashes
- *  along the same axis — the same intent, expressed in a split tree. */
-function snapFactor(factor: number, rect: DOMRect, dir: "row" | "col", others: number[]): number {
-  const span = (dir === "row" ? rect.width : rect.height) || 1;
-  const origin = dir === "row" ? rect.left : rect.top;
-  const cursor = origin + factor * span;
+ *  along the same axis — the same intent, expressed in a split tree.
+ *
+ *  Works in the same gapless space as `factor` itself (see `aimAt`). */
+function snapFactor(factor: number, innerSpan: number, innerOrigin: number, others: number[]): number {
+  const span = innerSpan || 1;
+  const cursor = innerOrigin + factor * span;
 
   let best = factor;
   let bestDist = Infinity;
   for (let i = 0; i <= 12; i++) {
-    const d = Math.abs(cursor - (origin + (span * i) / 12));
+    const d = Math.abs(cursor - (innerOrigin + (span * i) / 12));
     if (d < bestDist) { bestDist = d; best = i / 12; }
   }
   for (const at of others) {
     const d = Math.abs(cursor - at);
     // Only inside this pane; the ends would mean "no split".
-    if (d < bestDist && at > origin && at < origin + span) { bestDist = d; best = (at - origin) / span; }
+    if (d < bestDist && at > innerOrigin && at < innerOrigin + span) { bestDist = d; best = (at - innerOrigin) / span; }
   }
   return best;
 }
@@ -522,13 +551,11 @@ function snapFactor(factor: number, rect: DOMRect, dir: "row" | "col", others: n
  * highlights the whole area instead, which is also what we show when the pane
  * can't be split at all.
  */
-function SplitPreview({ aim, root }: { aim: SplitAim; root: DOMRect }) {
+function SplitPreview({ aim, root, scale }: { aim: SplitAim; root: DOMRect; scale: number }) {
   if (!aim.rect) return null;
   const inner = "rgba(255,255,255,0.10)";
   const outline = "1px solid rgba(255,255,255,0.4)";
-  const left = aim.rect.left - root.left;
-  const top = aim.rect.top - root.top;
-  const { width: w, height: h } = aim.rect;
+  const { left, top, width: w, height: h } = localRect(aim.rect, root, scale);
 
   const ghost = (s: CSSProperties, key: string) => (
     <div
@@ -541,18 +568,22 @@ function SplitPreview({ aim, root }: { aim: SplitAim; root: DOMRect }) {
   if (!aim.allowed || aim.factor < 0.0001 || aim.factor > 0.9999) {
     return ghost({ left, top, width: w, height: h }, "whole");
   }
-  const half = GAP / 2;
+  // The halves divide the pane minus the splitter between them, exactly as
+  // the committed `sizes` will (see `aimAt`).
+  const usable = (aim.dir === "row" ? w : h) - GAP;
+  const cut = Math.max(0, usable * aim.factor);
+  const restSize = Math.max(0, usable - cut);
   return aim.dir === "row"
     ? (
       <>
-        {ghost({ left, top, width: Math.max(0, w * aim.factor - half), height: h }, "first")}
-        {ghost({ left: left + w * aim.factor + half, top, width: Math.max(0, w * (1 - aim.factor) - half), height: h }, "second")}
+        {ghost({ left, top, width: cut, height: h }, "first")}
+        {ghost({ left: left + cut + GAP, top, width: restSize, height: h }, "second")}
       </>
     )
     : (
       <>
-        {ghost({ left, top, width: w, height: Math.max(0, h * aim.factor - half) }, "first")}
-        {ghost({ left, top: top + h * aim.factor + half, width: w, height: Math.max(0, h * (1 - aim.factor) - half) }, "second")}
+        {ghost({ left, top, width: w, height: cut }, "first")}
+        {ghost({ left, top: top + cut + GAP, width: w, height: restSize }, "second")}
       </>
     );
 }
@@ -624,18 +655,33 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
     const dup = node?.kind === "leaf" ? (newInstance?.(node.active) ?? null) : null;
     const allowed = span >= 2 * MIN_PANE && canSplit(layout, path, !!dup);
 
-    let factor = dir === "row"
-      ? (x - hit.rect.left) / (hit.rect.width || 1)
-      : (y - hit.rect.top) / (hit.rect.height || 1);
+    /* `factor` is the stored size fraction, and the sizes divide the pane
+     * MINUS the splitter that will sit between the halves — a `flexBasis`
+     * child shrinks to make room for it. Measuring the cursor as a plain
+     * fraction of the whole pane therefore committed a split a couple of
+     * pixels off the line the phantom drew. Work in the gapless span, with
+     * the cursor as the seam's centre, and the two agree exactly. */
+    const origin = dir === "row" ? hit.rect.left : hit.rect.top;
+    const inner = Math.max(1, span - GAP);
+    const innerOrigin = origin + GAP / 2;
+    let factor = ((dir === "row" ? x : y) - innerOrigin) / inner;
+
     if (snap) {
       const seams = [...(rootRef.current?.querySelectorAll<HTMLElement>(`[data-dock-splitter="${dir === "row" ? "vertical" : "horizontal"}"]`) ?? [])]
         .map((el) => {
           const r = el.getBoundingClientRect();
           return dir === "row" ? r.left + r.width / 2 : r.top + r.height / 2;
         });
-      factor = snapFactor(factor, hit.rect, dir, seams);
+      factor = snapFactor(factor, inner, innerOrigin, seams);
     }
-    return { dir, path, rect: hit.rect, factor: Math.min(1, Math.max(0, factor)), snap, allowed };
+
+    // Neither half may go under the minimum — Blender clamps the same way,
+    // to its `bigger`/`smaller` limits. Only meaningful when a split is on.
+    const minF = MIN_PANE / inner;
+    factor = allowed
+      ? Math.min(1 - minF, Math.max(minF, factor))
+      : Math.min(1, Math.max(0, factor));
+    return { dir, path, rect: hit.rect, factor, snap, allowed };
   }, [layout, leafUnder, newInstance]);
 
   /** The modal's live state. A ref, not effect-local: `newInstance` and
@@ -734,6 +780,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
       //    Kept narrow so it barely eats into the top row's headers, and the
       //    overlay shows the full-span result the moment you arrive.
       const rootRect = rootRef.current?.getBoundingClientRect();
+  const scale = zoomOf(rootRef.current);
       if (rootRect) {
         if (x - rootRect.left < EDGE) return { path: [], zone: "left", rect: rootRect };
         if (rootRect.right - x < EDGE) return { path: [], zone: "right", rect: rootRect };
@@ -805,6 +852,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
   }, [drag]);
 
   const rootRect = rootRef.current?.getBoundingClientRect();
+  const scale = zoomOf(rootRef.current);
 
   return (
     <div
@@ -837,6 +885,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
           onClose={() => setSash(null)}
           onLayout={onLayout}
           onBeginSplit={beginSplit}
+          scale={scale}
         />
       )}
 
@@ -854,7 +903,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
           }}
         />
       )}
-      {aim && rootRect && <SplitPreview aim={aim} root={rootRect} />}
+      {aim && rootRect && <SplitPreview aim={aim} root={rootRect} scale={scale} />}
 
       {/* A pointer over an iframe delivers its events to THAT document, not
           ours — so dragging across the canvas silently froze the drop preview
@@ -866,13 +915,16 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
         <div style={{ position: "absolute", inset: 0, zIndex: 55, cursor: "grabbing" }} />
       )}
 
-      {drag && rootRect && <DropOverlay over={drag.over} root={rootRect} />}
+      {drag && rootRect && <DropOverlay over={drag.over} root={rootRect} scale={scale} />}
       {drag && (
         <div
           style={{
             position: "fixed",
-            left: drag.x + 12,
-            top: drag.y + 10,
+            // Fixed, but still inside the zoomed subtree, so the pointer's
+            // viewport coordinates need the same conversion. The nudge is
+            // written in local pixels and stays as it is.
+            left: drag.x / scale + 12,
+            top: drag.y / scale + 10,
             padding: "3px 9px",
             background: C.menu,
             border: `1px solid ${C.borderHover}`,
@@ -1074,10 +1126,12 @@ function AreaOptions({
   onClose,
   onLayout,
   onBeginSplit,
+  scale,
 }: {
   menu: SashMenu;
   layout: DockNode;
   title: (id: string) => string;
+  scale: number;
   onClose: () => void;
   onLayout: (n: DockNode) => void;
   onBeginSplit: (dir: "row" | "col", x: number, y: number) => void;
@@ -1142,8 +1196,8 @@ function AreaOptions({
     { label: "Swap Areas", icon: "swap_horiz", run: () => act(swapAt(layout, menu.path, menu.i)) },
   ];
 
-  const left = Math.max(4, Math.min(menu.x, window.innerWidth - 210));
-  const top = Math.max(4, Math.min(menu.y, window.innerHeight - 200));
+  const left = Math.max(4, Math.min(menu.x / scale, window.innerWidth / scale - 210));
+  const top = Math.max(4, Math.min(menu.y / scale, window.innerHeight / scale - 200));
   return (
     <div
       data-dock-areamenu
