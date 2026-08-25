@@ -333,14 +333,30 @@ const DRAG_SLOP = 5;
  * top row's headers start at the dock's top edge, so without the gutter the
  * edge zone sat right on them and made a caret drop there nearly unhittable.
  */
-const EDGE = 12;
-/** Space around the pane grid, and between panes. The panes are rounded
- *  cards; this gap is what separates them. The sash's grab area is widened
- *  past the gap (see Splitter) so a seam this narrow stays easy to catch. */
-const GUTTER = 6;
-const GAP = 6;
+const EDGE = 10;
+/**
+ * The space between panes — the panes are rounded cards, and this gap is what
+ * separates them. The sash's grab area is widened past it (see Splitter) so a
+ * seam this narrow stays easy to catch.
+ *
+ * The gutter is the ring around the grid. It was dead space — the one border
+ * in the dock that belonged to no sash, visible but unclickable (Sam,
+ * 2026-08-25). It is now LIVE: right-click it for the adjoining pane's Split
+ * options (see EdgeBorders). That matters beyond tidiness — a dock reduced to
+ * a single pane has no sashes at all, so without a clickable outer border
+ * there is no way to ever split again.
+ *
+ * Blender reaches the same place by a different route: its
+ * `screen_geom_area_map_find_active_scredge` skips edges on the window
+ * bounds, but the top and bottom edges of the work area are shared with the
+ * global topbar/status areas, so they ARE real edges you can act on.
+ *
+ * Both numbers came down from 6 (Sam: "still too much space").
+ */
+const GUTTER = 4;
+const GAP = 4;
 /** How far the sash's grab area reaches past the gap, each side. */
-const GRAB = 3;
+const GRAB = 4;
 /** Card corner radius. */
 const RADIUS = 8;
 
@@ -639,6 +655,28 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
     return null;
   }, []);
 
+  /** The pane adjoining a point on the outer border. Measured rather than
+   *  derived from the tree: the tree knows nothing about which leaf ended up
+   *  against which edge. */
+  const leafNearest = useCallback((x: number, y: number, side: "top" | "right" | "bottom" | "left"): Path | null => {
+    let best: { key: string; d: number } | null = null;
+    for (const [key, el] of leaves.current) {
+      const r = el.getBoundingClientRect();
+      // Distance along the edge's own axis, then perpendicular to it, so a
+      // click near a corner picks the pane that actually touches that side.
+      const along = side === "top" || side === "bottom"
+        ? Math.max(r.left - x, x - r.right, 0)
+        : Math.max(r.top - y, y - r.bottom, 0);
+      const across = side === "top" ? r.top - y
+        : side === "bottom" ? y - r.bottom
+        : side === "left" ? r.left - x
+        : x - r.right;
+      const d = along * 1000 + Math.abs(across);
+      if (!best || d < best.d) best = { key, d };
+    }
+    return best ? pathOfKey(best.key) : null;
+  }, []);
+
   // --- split preview (Blender's modal) --------------------------------------
 
   /** Re-aim at whatever pane the cursor is over now, and work out the factor. */
@@ -877,6 +915,13 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
         dragging={drag?.id ?? null}
       />
 
+      <EdgeBorders
+        onMenu={(e, side) => {
+          const leaf = leafNearest(e.clientX, e.clientY, side);
+          if (leaf) setSash({ kind: "edge", x: e.clientX, y: e.clientY, leaf });
+        }}
+      />
+
       {sash && (
         <AreaOptions
           menu={sash}
@@ -964,16 +1009,23 @@ interface BranchProps {
   dragging: string | null;
 }
 
-/** An open Area Options menu, anchored to the sash it was opened from. */
-interface SashMenu {
-  x: number;
-  y: number;
-  /** The split node holding the pair. */
-  path: Path;
-  /** The sash sits between children i and i+1. */
-  i: number;
-  dir: "row" | "col";
-}
+/**
+ * An open Area Options menu. A sash between two panes offers the lot; the
+ * dock's outer border has only one neighbour, so Join and Swap have no
+ * meaning there and it offers Split alone.
+ */
+type SashMenu =
+  | {
+      kind: "pair";
+      x: number;
+      y: number;
+      /** The split node holding the pair. */
+      path: Path;
+      /** The sash sits between children i and i+1. */
+      i: number;
+      dir: "row" | "col";
+    }
+  | { kind: "edge"; x: number; y: number; /** The one adjoining pane. */ leaf: Path };
 
 function DockBranch(props: BranchProps) {
   const { node, path } = props;
@@ -1025,7 +1077,7 @@ function DockSplitView({ node, path, ...rest }: BranchProps & { node: DockSplit 
                 key={`s${i}`}
                 row={row}
                 onDown={(e) => startResize(i, e)}
-                onMenu={(e) => rest.onSashMenu({ x: e.clientX, y: e.clientY, path, i, dir: node.dir })}
+                onMenu={(e) => rest.onSashMenu({ kind: "pair", x: e.clientX, y: e.clientY, path, i, dir: node.dir })}
               />,
             ]
           : [pane];
@@ -1146,19 +1198,25 @@ function AreaOptions({
     };
   }, [onClose]);
 
-  const parent = nodeAt(layout, menu.path);
-  if (parent?.kind !== "split") return null;
-  const names = [menu.i, menu.i + 1].map((k) => {
-    const n = parent.children[k];
-    return n.kind === "leaf" ? title(n.active) : "group";
-  });
+  const nameOf = (n: DockNode | null | undefined) =>
+    n?.kind === "leaf" ? title(n.active) : "group";
+
+  const pair = menu.kind === "pair" ? nodeAt(layout, menu.path) : null;
+  if (menu.kind === "pair" && pair?.kind !== "split") return null;
+  const names =
+    menu.kind === "pair" && pair?.kind === "split"
+      ? [menu.i, menu.i + 1].map((k) => nameOf(pair.children[k]))
+      : [nameOf(menu.kind === "edge" ? nodeAt(layout, menu.leaf) : null)];
+
   /* Order and meaning read from Blender's `screen_area_options_invoke`: the
    * label is the direction the SURVIVOR grows, not which pane you keep. "Join
    * Right" keeps the left pane and expands it rightwards. Blender lists
    * Right-then-Left for a vertical seam and Up-then-Down for a horizontal one
    * (its Y axis points up, ours down — hence the asymmetric `keep`). */
   const joins: { word: string; icon: string; keep: "first" | "second" }[] =
-    menu.dir === "row"
+    menu.kind !== "pair"
+      ? []
+      : menu.dir === "row"
       ? [
           { word: "Right", icon: "arrow_forward", keep: "first" },
           { word: "Left", icon: "arrow_back", keep: "second" },
@@ -1186,14 +1244,20 @@ function AreaOptions({
   const items: { label: string; icon: string; run: (e: React.MouseEvent) => void; sep?: boolean }[] = [
     { label: "Vertical Split", icon: "splitscreen_vertical_add", run: arm("row") },
     { label: "Horizontal Split", icon: "splitscreen_add", run: arm("col") },
-    { label: "", icon: "", sep: true, run: () => {} },
-    ...joins.map((j) => ({
-      label: `Join ${j.word}`,
-      icon: j.icon,
-      run: () => act(joinAt(layout, menu.path, menu.i, j.keep)),
-    })),
-    { label: "", icon: "", sep: true, run: () => {} },
-    { label: "Swap Areas", icon: "swap_horiz", run: () => act(swapAt(layout, menu.path, menu.i)) },
+    // Blender guards its Join and Swap entries with `if (sa1 && sa2)` for the
+    // same reason: one neighbour, nothing to join or swap it with.
+    ...(menu.kind === "pair"
+      ? [
+          { label: "", icon: "", sep: true, run: () => {} },
+          ...joins.map((j) => ({
+            label: `Join ${j.word}`,
+            icon: j.icon,
+            run: () => act(joinAt(layout, menu.path, menu.i, j.keep)),
+          })),
+          { label: "", icon: "", sep: true, run: () => {} },
+          { label: "Swap Areas", icon: "swap_horiz", run: () => act(swapAt(layout, menu.path, menu.i)) },
+        ]
+      : []),
   ];
 
   const left = Math.max(4, Math.min(menu.x / scale, window.innerWidth / scale - 210));
@@ -1206,7 +1270,7 @@ function AreaOptions({
       style={{ position: "fixed", left, top, minWidth: 196, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 200 }}
     >
       <div style={{ padding: "3px 10px 5px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", whiteSpace: "nowrap" }}>
-        Area Options · {names[0]} | {names[1]}
+        Area Options · {names.join(" | ")}
       </div>
       {items.map((it, k) =>
         it.sep ? (
@@ -1225,6 +1289,45 @@ function AreaOptions({
         ),
       )}
     </div>
+  );
+}
+
+/**
+ * The dock's outer border, made clickable. It carries no sash — there is
+ * nothing beyond it to resize against — so it does not drag; right-click gets
+ * the adjoining pane's Split options.
+ *
+ * Without this the border ring is the one piece of dock chrome you can see
+ * and not use, and a dock reduced to a single pane can never be split again.
+ *
+ * The strips cover the gutter plus a couple of pixels of the pane's own
+ * rounded edge, to make a 4px ring a comfortable target. They sit above the
+ * panes (so a right-click over the canvas iframe reaches us at all — an
+ * iframe would otherwise swallow it) but below the drag shield.
+ */
+function EdgeBorders({ onMenu }: { onMenu: (e: React.MouseEvent, side: "top" | "right" | "bottom" | "left") => void }) {
+  const reach = GUTTER + 2;
+  const sides: { side: "top" | "right" | "bottom" | "left"; style: CSSProperties }[] = [
+    { side: "top", style: { top: 0, left: 0, right: 0, height: reach } },
+    { side: "bottom", style: { bottom: 0, left: 0, right: 0, height: reach } },
+    { side: "left", style: { left: 0, top: 0, bottom: 0, width: reach } },
+    { side: "right", style: { right: 0, top: 0, bottom: 0, width: reach } },
+  ];
+  return (
+    <>
+      {sides.map(({ side, style }) => (
+        <div
+          key={side}
+          data-dock-edge={side}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onMenu(e, side);
+          }}
+          style={{ position: "absolute", zIndex: 20, ...style }}
+        />
+      ))}
+    </>
   );
 }
 

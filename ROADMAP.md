@@ -159,6 +159,29 @@ that parent, which gains a splitter and re-flows its siblings by 1–2px. The
 phantom describes the pane being split, not its neighbours' reaction to the
 commit. Splits that nest (a different axis) are pixel-exact.
 
+**Borders** (Sam, 2026-08-25: *"between borders is still too much space; there's
+also no way to click on borders other than those directly between 2 windows"*).
+
+- `GAP` and `GUTTER` are both 4 now, down from 6.
+- The gutter ring used to be the one piece of dock chrome you could see and
+  not use — a scan of every non-pane pixel found ~7000 of them dead, all of it
+  that ring. `EdgeBorders` makes it live: right-click gets the adjoining
+  pane's Split options, and only those, because there is one neighbour and so
+  nothing to Join or Swap it with (Blender guards its own entries with
+  `if (sa1 && sa2)` for exactly this reason). The scan now reports zero dead
+  pixels.
+- **This is not cosmetic.** A dock reduced to one pane has no sashes at all,
+  so without a clickable outer border there is no way to ever split again —
+  Sam's point, and the reason the first attempt here (delete the gutter
+  entirely, as Blender's `screen_geom_area_map_find_active_scredge` does by
+  skipping edges on the window bounds) was wrong. Blender gets away with it
+  because its top and bottom work-area edges are shared with the global
+  topbar and status bar, so they are real, actionable edges. We have no such
+  neighbours, so ours has to be the border itself.
+- The strips overhang 2px into the panes' rounded edges so a 4px ring is a
+  comfortable target, and they sit above the panes — a right-click over the
+  canvas would otherwise be swallowed by the iframe and never reach us.
+
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 
 ## Where we are (2026-08-16)

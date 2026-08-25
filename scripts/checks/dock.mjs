@@ -121,7 +121,7 @@ try {
     };
   });
   check(
-    cards.radius >= 6 && cards.outlined && cards.gap >= 6 && cards.grips === cards.splitters && cards.grips > 0,
+    cards.radius >= 6 && cards.outlined && cards.gap >= 3 && cards.gap <= 5 && cards.grips === cards.splitters && cards.grips > 0,
     `panes are rounded cards with a gap and a sash grip: ${JSON.stringify(cards)}`,
   );
 
@@ -513,6 +513,46 @@ try {
   );
   await page.keyboard.press("Escape");
   await page.waitForTimeout(150);
+  await viewMenuItem("Reset layout");
+
+  // --- the dock's outer border is live, not dead space ---------------------
+  // It carries no sash, so it offers Split alone — Blender guards its own
+  // Join/Swap entries with `if (sa1 && sa2)` for the same reason.
+  await viewMenuItem("Reset layout");
+  const rootBox = await box("[data-dock-root]");
+  await page.mouse.click(rootBox.x + rootBox.width / 2, rootBox.y + 2, { button: "right" });
+  await page.waitForTimeout(250);
+  const edgeItems = await areaItems();
+  check(
+    edgeItems.map((i) => i.label).join("|") === "Vertical Split|Horizontal Split",
+    `the outer border offers Split alone, having only one neighbour: ${JSON.stringify(edgeItems.map((i) => i.label))}`,
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+
+  // The reason it has to be clickable: a dock reduced to one pane has no
+  // sashes left, so the outer border is the only way back to two.
+  for (const id of ["insert", "outliner", "properties"]) {
+    await page.locator(`[data-dock-leaf]:has([data-dock-tab="${id}"]) .hv-close`).first().click();
+    await page.waitForTimeout(250);
+  }
+  check((await shape()) === "canvas", `closing every closable panel leaves one pane: ${await shape()}`);
+  check((await page.locator("[data-dock-splitter]").count()) === 0, "a lone pane has no sash to right-click");
+
+  const lone = await box("[data-dock-root]");
+  await page.mouse.click(lone.x + lone.width / 2, lone.y + 2, { button: "right" });
+  await page.waitForTimeout(250);
+  await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
+  const loneCanvas = (await leafMap())[0].box;
+  await page.mouse.move(loneCanvas.x + loneCanvas.width * 0.4, loneCanvas.y + loneCanvas.height / 2);
+  await page.waitForTimeout(150);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(350);
+  check(
+    (await shape()) === "row[canvas, canvas#2]",
+    `the outer border splits a lone pane back into two: ${await shape()}`,
+  );
   await viewMenuItem("Reset layout");
 
   // --- overlays must survive the app's CSS zoom ----------------------------
