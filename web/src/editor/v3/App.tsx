@@ -289,13 +289,16 @@ export function App() {
   const fileFocusRef = useRef(fileFocusId);
   fileFocusRef.current = fileFocusId;
   const [fileCollapsed, setFileCollapsed] = useState<Set<string>>(new Set());
-  const [touchedFiles, setTouchedFiles] = useState<Set<string>>(new Set());
   const editFileRef = useRef<(edit: FileEdit, expectTag: string) => void | Promise<void>>(() => {});
   const openFileRef = useRef<(file: string) => Promise<void>>(async () => {});
 
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [future, setFuture] = useState<HistoryEntry[]>([]);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
+  /** A rejected edit — the fidelity guard, a server error, a bad op. This used
+   *  to share the status strip with a "saved at hh:mm" timestamp; the
+   *  timestamp was noise and went with the strip, but a silently dropped edit
+   *  is not acceptable, so failures surface as a transient toast. */
+  const [editError, setEditError] = useState<string | null>(null);
 
   const [workspace, setWorkspace] = useState<Workspace>("Layout");
   const [outlinerMode, setOutlinerMode] = useState<"File" | "Routes">("Routes");
@@ -361,7 +364,6 @@ export function App() {
 
   const styleTokens = useStyleTokens(send, () => {
     setStyleEdits((e) => e + 1);
-    setSavedAt(new Date().toLocaleTimeString());
   });
 
   // ------------------------------------------------------------------ boot
@@ -511,7 +513,7 @@ export function App() {
       }
       if (!res.ok || !body.model) {
         console.warn(`edit rejected: ${body.error}`);
-        setSavedAt(`✗ ${String(body.error).slice(0, 60)}`);
+        setEditError(String(body.error).slice(0, 160));
         return;
       }
       const focusBefore = fileFocusRef.current;
@@ -528,8 +530,6 @@ export function App() {
         },
       ]);
       setFuture([]);
-      setTouchedFiles((t) => new Set(t).add(fs.file));
-      setSavedAt(new Date().toLocaleTimeString());
       if (body.focusId) send({ type: "select", id: body.focusId });
     },
     [send],
@@ -590,7 +590,6 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file: entry.file, text }),
       });
-      setSavedAt(new Date().toLocaleTimeString());
       const fsNow = fileStateRef.current;
       if (fsNow && fsNow.file === entry.file) {
         const d = await api<{ model: JsxNodeModel[] }>(
@@ -642,6 +641,12 @@ export function App() {
       },
     });
   }, [send]);
+
+  useEffect(() => {
+    if (!editError) return;
+    const t = setTimeout(() => setEditError(null), 8000);
+    return () => clearTimeout(t);
+  }, [editError]);
 
   const zoomBy = useCallback((dir: number) => {
     setZoom((z) => {
@@ -955,11 +960,6 @@ export function App() {
   // ------------------------------------------------------------------ derived
 
   const fileNode = fileState ? findModelNode(fileState.model, fileFocusId) : null;
-  const crumb = (() => {
-    if (!fileState) return targetLabel;
-    const base = fileState.file;
-    return fileNode ? `${base} › ${fileNode.tag}` : base;
-  })();
   const selTitle = routeSel
     ? routeSel.urlPath
     : fileNode
@@ -1058,6 +1058,12 @@ export function App() {
         })),
         { sep: true },
         { label: "Reload canvas", action: () => iframeRef.current?.contentWindow?.location.reload() },
+        {
+          label: "Preview in new window",
+          icon: "open_in_new",
+          disabled: !fileState?.renderable,
+          action: () => fileState?.renderable && window.open(`/harness.html?file=${encodeURIComponent(fileState.canvasKey)}`, "_blank"),
+        },
       ],
     },
     {
@@ -1489,42 +1495,7 @@ export function App() {
             </button>
           ))}
         </div>
-        {/* What was the document row: which app, which file. One row, because
-            a strip that only restates the title is a strip of nothing. */}
-        <div style={{ ...vdiv, alignSelf: "center", margin: "0 8px" }} />
-        <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, alignSelf: "center", height: 22, padding: "0 8px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text }}>
-          <span style={{ color: C.muted, fontSize: 11 }}>app</span>
-          {targetLabel}
-        </span>
-        <span style={{ flex: "0 1 auto", minWidth: 0, alignSelf: "center", overflow: "hidden", textOverflow: "ellipsis", padding: "0 8px", fontFamily: MONO, fontSize: 11, color: C.faint }} title={crumb}>
-          {fileState ? crumb : ""}
-        </span>
-
         <div style={{ flex: "1 1 0", minWidth: 8 }} />
-        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8 }}>
-          {touchedFiles.size > 0 && (
-            <span style={{ color: C.amber, fontSize: 11, cursor: "help" }} title={[...touchedFiles].join("\n")}>
-              {touchedFiles.size} edited
-            </span>
-          )}
-          <span style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 11, color: C.green }} title="Every edit is written straight to source">
-            <span style={{ width: 6, height: 6, borderRadius: 99, background: C.green }} />
-            {savedAt ? `saved ${savedAt}` : "in sync"}
-          </span>
-          <div style={{ ...vdiv, height: 16 }} />
-          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: history.length ? C.body : C.faint, cursor: "pointer" }} title="Undo (Ctrl+Z)" onClick={undoAction}><Sym name="undo" /></button>
-          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: future.length ? C.body : C.faint, cursor: "pointer" }} title="Redo (Ctrl+Shift+Z)" onClick={redoAction}><Sym name="redo" /></button>
-          <button
-            className="hv-primary"
-            style={{ display: "flex", alignItems: "center", gap: 5, height: 22, padding: "0 10px", ...primaryBtn, opacity: fileState?.renderable ? 1 : 0.5, cursor: fileState?.renderable ? "pointer" : "not-allowed" }}
-            disabled={!fileState?.renderable}
-            title="Open this component in its own window"
-            onClick={() => fileState?.renderable && window.open(`/harness.html?file=${encodeURIComponent(fileState.canvasKey)}`, "_blank")}
-          >
-            <Sym name="open_in_new" size={13} />
-            Preview
-          </button>
-        </div>
       </div>
 
       {/* ------------------------------------------------ Workspace toolbar */}
@@ -1572,7 +1543,6 @@ export function App() {
                 body: JSON.stringify({ name: wsMat.matName, lines: materialLines(wsMat) }),
               }).then(() => {
                 setWsMat((w) => ({ ...w, written: true, matEdits: 0 }));
-                setSavedAt(new Date().toLocaleTimeString());
               });
             }}
           >
@@ -1727,6 +1697,37 @@ export function App() {
         </div>
       )}
 
+      {/* A rejected edit, said once and then gone. No permanent strip: the
+          steady state is "it worked", which needs no pixels. */}
+      {editError && (
+        <div
+          data-uai-editerror
+          onClick={() => setEditError(null)}
+          title="Dismiss"
+          style={{
+            position: "fixed",
+            right: 14,
+            bottom: 14,
+            maxWidth: 460,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 8,
+            padding: "8px 12px",
+            background: C.menu,
+            border: `1px solid ${C.amber}`,
+            borderRadius: 6,
+            boxShadow: "0 14px 30px rgba(0,0,0,0.55)",
+            color: C.amber,
+            fontSize: 11.5,
+            lineHeight: 1.4,
+            cursor: "pointer",
+            zIndex: 300,
+          }}
+        >
+          <Sym name="error" size={14} />
+          <span>{editError}</span>
+        </div>
+      )}
     </div>
   );
 }

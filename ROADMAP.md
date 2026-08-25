@@ -199,6 +199,20 @@ around the dock; it now has one.
   preview, which is a different control that still does something.
 - **Prose removed**: the workspace hints ("edit the real running app"), the
   Preferences filler paragraph, and the chattier status strings.
+- **Then the top bar's right-hand cluster went too** — target chip, file path,
+  "in sync", undo/redo buttons, Preview. The strip is now `u—i`, the menus and
+  the workspace tabs, nothing else. Sam's rule for the move: *"anything that
+  had actual function that becomes unreachable belongs under the menu bar
+  dropdowns"* — so Preview is now Canvas ▸ Preview in new window, and Undo,
+  Redo and the target were already in Edit and File.
+- **A rejected edit was the exception.** `savedAt` did two jobs: a "saved at
+  hh:mm" timestamp, which was noise, and `✗ <error>`, which was the only
+  report of an edit the fidelity guard threw out. Status has no menu home, so
+  failures now raise a transient toast that clears itself after 8s. The
+  steady state — it worked — costs no pixels.
+
+Standing check: `scripts/checks/chrome.mjs`, which forces a rejection through
+`page.route` rather than trusting that one would be shown.
 
 **Pane and sash tweaks** (same round):
 

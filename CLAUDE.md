@@ -116,6 +116,9 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
 - Tests that edit the target must undo via the tool's own restore and
   assert the touched file is git-clean after (fallback `git checkout` on
   that one file = test failure).
+- The editor chrome is ONE strip: `u—i`, the menus, the workspace tabs.
+  Everything else lives in a pane header or a menu dropdown — if a control
+  would lose its only home, give it a menu item, don't grow a strip back.
 - `scripts/checks/*.mjs` are the standing Playwright checks (`_shared.mjs`
   resolves the target + borrows Playwright). Run them after touching the
   canvas, the edit funnel, or the live proxy; add one when you add a
