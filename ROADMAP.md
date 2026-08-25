@@ -87,6 +87,22 @@ Two things worth knowing:
   with the primary pane. Probe messages reach every live frame, so each pane
   filters on `event.source` being its own.
 
+**Area Options** (Sam, 2026-08-18, from Blender's sash menu). Right-click any
+sash: Vertical Split, Horizontal Split, Join <dir>, Swap Areas.
+
+- **Join** keeps the named side and moves the other's panels into it as tabs —
+  it never destroys a panel. Directions are Left/Right on a vertical sash,
+  Up/Down on a horizontal one.
+- **Swap** trades the pair. Sizes stay with the *position*, not the pane, so
+  the geometry is untouched and only the contents move.
+- **Split** acts on whichever neighbour you right-clicked nearer, named in the
+  menu so it isn't a guess. Blender clones the editor into the new half; our
+  panels are unique instances, so instead the pane's ACTIVE tab moves into it
+  — tearing a stacked tab out into its own area. A pane holding one panel can
+  only split if that panel is duplicable (the canvas), otherwise the item is
+  disabled with a tooltip saying why. That's the honest limit of a model where
+  panel ids are unique, not an oversight.
+
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 
 ## Where we are (2026-08-16)

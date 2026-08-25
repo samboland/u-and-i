@@ -352,6 +352,68 @@ try {
     `one overlay, easing on VS Code's timings: ${JSON.stringify(overlay)}`,
   );
 
+  // --- Blender's Area Options, on right-click of a sash --------------------
+  const openSash = async (sel, offset = 0) => {
+    const s = await box(sel);
+    await page.mouse.click(s.x + s.width / 2 + offset, s.y + s.height / 2, { button: "right" });
+    await page.waitForTimeout(250);
+  };
+  const areaItems = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll("[data-dock-areamenu] button")].map((b) => ({
+        label: [...b.children].at(-1).textContent.trim(),
+        disabled: b.disabled,
+      })),
+    );
+  const pick = async (label) => {
+    await page.locator("[data-dock-areamenu] button", { hasText: label }).click();
+    await page.waitForTimeout(350);
+  };
+
+  await openSash('[data-dock-splitter="vertical"]');
+  const vItems = await areaItems();
+  check(
+    vItems.map((i) => i.label.split(" ·")[0]).join("|") === "Vertical Split|Horizontal Split|Join Left|Join Right|Swap Areas",
+    `a vertical sash offers Blender's area options: ${JSON.stringify(vItems.map((i) => i.label))}`,
+  );
+  // Split names the pane it will act on — the side of the seam you clicked.
+  check(
+    vItems[0].label.endsWith("· Insert") && vItems[0].disabled,
+    `Split names its target, and is off for a lone un-duplicable panel: ${JSON.stringify(vItems[0])}`,
+  );
+
+  await pick("Swap Areas");
+  check((await shape()) === "row[canvas, insert, col[outliner, properties]]", `Swap Areas trades the pair: ${await shape()}`);
+  await viewMenuItem("Reset layout");
+
+  await openSash('[data-dock-splitter="vertical"]');
+  await pick("Join Right");
+  check(
+    (await shape()) === "row[canvas+insert, col[outliner, properties]]",
+    `Join keeps the named side and moves the other's panels in: ${await shape()}`,
+  );
+  await viewMenuItem("Reset layout");
+
+  // A horizontal sash names its directions Up/Down, not Left/Right.
+  await openSash('[data-dock-splitter="horizontal"]');
+  const hItems = await areaItems();
+  check(
+    hItems.some((i) => i.label === "Join Up") && hItems.some((i) => i.label === "Join Down"),
+    `a horizontal sash joins Up/Down: ${JSON.stringify(hItems.map((i) => i.label))}`,
+  );
+  await pick("Join Up");
+  check((await shape()) === "row[insert, canvas, outliner+properties]", `Join Up merges the stacked pair: ${await shape()}`);
+  await viewMenuItem("Reset layout");
+
+  // Split works where a panel can be duplicated — click the canvas side.
+  await openSash('[data-dock-splitter="vertical"]', 3);
+  await pick("Vertical Split");
+  check(
+    (await shape()) === "row[insert, canvas, canvas#2, col[outliner, properties]]",
+    `Vertical Split on a duplicable pane makes a side-by-side pair: ${await shape()}`,
+  );
+  await viewMenuItem("Reset layout");
+
   if (shot) await page.screenshot({ path: `${shot}-dock.png` });
 } catch (err) {
   // Without this an exception would skip the remaining checks and still exit

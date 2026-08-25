@@ -1626,6 +1626,7 @@ export function App() {
           icon={(id) => PANEL_ICON[basePanel(id)] ?? "square"}
           panelMenu={groupPanels(group)}
           closable={(id) => id !== GROUP_MAIN[group]}
+          newInstance={(id) => (basePanel(id) === "canvas" ? nextInstanceId(layout, "canvas") : null)}
           renderHeader={renderPanelHeader}
           render={renderPanel}
         />

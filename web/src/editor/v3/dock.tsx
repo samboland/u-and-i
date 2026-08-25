@@ -195,6 +195,83 @@ export function nextInstanceId(root: DockNode, base: string): string {
   }
 }
 
+// ------------------------------------------------- area options (the sash)
+
+/** Append tabs to the first leaf of a subtree — the top-left one. */
+function addTabsToFirstLeaf(n: DockNode, ids: string[]): DockNode {
+  if (ids.length === 0) return n;
+  if (n.kind === "leaf") return { ...n, tabs: [...n.tabs, ...ids] };
+  return { ...n, children: n.children.map((c, k) => (k === 0 ? addTabsToFirstLeaf(c, ids) : c)) };
+}
+
+/**
+ * Blender's Join: the two areas either side of a sash become one. `keep` says
+ * which side survives; the other side's panels move into it as tabs rather
+ * than being destroyed, and the survivor takes the combined space.
+ */
+export function joinAt(root: DockNode, path: Path, i: number, keep: "first" | "second"): DockNode {
+  const s = nodeAt(root, path);
+  if (s?.kind !== "split" || !s.children[i + 1]) return root;
+  const keepIdx = keep === "first" ? i : i + 1;
+  const dropIdx = keep === "first" ? i + 1 : i;
+  const survivor = addTabsToFirstLeaf(s.children[keepIdx], panelsIn(s.children[dropIdx]));
+
+  const children: DockNode[] = [];
+  const sizes: number[] = [];
+  for (let k = 0; k < s.children.length; k++) {
+    if (k === dropIdx) continue;
+    children.push(k === keepIdx ? survivor : s.children[k]);
+    sizes.push(k === keepIdx ? s.sizes[i] + s.sizes[i + 1] : s.sizes[k]);
+  }
+  const next: DockNode = children.length === 1 ? children[0] : { kind: "split", dir: s.dir, children, sizes };
+  return normalize(replaceAt(root, path, next)) ?? root;
+}
+
+/**
+ * Blender's Swap Areas: the two panes trade places. Sizes stay with the
+ * POSITION, not the pane, so the geometry is untouched and only the contents
+ * move — which is what "swap areas" looks like on screen.
+ */
+export function swapAt(root: DockNode, path: Path, i: number): DockNode {
+  const s = nodeAt(root, path);
+  if (s?.kind !== "split" || !s.children[i + 1]) return root;
+  const children = [...s.children];
+  [children[i], children[i + 1]] = [children[i + 1], children[i]];
+  return replaceAt(root, path, { ...s, children });
+}
+
+/**
+ * Blender's Split. Blender clones the editor into the new half; our panels are
+ * unique instances, so instead the pane's ACTIVE tab moves into the new half
+ * — tearing a stacked tab out into its own area. A pane holding a single
+ * panel can only be split if that panel is duplicable (the canvas), for which
+ * the caller supplies a fresh instance id.
+ */
+export function splitLeafAt(root: DockNode, path: Path, dir: "row" | "col", newId?: string | null): DockNode {
+  const l = nodeAt(root, path);
+  if (l?.kind !== "leaf") return root;
+
+  let moved: string;
+  let rest: DockNode;
+  if (l.tabs.length > 1) {
+    moved = l.active;
+    const tabs = l.tabs.filter((t) => t !== moved);
+    rest = { kind: "leaf", tabs, active: tabs[0] };
+  } else if (newId) {
+    moved = newId;
+    rest = l;
+  } else {
+    return root;
+  }
+  return normalize(replaceAt(root, path, split(dir, [rest, leaf([moved])], [0.5, 0.5]))) ?? root;
+}
+
+/** Can `splitLeafAt` do anything here? Drives the menu's disabled state. */
+export function canSplit(root: DockNode, path: Path, duplicable: boolean): boolean {
+  const l = nodeAt(root, path);
+  return l?.kind === "leaf" && (l.tabs.length > 1 || duplicable);
+}
+
 function findLeaf(root: DockNode, id: string, path: Path = []): Path | null {
   if (root.kind === "leaf") return root.tabs.includes(id) ? path : null;
   for (let i = 0; i < root.children.length; i++) {
@@ -391,11 +468,17 @@ export interface DockProps {
   panelMenu?: string[];
   /** Panels the user may close from the header. Default: all. */
   closable?: (id: string) => boolean;
+  /**
+   * A fresh instance id for a panel that may appear more than once, or null.
+   * Lets Area Options ▸ Split work on a pane holding a single canvas.
+   */
+  newInstance?: (id: string) => string | null;
 }
 
-export function Dock({ layout, onLayout, title, icon, render, renderHeader, panelMenu, closable }: DockProps) {
+export function Dock({ layout, onLayout, title, icon, render, renderHeader, panelMenu, closable, newInstance }: DockProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const leaves = useRef(new Map<string, HTMLElement>());
+  const [sash, setSash] = useState<SashMenu | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
@@ -519,8 +602,20 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
         closable={closable}
         registerLeaf={registerLeaf}
         onTabDown={startDrag}
+        onSashMenu={setSash}
         dragging={drag?.id ?? null}
       />
+
+      {sash && (
+        <AreaOptions
+          menu={sash}
+          layout={layout}
+          title={title}
+          newInstance={newInstance}
+          onClose={() => setSash(null)}
+          onLayout={onLayout}
+        />
+      )}
 
       {/* A pointer over an iframe delivers its events to THAT document, not
           ours — so dragging across the canvas silently froze the drop preview
@@ -574,7 +669,21 @@ interface BranchProps {
   closable?: (id: string) => boolean;
   registerLeaf: (key: string, el: HTMLElement | null) => void;
   onTabDown: (id: string, ev: React.PointerEvent, onTap?: () => void) => void;
+  onSashMenu: (m: SashMenu) => void;
   dragging: string | null;
+}
+
+/** An open Area Options menu, anchored to the sash it was opened from. */
+interface SashMenu {
+  x: number;
+  y: number;
+  /** The split node holding the pair. */
+  path: Path;
+  /** The sash sits between children i and i+1. */
+  i: number;
+  /** Which neighbour the Split items act on. */
+  side: "first" | "second";
+  dir: "row" | "col";
 }
 
 function DockBranch(props: BranchProps) {
@@ -621,7 +730,15 @@ function DockSplitView({ node, path, ...rest }: BranchProps & { node: DockSplit 
           </div>
         );
         return i < node.children.length - 1
-          ? [pane, <Splitter key={`s${i}`} row={row} onDown={(e) => startResize(i, e)} />]
+          ? [
+              pane,
+              <Splitter
+                key={`s${i}`}
+                row={row}
+                onDown={(e) => startResize(i, e)}
+                onMenu={(e, side) => rest.onSashMenu({ x: e.clientX, y: e.clientY, path, i, side, dir: node.dir })}
+              />,
+            ]
           : [pane];
       })}
     </div>
@@ -638,11 +755,21 @@ function DockSplitView({ node, path, ...rest }: BranchProps & { node: DockSplit 
  * The only mark is a three-dot grip at the middle of the seam, so a draggable
  * gap doesn't look like dead space.
  */
-function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEvent) => void }) {
+function Splitter({
+  row,
+  onDown,
+  onMenu,
+}: {
+  row: boolean;
+  onDown: (e: React.PointerEvent) => void;
+  onMenu: (e: React.MouseEvent, side: "first" | "second") => void;
+}) {
   const [hot, setHot] = useState(false);
   return (
     <div
-      data-dock-splitter={row ? "col" : "row"}
+      // The sash's own orientation, not the parent split's direction: a
+      // row-split is divided by a VERTICAL seam.
+      data-dock-splitter={row ? "vertical" : "horizontal"}
       style={{
         flex: `0 0 ${GAP}px`,
         position: "relative",
@@ -659,6 +786,16 @@ function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEven
         onPointerDown={onDown}
         onPointerEnter={() => setHot(true)}
         onPointerLeave={() => setHot(false)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // Which side of the seam's centre line was clicked decides which
+          // pane the Split items act on — the menu names it, so there's no
+          // guessing.
+          const r = e.currentTarget.getBoundingClientRect();
+          const before = row ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2;
+          onMenu(e, before ? "first" : "second");
+        }}
         style={{
           position: "absolute",
           ...(row ? { top: 0, bottom: 0, left: -GRAB, right: -GRAB } : { left: 0, right: 0, top: -GRAB, bottom: -GRAB }),
@@ -689,6 +826,120 @@ function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEven
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Blender's Area Options, on right-click of a sash. Split acts on whichever
+ * neighbour you clicked nearer — named in the menu's title so it isn't a
+ * guess. Join and Swap act on the pair.
+ */
+function AreaOptions({
+  menu,
+  layout,
+  title,
+  newInstance,
+  onClose,
+  onLayout,
+}: {
+  menu: SashMenu;
+  layout: DockNode;
+  title: (id: string) => string;
+  newInstance?: (id: string) => string | null;
+  onClose: () => void;
+  onLayout: (n: DockNode) => void;
+}) {
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("click", onClose);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("click", onClose);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+
+  const parent = nodeAt(layout, menu.path);
+  if (parent?.kind !== "split") return null;
+  const targetPath = [...menu.path, menu.side === "first" ? menu.i : menu.i + 1];
+  const targetNode = nodeAt(layout, targetPath);
+  const targetLeaf = targetNode?.kind === "leaf" ? targetNode : null;
+  const targetName = targetLeaf ? title(targetLeaf.active) : "this area";
+
+  const dup = targetLeaf ? (newInstance?.(targetLeaf.active) ?? null) : null;
+  const splittable = targetLeaf ? canSplit(layout, targetPath, !!dup) : false;
+  const names = [menu.i, menu.i + 1].map((k) => {
+    const n = parent.children[k];
+    return n.kind === "leaf" ? title(n.active) : "group";
+  });
+  const [firstWord, secondWord] = menu.dir === "row" ? ["Left", "Right"] : ["Up", "Down"];
+
+  const act = (next: DockNode) => {
+    onClose();
+    onLayout(next);
+  };
+
+  const items: { label: string; icon: string; disabled?: boolean; run: () => void; sep?: boolean }[] = [
+    {
+      label: "Vertical Split",
+      icon: "splitscreen_vertical_add",
+      disabled: !splittable,
+      run: () => act(splitLeafAt(layout, targetPath, "row", dup)),
+    },
+    {
+      label: "Horizontal Split",
+      icon: "splitscreen_add",
+      disabled: !splittable,
+      run: () => act(splitLeafAt(layout, targetPath, "col", dup)),
+    },
+    { label: "", icon: "", sep: true, run: () => {} },
+    {
+      label: `Join ${firstWord}`,
+      icon: menu.dir === "row" ? "arrow_back" : "arrow_upward",
+      run: () => act(joinAt(layout, menu.path, menu.i, "first")),
+    },
+    {
+      label: `Join ${secondWord}`,
+      icon: menu.dir === "row" ? "arrow_forward" : "arrow_downward",
+      run: () => act(joinAt(layout, menu.path, menu.i, "second")),
+    },
+    { label: "", icon: "", sep: true, run: () => {} },
+    { label: "Swap Areas", icon: "swap_horiz", run: () => act(swapAt(layout, menu.path, menu.i)) },
+  ];
+
+  const left = Math.max(4, Math.min(menu.x, window.innerWidth - 210));
+  const top = Math.max(4, Math.min(menu.y, window.innerHeight - 200));
+  return (
+    <div
+      data-dock-areamenu
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      style={{ position: "fixed", left, top, minWidth: 196, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 200 }}
+    >
+      <div style={{ padding: "3px 10px 5px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", whiteSpace: "nowrap" }}>
+        Area Options · {names[0]} | {names[1]}
+      </div>
+      {items.map((it, k) =>
+        it.sep ? (
+          <div key={k} style={{ height: 1, background: C.border, margin: "4px 0" }} />
+        ) : (
+          <button
+            key={k}
+            className={it.disabled ? undefined : "hv-menu"}
+            disabled={it.disabled}
+            title={it.disabled ? `${targetName} holds a single panel that can't be duplicated` : undefined}
+            onClick={it.run}
+            style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: it.disabled ? C.faint : C.body, cursor: it.disabled ? "default" : "pointer", textAlign: "left" }}
+          >
+            <Sym name={it.icon} size={14} />
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {it.label}
+              {it.label.endsWith("Split") && <span style={{ color: C.faint }}> · {targetName}</span>}
+            </span>
+          </button>
+        ),
+      )}
     </div>
   );
 }
