@@ -87,6 +87,10 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   ours — any pointer-drag that crosses the canvas needs a transparent shield
   over it for the drag's duration, or the parent silently stops updating
   (`dock.tsx`, and `LiveCanvas`'s middle-drag pan, both do this).
+- App's global chord handler is a **capture** listener on `window` and
+  `stopPropagation`s anything it claims — so a component that binds the same
+  key later never sees it. Anything modal must make App stand down first
+  (`dockModalActive()`), not just register its own listener.
 - Editor and harness share localStorage (same origin, port 4400).
 - Vite hands importers outside its root as absolute, `/@fs/`, *or*
   relative paths — match on the directory-name marker.

@@ -20,10 +20,14 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 /** Tab ids in visual (left-to-right, top-to-bottom) order, grouped by leaf. */
 const leafMap = () =>
   page.evaluate(() =>
-    [...document.querySelectorAll("[data-dock-leaf]")].map((l) => ({
-      leaf: l.getAttribute("data-dock-leaf"),
-      tabs: [...l.querySelectorAll("[data-dock-tab]")].map((t) => t.getAttribute("data-dock-tab")),
-    })),
+    [...document.querySelectorAll("[data-dock-leaf]")].map((l) => {
+      const r = l.getBoundingClientRect();
+      return {
+        leaf: l.getAttribute("data-dock-leaf"),
+        tabs: [...l.querySelectorAll("[data-dock-tab]")].map((t) => t.getAttribute("data-dock-tab")),
+        box: { x: r.x, y: r.y, width: r.width, height: r.height },
+      };
+    }),
   );
 
 const box = async (sel) => await page.locator(sel).first().boundingBox();
@@ -373,13 +377,14 @@ try {
   await openSash('[data-dock-splitter="vertical"]');
   const vItems = await areaItems();
   check(
-    vItems.map((i) => i.label.split(" ·")[0]).join("|") === "Vertical Split|Horizontal Split|Join Right|Join Left|Swap Areas",
+    vItems.map((i) => i.label).join("|") === "Vertical Split|Horizontal Split|Join Right|Join Left|Swap Areas",
     `a vertical sash offers Blender's area options: ${JSON.stringify(vItems.map((i) => i.label))}`,
   );
-  // Split names the pane it will act on — the side of the seam you clicked.
+  // Split is always offered now: it arms a phantom you place by hand, so
+  // there is no seam-side target to name or grey out.
   check(
-    vItems[0].label.endsWith("· Insert") && vItems[0].disabled,
-    `Split names its target, and is off for a lone un-duplicable panel: ${JSON.stringify(vItems[0])}`,
+    vItems.every((i) => !i.disabled),
+    `every area option is live; Split is placed by hand: ${JSON.stringify(vItems)}`,
   );
 
   await pick("Swap Areas");
@@ -408,13 +413,106 @@ try {
   check((await shape()) === "row[insert, canvas, properties+outliner]", `Join Up keeps the lower pane and grows it up: ${await shape()}`);
   await viewMenuItem("Reset layout");
 
-  // Split works where a panel can be duplicated — click the canvas side.
-  await openSash('[data-dock-splitter="vertical"]', 3);
-  await pick("Vertical Split");
+  // --- Blender's modal split: a phantom you place, then click to commit ----
+  const canvasBox = async () => {
+    const m = await leafMap();
+    return m.find((l) => l.tabs.includes("canvas")).box;
+  };
+
+  // Arming it draws a phantom that follows the cursor rather than cutting.
+  await openSash('[data-dock-splitter="vertical"]');
+  await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
+  const cb = await canvasBox();
+  await page.mouse.move(cb.x + cb.width * 0.25, cb.y + cb.height / 2);
+  await page.waitForTimeout(120);
+  const armed = await page.evaluate(() => ({
+    ghosts: [...document.querySelectorAll("[data-dock-splitghost]")].map((g) => g.dataset.dockSplitghost),
+    aim: document.querySelector("[data-dock-splitaim]")?.dataset.dockSplitaim,
+  }));
+  check(
+    armed.ghosts.join("|") === "first|second" && armed.aim === "row",
+    `Vertical Split arms a two-part phantom over the hovered pane: ${JSON.stringify(armed)}`,
+  );
+  check((await shape()) === "row[insert, canvas, col[outliner, properties]]", `the phantom cuts nothing until you click: ${await shape()}`);
+
+  // Tab flips the axis mid-flight, exactly as area_split_modal does.
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(120);
+  const flipped = await page.evaluate(() => document.querySelector("[data-dock-splitaim]")?.dataset.dockSplitaim);
+  check(flipped === "col", `Tab flips the pending split's axis: ${flipped}`);
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(120);
+
+  // Escape backs out without touching the layout.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  const gone = await page.locator("[data-dock-splitghost]").count();
+  check(gone === 0 && (await shape()) === "row[insert, canvas, col[outliner, properties]]", `Escape cancels the pending split: ${gone}, ${await shape()}`);
+
+  // Click commits, at the fraction the phantom showed — a quarter across the
+  // canvas means the new pane takes the larger, right-hand share.
+  await openSash('[data-dock-splitter="vertical"]');
+  await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
+  const cb2 = await canvasBox();
+  await page.mouse.move(cb2.x + cb2.width * 0.25, cb2.y + cb2.height / 2);
+  await page.waitForTimeout(120);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(350);
   check(
     (await shape()) === "row[insert, canvas, canvas#2, col[outliner, properties]]",
-    `Vertical Split on a duplicable pane makes a side-by-side pair: ${await shape()}`,
+    `clicking commits the split where the phantom sat: ${await shape()}`,
   );
+  const widths = (await leafMap()).filter((l) => l.tabs[0].startsWith("canvas")).map((l) => Math.round(l.box.width));
+  check(
+    widths.length === 2 && widths[1] > widths[0] * 1.8,
+    `the split lands at the cursor's fraction, not at half: ${JSON.stringify(widths)}`,
+  );
+  await viewMenuItem("Reset layout");
+
+  // Ctrl snaps to twelfths of the pane — Blender's div_array in
+  // area_split_snap_calc_location. 0.30 across is not a twelfth; 4/12 is.
+  await openSash('[data-dock-splitter="vertical"]');
+  await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
+  const cb3 = await canvasBox();
+  const ghostFrac = async () => {
+    const w = await page.evaluate(() => {
+      const g = document.querySelector('[data-dock-splitghost="first"]');
+      return g ? g.getBoundingClientRect().width : null;
+    });
+    return w === null ? null : w / cb3.width;
+  };
+  await page.mouse.move(cb3.x + cb3.width * 0.3, cb3.y + cb3.height / 2);
+  await page.waitForTimeout(120);
+  const loose = await ghostFrac();
+  await page.keyboard.down("Control");
+  await page.waitForTimeout(120);
+  const snapped = await ghostFrac();
+  await page.keyboard.up("Control");
+  check(
+    Math.abs(loose - 0.3) < 0.02 && Math.abs(snapped - 1 / 3) < 0.02,
+    `Ctrl snaps the phantom to twelfths: free ${loose?.toFixed(3)} -> snapped ${snapped?.toFixed(3)}`,
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+
+  // A pane too small to halve, or holding a lone un-duplicable panel, refuses
+  // with a whole-area ghost — Blender's area_split_allowed.
+  await openSash('[data-dock-splitter="vertical"]');
+  await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
+  const ib = (await leafMap()).find((l) => l.tabs.includes("insert")).box;
+  await page.mouse.move(ib.x + ib.width / 2, ib.y + ib.height / 2);
+  await page.waitForTimeout(120);
+  const blocked = await page.evaluate(() => ({
+    ghosts: [...document.querySelectorAll("[data-dock-splitghost]")].map((g) => g.dataset.dockSplitghost),
+    aim: document.querySelector("[data-dock-splitaim]")?.dataset.dockSplitaim,
+  }));
+  check(
+    blocked.ghosts.join("|") === "whole" && blocked.aim === "blocked",
+    `a pane that can't be split shows one whole-area ghost: ${JSON.stringify(blocked)}`,
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
   await viewMenuItem("Reset layout");
 
   if (shot) await page.screenshot({ path: `${shot}-dock.png` });

@@ -44,6 +44,7 @@ import {
   addPanel,
   basePanel,
   closePanel,
+  dockModalActive,
   isDockNode,
   leaf,
   nextInstanceId,
@@ -828,6 +829,10 @@ export function App() {
           return true;
         }
       }
+      // A running dock modal (the split phantom) owns the keyboard, the way a
+      // modal operator does in Blender — otherwise Tab below would eat the
+      // axis flip before the modal's own listener ran.
+      if (dockModalActive()) return false;
       if (c.mod && !c.shift && k === "z") undoAction();
       else if (c.mod && c.shift && k === "z") redoAction();
       else if (c.key === "Tab" && (workspace === "Layout" || workspace === "Component")) {

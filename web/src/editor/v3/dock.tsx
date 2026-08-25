@@ -253,7 +253,13 @@ export function swapAt(root: DockNode, path: Path, i: number): DockNode {
  * panel can only be split if that panel is duplicable (the canvas), for which
  * the caller supplies a fresh instance id.
  */
-export function splitLeafAt(root: DockNode, path: Path, dir: "row" | "col", newId?: string | null): DockNode {
+export function splitLeafAt(
+  root: DockNode,
+  path: Path,
+  dir: "row" | "col",
+  newId?: string | null,
+  factor = 0.5,
+): DockNode {
   const l = nodeAt(root, path);
   if (l?.kind !== "leaf") return root;
 
@@ -269,7 +275,8 @@ export function splitLeafAt(root: DockNode, path: Path, dir: "row" | "col", newI
   } else {
     return root;
   }
-  return normalize(replaceAt(root, path, split(dir, [rest, leaf([moved])], [0.5, 0.5]))) ?? root;
+  const f = Math.min(0.9, Math.max(0.1, factor));
+  return normalize(replaceAt(root, path, split(dir, [rest, leaf([moved])], [f, 1 - f]))) ?? root;
 }
 
 /** Can `splitLeafAt` do anything here? Drives the menu's disabled state. */
@@ -334,6 +341,16 @@ const GAP = 6;
 const GRAB = 3;
 /** Card corner radius. */
 const RADIUS = 8;
+
+/**
+ * Is a dock modal (the split phantom) running? Blender lets a running modal
+ * operator eat events before the keymap gets them; we have no keymap layer,
+ * so the editor's global chord handler asks this first. Without it Tab stays
+ * owned by App (toggle interact), which `stopPropagation`s it before the
+ * modal's own window listener — registered later — ever runs.
+ */
+let modalRunning = false;
+export const dockModalActive = () => modalRunning;
 
 interface DragState {
   id: string;
@@ -452,6 +469,94 @@ function previewBox(rect: DOMRect, root: DOMRect, zone: DropZone): CSSProperties
   return { left, top: top + h * (1 - NEW_PANE), width: w, height: h * NEW_PANE };
 }
 
+// ------------------------------------------------------- the split preview
+
+/**
+ * Picking a Split from Area Options doesn't cut anything yet — it arms a
+ * phantom, exactly as Blender's `area_split_modal` does. Move to place the
+ * line, click to commit, Escape or right-click to back out.
+ */
+interface SplitAim {
+  dir: "row" | "col";
+  /** The leaf under the cursor. Re-picked on every move: Blender's modal calls
+   *  `BKE_screen_find_area_xy(event->xy)` each time, so sliding into a
+   *  neighbouring pane re-targets the split rather than clamping to the pane
+   *  you started in. */
+  path: Path | null;
+  rect: DOMRect | null;
+  /** 0..1 along the split axis of that pane. */
+  factor: number;
+  /** Ctrl held: `area_split_snap_calc_location`. */
+  snap: boolean;
+  /** Cleared when the pane can't take a split — too small, or nothing to move
+   *  into the new half. Blender's `area_split_allowed` + our unique-id limit. */
+  allowed: boolean;
+}
+
+/** Blender snaps to twelfths of the area, and to any other edge that lines up.
+ *  Ours has no free vertices, so the second half is the other panes' sashes
+ *  along the same axis — the same intent, expressed in a split tree. */
+function snapFactor(factor: number, rect: DOMRect, dir: "row" | "col", others: number[]): number {
+  const span = (dir === "row" ? rect.width : rect.height) || 1;
+  const origin = dir === "row" ? rect.left : rect.top;
+  const cursor = origin + factor * span;
+
+  let best = factor;
+  let bestDist = Infinity;
+  for (let i = 0; i <= 12; i++) {
+    const d = Math.abs(cursor - (origin + (span * i) / 12));
+    if (d < bestDist) { bestDist = d; best = i / 12; }
+  }
+  for (const at of others) {
+    const d = Math.abs(cursor - at);
+    // Only inside this pane; the ends would mean "no split".
+    if (d < bestDist && at > origin && at < origin + span) { bestDist = d; best = (at - origin) / span; }
+  }
+  return best;
+}
+
+/**
+ * Blender's `screen_draw_split_preview`: two outlined ghosts, one either side
+ * of the pending line — white at 10% fill, 40% outline. At either extreme (it
+ * uses `factor < 0.0001 || factor > 0.9999`) it stops proposing a cut and
+ * highlights the whole area instead, which is also what we show when the pane
+ * can't be split at all.
+ */
+function SplitPreview({ aim, root }: { aim: SplitAim; root: DOMRect }) {
+  if (!aim.rect) return null;
+  const inner = "rgba(255,255,255,0.10)";
+  const outline = "1px solid rgba(255,255,255,0.4)";
+  const left = aim.rect.left - root.left;
+  const top = aim.rect.top - root.top;
+  const { width: w, height: h } = aim.rect;
+
+  const ghost = (s: CSSProperties, key: string) => (
+    <div
+      key={key}
+      data-dock-splitghost={key}
+      style={{ position: "absolute", background: inner, border: outline, borderRadius: RADIUS, boxSizing: "border-box", pointerEvents: "none", zIndex: 60, ...s }}
+    />
+  );
+
+  if (!aim.allowed || aim.factor < 0.0001 || aim.factor > 0.9999) {
+    return ghost({ left, top, width: w, height: h }, "whole");
+  }
+  const half = GAP / 2;
+  return aim.dir === "row"
+    ? (
+      <>
+        {ghost({ left, top, width: Math.max(0, w * aim.factor - half), height: h }, "first")}
+        {ghost({ left: left + w * aim.factor + half, top, width: Math.max(0, w * (1 - aim.factor) - half), height: h }, "second")}
+      </>
+    )
+    : (
+      <>
+        {ghost({ left, top, width: w, height: Math.max(0, h * aim.factor - half) }, "first")}
+        {ghost({ left, top: top + h * aim.factor + half, width: w, height: Math.max(0, h * (1 - aim.factor) - half) }, "second")}
+      </>
+    );
+}
+
 // -------------------------------------------------------------- the component
 
 export interface DockProps {
@@ -485,6 +590,7 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
   const rootRef = useRef<HTMLDivElement>(null);
   const leaves = useRef(new Map<string, HTMLElement>());
   const [sash, setSash] = useState<SashMenu | null>(null);
+  const [aim, setAim] = useState<SplitAim | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
@@ -493,6 +599,117 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
     if (el) leaves.current.set(key, el);
     else leaves.current.delete(key);
   }, []);
+
+  const leafUnder = useCallback((x: number, y: number): { key: string; rect: DOMRect } | null => {
+    for (const [key, el] of leaves.current) {
+      const rect = el.getBoundingClientRect();
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return { key, rect };
+    }
+    return null;
+  }, []);
+
+  // --- split preview (Blender's modal) --------------------------------------
+
+  /** Re-aim at whatever pane the cursor is over now, and work out the factor. */
+  const aimAt = useCallback((dir: "row" | "col", x: number, y: number, snap: boolean): SplitAim => {
+    const hit = leafUnder(x, y);
+    if (!hit) return { dir, path: null, rect: null, factor: 0.5, snap, allowed: false };
+    const path = pathOfKey(hit.key);
+    const node = nodeAt(layout, path);
+
+    // `area_split_allowed`: the pane must be at least double the minimum on
+    // the split axis. Plus our own limit — something has to move into the
+    // new half, so a lone un-duplicable panel can't split.
+    const span = dir === "row" ? hit.rect.width : hit.rect.height;
+    const dup = node?.kind === "leaf" ? (newInstance?.(node.active) ?? null) : null;
+    const allowed = span >= 2 * MIN_PANE && canSplit(layout, path, !!dup);
+
+    let factor = dir === "row"
+      ? (x - hit.rect.left) / (hit.rect.width || 1)
+      : (y - hit.rect.top) / (hit.rect.height || 1);
+    if (snap) {
+      const seams = [...(rootRef.current?.querySelectorAll<HTMLElement>(`[data-dock-splitter="${dir === "row" ? "vertical" : "horizontal"}"]`) ?? [])]
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return dir === "row" ? r.left + r.width / 2 : r.top + r.height / 2;
+        });
+      factor = snapFactor(factor, hit.rect, dir, seams);
+    }
+    return { dir, path, rect: hit.rect, factor: Math.min(1, Math.max(0, factor)), snap, allowed };
+  }, [layout, leafUnder, newInstance]);
+
+  /** The modal's live state. A ref, not effect-local: `newInstance` and
+   *  `onLayout` are inline props, so the effect below is re-created on any
+   *  parent render — effect-local state would silently reset the axis you
+   *  flipped and the cursor position you aimed with. */
+  const aimCtl = useRef({ dir: "row" as "row" | "col", x: 0, y: 0, snap: false, ok: false });
+
+  const beginSplit = useCallback((dir: "row" | "col", x: number, y: number) => {
+    aimCtl.current = { dir, x, y, snap: false, ok: true };
+    setAim(aimAt(dir, x, y, false));
+  }, [aimAt]);
+
+  useEffect(() => {
+    modalRunning = !!aim;
+    return () => { modalRunning = false; };
+  }, [aim]);
+
+  useEffect(() => {
+    if (!aim) return;
+    const ctl = aimCtl.current;
+
+    const repaint = () => { if (ctl.ok) setAim(aimAt(ctl.dir, ctl.x, ctl.y, ctl.snap)); };
+    const flip = () => { ctl.dir = ctl.dir === "row" ? "col" : "row"; repaint(); };
+    const move = (e: PointerEvent) => {
+      ctl.x = e.clientX; ctl.y = e.clientY; ctl.snap = e.ctrlKey; ctl.ok = true;
+      repaint();
+    };
+    // Commit on release, not press: the click that chose the menu item is
+    // still travelling, and a press-to-commit would swallow it.
+    const up = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const shot = ctl.ok ? aimAt(ctl.dir, ctl.x, ctl.y, ctl.snap) : null;
+      setAim(null);
+      if (shot?.path && shot.allowed && shot.factor > 0.0001 && shot.factor < 0.9999) {
+        const node = nodeAt(layout, shot.path);
+        const dup = node?.kind === "leaf" ? (newInstance?.(node.active) ?? null) : null;
+        onLayout(splitLeafAt(layout, shot.path, shot.dir, dup, shot.factor));
+      }
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setAim(null); return; }
+      // Blender: Tab (or middle mouse) flips the axis mid-modal.
+      if (e.key === "Tab") { e.preventDefault(); e.stopImmediatePropagation(); flip(); return; }
+      if (e.key === "Control") { ctl.snap = true; repaint(); }
+    };
+    const keyUp = (e: KeyboardEvent) => { if (e.key === "Control") { ctl.snap = false; repaint(); } };
+    const aux = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      flip();
+    };
+    const ctx = (e: MouseEvent) => { e.preventDefault(); setAim(null); };
+
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("keyup", keyUp, true);
+    window.addEventListener("auxclick", aux, true);
+    window.addEventListener("contextmenu", ctx, true);
+    window.addEventListener("blur", () => setAim(null), { once: true });
+    return () => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("keyup", keyUp, true);
+      window.removeEventListener("auxclick", aux, true);
+      window.removeEventListener("contextmenu", ctx, true);
+    };
+    // Re-armed only when a preview starts, not on every factor change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!aim, aimAt, layout, onLayout, newInstance]);
 
   // --- tab drag ------------------------------------------------------------
 
@@ -617,11 +834,27 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
           menu={sash}
           layout={layout}
           title={title}
-          newInstance={newInstance}
           onClose={() => setSash(null)}
           onLayout={onLayout}
+          onBeginSplit={beginSplit}
         />
       )}
+
+      {/* Same iframe problem as the tab drag: without a shield the phantom
+          freezes the moment the cursor crosses the canvas. The split cursor
+          lives here too, so it holds across every pane. */}
+      {aim && (
+        <div
+          data-dock-splitaim={aim.allowed ? aim.dir : "blocked"}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 55,
+            cursor: !aim.allowed ? "not-allowed" : aim.dir === "row" ? "col-resize" : "row-resize",
+          }}
+        />
+      )}
+      {aim && rootRect && <SplitPreview aim={aim} root={rootRect} />}
 
       {/* A pointer over an iframe delivers its events to THAT document, not
           ours — so dragging across the canvas silently froze the drop preview
@@ -687,8 +920,6 @@ interface SashMenu {
   path: Path;
   /** The sash sits between children i and i+1. */
   i: number;
-  /** Which neighbour the Split items act on. */
-  side: "first" | "second";
   dir: "row" | "col";
 }
 
@@ -742,7 +973,7 @@ function DockSplitView({ node, path, ...rest }: BranchProps & { node: DockSplit 
                 key={`s${i}`}
                 row={row}
                 onDown={(e) => startResize(i, e)}
-                onMenu={(e, side) => rest.onSashMenu({ x: e.clientX, y: e.clientY, path, i, side, dir: node.dir })}
+                onMenu={(e) => rest.onSashMenu({ x: e.clientX, y: e.clientY, path, i, dir: node.dir })}
               />,
             ]
           : [pane];
@@ -768,7 +999,7 @@ function Splitter({
 }: {
   row: boolean;
   onDown: (e: React.PointerEvent) => void;
-  onMenu: (e: React.MouseEvent, side: "first" | "second") => void;
+  onMenu: (e: React.MouseEvent) => void;
 }) {
   const [hot, setHot] = useState(false);
   return (
@@ -795,12 +1026,7 @@ function Splitter({
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          // Which side of the seam's centre line was clicked decides which
-          // pane the Split items act on — the menu names it, so there's no
-          // guessing.
-          const r = e.currentTarget.getBoundingClientRect();
-          const before = row ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2;
-          onMenu(e, before ? "first" : "second");
+          onMenu(e);
         }}
         style={{
           position: "absolute",
@@ -837,24 +1063,24 @@ function Splitter({
 }
 
 /**
- * Blender's Area Options, on right-click of a sash. Split acts on whichever
- * neighbour you clicked nearer — named in the menu's title so it isn't a
- * guess. Join and Swap act on the pair.
+ * Blender's Area Options, on right-click of a sash. Join and Swap act on the
+ * pair either side of it; Split arms a phantom you then place by hand, so it
+ * isn't tied to this seam at all.
  */
 function AreaOptions({
   menu,
   layout,
   title,
-  newInstance,
   onClose,
   onLayout,
+  onBeginSplit,
 }: {
   menu: SashMenu;
   layout: DockNode;
   title: (id: string) => string;
-  newInstance?: (id: string) => string | null;
   onClose: () => void;
   onLayout: (n: DockNode) => void;
+  onBeginSplit: (dir: "row" | "col", x: number, y: number) => void;
 }) {
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -868,13 +1094,6 @@ function AreaOptions({
 
   const parent = nodeAt(layout, menu.path);
   if (parent?.kind !== "split") return null;
-  const targetPath = [...menu.path, menu.side === "first" ? menu.i : menu.i + 1];
-  const targetNode = nodeAt(layout, targetPath);
-  const targetLeaf = targetNode?.kind === "leaf" ? targetNode : null;
-  const targetName = targetLeaf ? title(targetLeaf.active) : "this area";
-
-  const dup = targetLeaf ? (newInstance?.(targetLeaf.active) ?? null) : null;
-  const splittable = targetLeaf ? canSplit(layout, targetPath, !!dup) : false;
   const names = [menu.i, menu.i + 1].map((k) => {
     const n = parent.children[k];
     return n.kind === "leaf" ? title(n.active) : "group";
@@ -900,19 +1119,19 @@ function AreaOptions({
     onLayout(next);
   };
 
-  const items: { label: string; icon: string; disabled?: boolean; run: () => void; sep?: boolean }[] = [
-    {
-      label: "Vertical Split",
-      icon: "splitscreen_vertical_add",
-      disabled: !splittable,
-      run: () => act(splitLeafAt(layout, targetPath, "row", dup)),
-    },
-    {
-      label: "Horizontal Split",
-      icon: "splitscreen_add",
-      disabled: !splittable,
-      run: () => act(splitLeafAt(layout, targetPath, "col", dup)),
-    },
+  /* Split arms a phantom rather than cutting on the spot — Blender's
+   * `area_split_invoke` goes modal and `screen_draw_split_preview` follows the
+   * cursor. So there is no target to name and nothing to grey out here: the
+   * modal re-picks the pane on every move, and refuses with a whole-area
+   * ghost over panes that can't take a cut. */
+  const arm = (dir: "row" | "col") => (e: React.MouseEvent) => {
+    onClose();
+    onBeginSplit(dir, e.clientX, e.clientY);
+  };
+
+  const items: { label: string; icon: string; run: (e: React.MouseEvent) => void; sep?: boolean }[] = [
+    { label: "Vertical Split", icon: "splitscreen_vertical_add", run: arm("row") },
+    { label: "Horizontal Split", icon: "splitscreen_add", run: arm("col") },
     { label: "", icon: "", sep: true, run: () => {} },
     ...joins.map((j) => ({
       label: `Join ${j.word}`,
@@ -941,17 +1160,13 @@ function AreaOptions({
         ) : (
           <button
             key={k}
-            className={it.disabled ? undefined : "hv-menu"}
-            disabled={it.disabled}
-            title={it.disabled ? `${targetName} holds a single panel that can't be duplicated` : undefined}
+            className="hv-menu"
+            title={it.label.endsWith("Split") ? "Move to place the split, click to confirm. Tab flips it, Ctrl snaps, Esc cancels." : undefined}
             onClick={it.run}
-            style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: it.disabled ? C.faint : C.body, cursor: it.disabled ? "default" : "pointer", textAlign: "left" }}
+            style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }}
           >
             <Sym name={it.icon} size={14} />
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {it.label}
-              {it.label.endsWith("Split") && <span style={{ color: C.faint }}> · {targetName}</span>}
-            </span>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{it.label}</span>
           </button>
         ),
       )}

@@ -109,16 +109,33 @@ Checked against Blender's own source (`editors/screen/screen_ops.cc`,
   vertices to align, so there is nothing for it to do. Deliberately absent.
 - **Swap** trades the pair. Sizes stay with the *position*, not the pane, so
   the geometry is untouched and only the contents move.
-- **Split** acts on whichever neighbour you right-clicked nearer, named in the
-  menu so it isn't a guess. (Blender picks the area the cursor is in, then lets
-  you *drag* the split line — `area_split_invoke` seeds `factor` from the
-  cursor and goes modal. Ours lands at 50%; dragging the new sash is the same
-  gesture one beat later.) Blender clones the editor into the new half; our
-  panels are unique instances, so instead the pane's ACTIVE tab moves into it
-  — tearing a stacked tab out into its own area. A pane holding one panel can
-  only split if that panel is duplicable (the canvas), otherwise the item is
-  disabled with a tooltip saying why. That's the honest limit of a model where
-  panel ids are unique, not an oversight.
+- **Split** is modal, like Blender's (Sam, 2026-08-25: *"it gives you a phantom
+  split to select where you want it"*). Picking it from the menu cuts nothing;
+  it arms a preview you place by hand. Straight from `area_split_modal` and
+  `screen_draw_split_preview`:
+  - The target is **re-picked on every move** (`BKE_screen_find_area_xy` per
+    event), so sliding into another pane re-aims rather than clamping to the
+    one you opened the menu on. That is also why Split no longer names a
+    target or greys out — there is nothing to name until you move.
+  - The phantom is **two outlined ghosts** either side of the pending line,
+    white at 10% fill / 40% outline. At the extremes (Blender's
+    `factor < 0.0001 || factor > 0.9999`) it stops proposing a cut and
+    highlights the whole area — which is also our "can't split this" state.
+  - **Tab** (or middle-click) flips the axis, **Ctrl** snaps, **click**
+    commits, **Escape / right-click** cancels.
+  - Snapping is Blender's twelfths plus its align-to-other-edges pass. Blender
+    aligns to free vertices; we have none, so we snap to the other panes'
+    sashes along the same axis — same intent in a split tree.
+  - `area_split_allowed` (pane must be ≥2× the minimum on the axis) carries
+    over as-is. Our extra condition: something must move into the new half.
+    Blender clones the editor; our panel ids are unique, so instead the pane's
+    ACTIVE tab moves — tearing a stacked tab out into its own area. A pane
+    holding one un-duplicable panel therefore refuses, showing the whole-area
+    ghost. That's the honest limit of unique panel ids, not an oversight.
+  - A running modal **owns the keyboard**, as it does in Blender, where a modal
+    operator eats events before the keymap. `dockModalActive()` makes App's
+    global chord handler stand down; without it App's Tab (toggle interact)
+    `stopPropagation`s the flip before the modal's own listener runs.
 
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 
