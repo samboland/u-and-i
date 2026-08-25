@@ -61,8 +61,10 @@ what you actually get and a half-and-half sidebar is wrong for this app.
 
 **Panes are rounded cards on a void, not flush surfaces with a divider** (Sam,
 2026-08-18, with a screenshot of VS Code's window chrome). The barrier is the
-*gap*: `GAP`/`GUTTER` of 8px, `RADIUS` 8, one hairline outline per card, and a
-three-dot grip at the middle of each sash. Two earlier attempts at a drawn
+*gap*: `GAP`/`GUTTER` of 6px, `RADIUS` 8, one hairline outline per card, and a
+three-dot grip at the middle of each sash. The sash's grab area overhangs the
+gap by `GRAB` on each side, so the seam can look as narrow as it should
+without being fiddly to catch. Two earlier attempts at a drawn
 divider — a 6px slab, then a 1px hairline — both read as a smudge, because a
 line between two flush surfaces has nothing to separate. The outline matters
 for the canvas pane specifically: its body is the same near-black as the gap,

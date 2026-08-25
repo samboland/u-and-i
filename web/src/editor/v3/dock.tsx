@@ -243,9 +243,12 @@ const DRAG_SLOP = 5;
  */
 const EDGE = 12;
 /** Space around the pane grid, and between panes. The panes are rounded
- *  cards; this gap is what separates them. */
-const GUTTER = 8;
-const GAP = 8;
+ *  cards; this gap is what separates them. The sash's grab area is widened
+ *  past the gap (see Splitter) so a seam this narrow stays easy to catch. */
+const GUTTER = 6;
+const GAP = 6;
+/** How far the sash's grab area reaches past the gap, each side. */
+const GRAB = 3;
 /** Card corner radius. */
 const RADIUS = 8;
 
@@ -640,25 +643,35 @@ function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEven
   return (
     <div
       data-dock-splitter={row ? "col" : "row"}
-      onPointerDown={onDown}
-      onPointerEnter={() => setHot(true)}
-      onPointerLeave={() => setHot(false)}
       style={{
         flex: `0 0 ${GAP}px`,
+        position: "relative",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         background: "transparent",
-        cursor: row ? "col-resize" : "row-resize",
         zIndex: 6,
       }}
     >
+      {/* The grab area overhangs the gap on both sides, so the seam can look
+          as narrow as it should without being fiddly to grab. */}
+      <div
+        onPointerDown={onDown}
+        onPointerEnter={() => setHot(true)}
+        onPointerLeave={() => setHot(false)}
+        style={{
+          position: "absolute",
+          ...(row ? { top: 0, bottom: 0, left: -GRAB, right: -GRAB } : { left: 0, right: 0, top: -GRAB, bottom: -GRAB }),
+          cursor: row ? "col-resize" : "row-resize",
+        }}
+      />
       <div
         data-dock-grip
         style={{
           display: "flex",
           flexDirection: row ? "column" : "row",
           gap: 2,
+          pointerEvents: "none",
           opacity: hot ? 1 : 0.5,
           transition: "opacity 120ms ease-out",
         }}
