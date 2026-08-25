@@ -624,8 +624,6 @@ export interface DockProps {
   renderHeader?: (id: string) => ReactNode;
   /** Panels offered by the pane's type dropdown, in menu order. */
   panelMenu?: string[];
-  /** Panels the user may close from the header. Default: all. */
-  closable?: (id: string) => boolean;
   /**
    * A fresh instance id for a panel that may appear more than once, or null.
    * Lets Area Options ▸ Split work on a pane holding a single canvas.
@@ -633,7 +631,7 @@ export interface DockProps {
   newInstance?: (id: string) => string | null;
 }
 
-export function Dock({ layout, onLayout, title, icon, render, renderHeader, panelMenu, closable, newInstance }: DockProps) {
+export function Dock({ layout, onLayout, title, icon, render, renderHeader, panelMenu, newInstance }: DockProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const leaves = useRef(new Map<string, HTMLElement>());
   const [sash, setSash] = useState<SashMenu | null>(null);
@@ -908,7 +906,6 @@ export function Dock({ layout, onLayout, title, icon, render, renderHeader, pane
         render={render}
         renderHeader={renderHeader}
         panelMenu={panelMenu}
-        closable={closable}
         registerLeaf={registerLeaf}
         onTabDown={startDrag}
         onSashMenu={setSash}
@@ -1002,7 +999,6 @@ interface BranchProps {
   render: (id: string) => ReactNode;
   renderHeader?: (id: string) => ReactNode;
   panelMenu?: string[];
-  closable?: (id: string) => boolean;
   registerLeaf: (key: string, el: HTMLElement | null) => void;
   onTabDown: (id: string, ev: React.PointerEvent, onTap?: () => void) => void;
   onSashMenu: (m: SashMenu) => void;
@@ -1114,9 +1110,6 @@ function Splitter({
       style={{
         flex: `0 0 ${GAP}px`,
         position: "relative",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
         background: "transparent",
         zIndex: 6,
       }}
@@ -1135,12 +1128,25 @@ function Splitter({
         style={{
           position: "absolute",
           ...(row ? { top: 0, bottom: 0, left: -GRAB, right: -GRAB } : { left: 0, right: 0, top: -GRAB, bottom: -GRAB }),
-          cursor: row ? "col-resize" : "row-resize",
+          // `ew-`/`ns-resize` (plain double arrows), not `col-`/`row-resize`
+          // (Sam, 2026-08-25): those draw a split bar, which is the wrong
+          // promise on a sash you drag to resize. The split MODAL keeps the
+          // split-shaped cursor, where it means what it draws.
+          cursor: row ? "ew-resize" : "ns-resize",
         }}
       />
+      {/* Centred by transform, not by flex: the seam is only GAP px across, and
+          under the app's CSS zoom the track and the grip round independently,
+          so flex centring visibly drifted off the seam at some zooms (Sam,
+          2026-08-25). A 50% offset plus a -50% translate stays put because
+          both are fractions of the same box. */}
       <div
         data-dock-grip
         style={{
+          position: "absolute",
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
           display: "flex",
           flexDirection: row ? "column" : "row",
           gap: 2,
@@ -1324,7 +1330,10 @@ function EdgeBorders({ onMenu }: { onMenu: (e: React.MouseEvent, side: "top" | "
             e.stopPropagation();
             onMenu(e, side);
           }}
-          style={{ position: "absolute", zIndex: 20, ...style }}
+          // It cannot be dragged, so it must not promise a resize. Every other
+          // edge in the dock changes the cursor; a border that did nothing at
+          // all read as dead (Sam, 2026-08-25).
+          style={{ position: "absolute", zIndex: 20, cursor: "context-menu", ...style }}
         />
       ))}
     </>
@@ -1356,7 +1365,7 @@ function iconBtn(active: boolean, faded: boolean): CSSProperties {
  * inline to its right. Other panels docked here sit beside it as bare icons —
  * no wide text tabs, and no separate title bar underneath.
  */
-function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu, closable, registerLeaf, onTabDown, dragging, layout, onLayout }: BranchProps & { node: DockLeaf }) {
+function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu, registerLeaf, onTabDown, dragging, layout, onLayout }: BranchProps & { node: DockLeaf }) {
   const key = path.join(".");
   const ref = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1470,16 +1479,6 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
           {header}
         </div>
 
-        {(closable?.(node.active) ?? true) && (
-          <button
-            className="hv-close"
-            title={`Close ${title(node.active)}`}
-            onClick={(e) => { e.stopPropagation(); onLayout(closePanel(layout, node.active)); }}
-            style={{ flex: "0 0 auto", display: "flex", alignItems: "center", justifyContent: "center", width: 16, height: 16, background: "none", border: "none", borderRadius: 3, color: C.faint, fontFamily: MONO, fontSize: 11, cursor: "pointer" }}
-          >
-            ×
-          </button>
-        )}
       </div>
       {node.tabs.map((id) => (
         <div

@@ -100,10 +100,11 @@ try {
     headers.every((h) => h.height <= 34),
     `pane headers stay one row tall: ${JSON.stringify(headers.map((h) => h.height))}`,
   );
-  // The Canvas pane can't be closed away — it is the workspace's reason to be.
+  // No close button on a pane: Join is how a pane goes away (Sam, 2026-08-25),
+  // and View > Panels is how a panel does.
   check(
-    headers.every((h) => (h.active === "canvas" ? !h.closable : h.closable)),
-    `only the canvas pane lacks a close button: ${JSON.stringify(headers.map((h) => [h.active, h.closable]))}`,
+    headers.every((h) => !h.closable),
+    `pane headers carry no close button: ${JSON.stringify(headers.map((h) => [h.active, h.closable]))}`,
   );
 
   // Panes are rounded cards separated by a real gap, with a grip on the sash
@@ -532,26 +533,37 @@ try {
 
   // The reason it has to be clickable: a dock reduced to one pane has no
   // sashes left, so the outer border is the only way back to two.
-  for (const id of ["insert", "outliner", "properties"]) {
-    await page.locator(`[data-dock-leaf]:has([data-dock-tab="${id}"]) .hv-close`).first().click();
-    await page.waitForTimeout(250);
+  // Join every pane away, which is now the only way to lose one.
+  for (let guard = 0; guard < 8; guard++) {
+    if ((await page.locator("[data-dock-splitter]").count()) === 0) break;
+    const sel = (await page.locator('[data-dock-splitter="horizontal"]').count())
+      ? '[data-dock-splitter="horizontal"]'
+      : '[data-dock-splitter="vertical"]';
+    await openSash(sel);
+    await page.locator("[data-dock-areamenu] button", { hasText: "Join" }).first().click();
+    await page.waitForTimeout(300);
   }
-  check((await shape()) === "canvas", `closing every closable panel leaves one pane: ${await shape()}`);
+  const lonely = await leafMap();
+  check(
+    lonely.length === 1 && lonely[0].tabs.length === 4,
+    `joining every pane away leaves one holding all four panels: ${JSON.stringify(lonely.map((l) => l.tabs))}`,
+  );
   check((await page.locator("[data-dock-splitter]").count()) === 0, "a lone pane has no sash to right-click");
 
   const lone = await box("[data-dock-root]");
   await page.mouse.click(lone.x + lone.width / 2, lone.y + 2, { button: "right" });
   await page.waitForTimeout(250);
   await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
-  const loneCanvas = (await leafMap())[0].box;
-  await page.mouse.move(loneCanvas.x + loneCanvas.width * 0.4, loneCanvas.y + loneCanvas.height / 2);
+  const loneBox = (await leafMap())[0].box;
+  await page.mouse.move(loneBox.x + loneBox.width * 0.4, loneBox.y + loneBox.height / 2);
   await page.waitForTimeout(150);
   await page.mouse.down();
   await page.mouse.up();
   await page.waitForTimeout(350);
+  const back = await leafMap();
   check(
-    (await shape()) === "row[canvas, canvas#2]",
-    `the outer border splits a lone pane back into two: ${await shape()}`,
+    back.length === 2 && back.flatMap((l) => l.tabs).length === 4,
+    `the outer border splits a lone pane back into two, losing nothing: ${JSON.stringify(back.map((l) => l.tabs))}`,
   );
   await viewMenuItem("Reset layout");
 

@@ -27,7 +27,6 @@ import {
   C,
   DEVICES,
   MONO,
-  ROLES,
   ZOOMS,
   ctlBtn,
   inputStyle,
@@ -66,13 +65,17 @@ import {
 import { findModelNode, type FileEdit, type JsxNodeModel } from "./model";
 
 const MIME_JSX = "application/x-uai-jsx";
+/** The component harness needs *a* session to render authed components. It is
+ *  no longer a choice: the live canvas shows the real app, which signs in and
+ *  themes itself. */
+const CANVAS_ROLE = "Traveler";
 const APP_PREFIX = "app:";
 
 const WORKSPACES = [
-  { label: "Layout", hint: "edit the real running app" },
-  { label: "Style", hint: "edit theme tokens with a live preview" },
-  { label: "Workshop", hint: "build materials for the design system" },
-  { label: "Component", hint: "render one component alone with sample props" },
+  { label: "Layout" },
+  { label: "Style" },
+  { label: "Workshop" },
+  { label: "Component" },
 ] as const;
 type Workspace = (typeof WORKSPACES)[number]["label"];
 
@@ -297,7 +300,6 @@ export function App() {
   const [workspace, setWorkspace] = useState<Workspace>("Layout");
   const [outlinerMode, setOutlinerMode] = useState<"File" | "Routes">("Routes");
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [reopenLast, setReopenLast] = useState(() => loadPrefs().reopenLast);
   const [rulersOn, setRulersOn] = useState(() => loadPrefs().rulersOn);
@@ -305,7 +307,6 @@ export function App() {
   const [zoom, setZoom] = useState<number>(DEVICES.Desktop.zoom);
   const [targetRoot, setTargetRoot] = useState<string | null>(null);
   const [themeDark, setThemeDark] = useState(false);
-  const [role, setRole] = useState("Traveler");
   const [search, setSearch] = useState("");
   const [interact, setInteract] = useState(false);
   const interactRef = useRef(interact);
@@ -636,11 +637,11 @@ export function App() {
     send({
       type: "set-session",
       session: {
-        user: { name: `Canvas ${role}`, email: `${role.toLowerCase()}@example.com`, image: null, role: role.toLowerCase() },
+        user: { name: `Canvas ${CANVAS_ROLE}`, email: `${CANVAS_ROLE.toLowerCase()}@example.com`, image: null, role: CANVAS_ROLE.toLowerCase() },
         expires: "2099-01-01T00:00:00.000Z",
       },
     });
-  }, [role, send]);
+  }, [send]);
 
   const zoomBy = useCallback((dir: number) => {
     setZoom((z) => {
@@ -848,7 +849,6 @@ export function App() {
       else if (c.mod && (c.key === "=" || c.key === "+")) zoomBy(1);
       else if (c.mod && c.key === "-") zoomBy(-1);
       else if (c.mod && c.key === "0") setZoom(DEVICES[device].zoom);
-      else if (k === "p" && !c.mod && !c.alt) setPreviewOpen((v) => !v);
       else return false;
       return true;
     },
@@ -1057,8 +1057,6 @@ export function App() {
           action: () => setDeviceAnd(d),
         })),
         { sep: true },
-        { label: "Context…", accel: "P", action: () => setPreviewOpen(true) },
-        { sep: true },
         { label: "Reload canvas", action: () => iframeRef.current?.contentWindow?.location.reload() },
       ],
     },
@@ -1116,38 +1114,12 @@ export function App() {
           <>
             <Seg items={(Object.keys(DEVICES) as DeviceName[]).map((d) => ({ label: d, active: device === d, onClick: () => setDeviceAnd(d) }))} />
             <span style={{ flex: "0 0 auto", fontFamily: MONO, fontSize: 10.5, color: C.faint }}>{DEVICES[device].width}px</span>
-            <div style={{ flex: "0 0 auto", position: "relative", whiteSpace: "nowrap" }}>
-              <button
-                className="hv-ctl-border"
-                style={{ display: "flex", alignItems: "center", gap: 6, height: 20, padding: "0 7px", background: previewOpen ? C.ctl : "transparent", border: `1px solid ${previewOpen ? C.borderHover : C.border}`, borderRadius: 5, color: C.body, cursor: "pointer" }}
-                onClick={(e) => { e.stopPropagation(); setPreviewOpen((v) => !v); }}
-                title="Canvas context (P)"
-              >
-                <span style={{ fontFamily: MONO, fontSize: 10.5 }}>{role} · {themeDark ? "Abyss" : "Parchment"}</span>
-                <span style={{ fontSize: 7, color: C.faint }}>▼</span>
-              </button>
-              {previewOpen && (
-                <div style={{ position: "absolute", top: 24, left: 0, minWidth: 230, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 30 }} onClick={(e) => e.stopPropagation()}>
-                  {[
-                    { title: "Session role", items: ROLES.map((r) => ({ label: r, on: role === r, act: () => setRole(r) })) },
-                    { title: "Theme", items: [
-                      { label: "Parchment", on: !themeDark, act: () => setThemeDark(false) },
-                      { label: "Abyss", on: themeDark, act: () => setThemeDark(true) },
-                    ]},
-                  ].map((g, gi) => (
-                    <div key={g.title}>
-                      {gi > 0 && <div style={{ height: 1, background: C.border, margin: "4px 0" }} />}
-                      <div style={{ padding: "3px 10px 2px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em" }}>{g.title}</div>
-                      {g.items.map((it) => (
-                        <button key={it.label} className="hv-menu" style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: C.body, cursor: "pointer", textAlign: "left" }} onClick={it.act}>
-                          <span style={{ flex: "0 0 12px", color: C.blueLight, fontSize: 11 }}>{it.on ? "•" : ""}</span>
-                          <span style={{ flex: 1 }}>{it.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
+            {/* Canvas zoom, up from the old status bar — it belongs with the
+                device controls it modifies, not on a strip of its own. */}
+            <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 3 }}>
+              <button style={{ width: 18, height: 18, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 4, color: C.body, cursor: "pointer", lineHeight: 1 }} title="Zoom out (Ctrl+−)" onClick={() => zoomBy(-1)}>−</button>
+              <span style={{ fontFamily: MONO, fontSize: 10.5, color: C.body, width: 32, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+              <button style={{ width: 18, height: 18, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 4, color: C.body, cursor: "pointer", lineHeight: 1 }} title="Zoom in (Ctrl+=)" onClick={() => zoomBy(1)}>+</button>
             </div>
             <div style={{ flex: "1 1 0", minWidth: 4 }} />
             <div title="Tab toggles between editing and using the app">
@@ -1465,7 +1437,7 @@ export function App() {
   return (
     <div
       style={{ display: "flex", flexDirection: "column", height: `${100 / appZoom}vh`, zoom: appZoom, background: C.win, color: C.body, fontFamily: "system-ui, sans-serif", fontSize: 12, overflow: "hidden" }}
-      onClick={() => { if (openMenu) setOpenMenu(null); if (previewOpen) setPreviewOpen(false); if (ctxMenu) setCtxMenu(null); }}
+      onClick={() => { if (openMenu) setOpenMenu(null); if (ctxMenu) setCtxMenu(null); }}
     >
       {/* ---------------------------------------------------------- TopBar */}
       <div style={{ flex: "0 0 auto", minHeight: 32, display: "flex", flexWrap: "wrap", alignItems: "stretch", background: C.sunken, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", position: "relative", zIndex: 40 }}>
@@ -1517,47 +1489,42 @@ export function App() {
             </button>
           ))}
         </div>
-        <div style={{ flex: "1 1 0", minWidth: 8 }} />
-        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8 }}>
-          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: history.length ? C.body : C.faint, cursor: "pointer" }} title="Undo (Ctrl+Z)" onClick={undoAction}><Sym name="undo" /></button>
-          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: future.length ? C.body : C.faint, cursor: "pointer" }} title="Redo (Ctrl+Shift+Z)" onClick={redoAction}><Sym name="redo" /></button>
-        </div>
-      </div>
-
-      {/* ---------------------------------------------------------- DocumentRow */}
-      <div style={{ flex: "0 0 34px", display: "flex", alignItems: "center", gap: 10, padding: "0 10px", background: C.panel, borderBottom: `1px solid ${C.border}`, minWidth: 0, whiteSpace: "nowrap" }}>
-        <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 8px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text }}>
+        {/* What was the document row: which app, which file. One row, because
+            a strip that only restates the title is a strip of nothing. */}
+        <div style={{ ...vdiv, alignSelf: "center", margin: "0 8px" }} />
+        <span style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, alignSelf: "center", height: 22, padding: "0 8px", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: C.text }}>
           <span style={{ color: C.muted, fontSize: 11 }}>app</span>
           {targetLabel}
         </span>
-        <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, fontSize: 11, color: C.faint }}>
-          {fileState ? fileState.file : "open a component or route to start editing"}
+        <span style={{ flex: "0 1 auto", minWidth: 0, alignSelf: "center", overflow: "hidden", textOverflow: "ellipsis", padding: "0 8px", fontFamily: MONO, fontSize: 11, color: C.faint }} title={crumb}>
+          {fileState ? crumb : ""}
         </span>
-        <div style={{ ...vdiv, height: 16 }} />
-        <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontSize: 11, color: C.muted }}>
-          {WORKSPACES.find((w) => w.label === workspace)?.hint}
-        </span>
+
         <div style={{ flex: "1 1 0", minWidth: 8 }} />
-        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, height: 24, padding: "0 8px", background: C.sunken, border: `1px solid ${C.border}`, borderRadius: 5, fontFamily: MONO, fontSize: 11, color: C.green }} title="Every edit is written straight to source">
-          <span style={{ width: 6, height: 6, borderRadius: 99, background: C.green }} />
-          {savedAt ? `saved ${savedAt}` : "in sync"}
+        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 6, paddingRight: 8 }}>
+          {touchedFiles.size > 0 && (
+            <span style={{ color: C.amber, fontSize: 11, cursor: "help" }} title={[...touchedFiles].join("\n")}>
+              {touchedFiles.size} edited
+            </span>
+          )}
+          <span style={{ display: "flex", alignItems: "center", gap: 5, fontFamily: MONO, fontSize: 11, color: C.green }} title="Every edit is written straight to source">
+            <span style={{ width: 6, height: 6, borderRadius: 99, background: C.green }} />
+            {savedAt ? `saved ${savedAt}` : "in sync"}
+          </span>
+          <div style={{ ...vdiv, height: 16 }} />
+          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: history.length ? C.body : C.faint, cursor: "pointer" }} title="Undo (Ctrl+Z)" onClick={undoAction}><Sym name="undo" /></button>
+          <button style={{ width: 24, height: 22, display: "flex", alignItems: "center", justifyContent: "center", background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 5, color: future.length ? C.body : C.faint, cursor: "pointer" }} title="Redo (Ctrl+Shift+Z)" onClick={redoAction}><Sym name="redo" /></button>
+          <button
+            className="hv-primary"
+            style={{ display: "flex", alignItems: "center", gap: 5, height: 22, padding: "0 10px", ...primaryBtn, opacity: fileState?.renderable ? 1 : 0.5, cursor: fileState?.renderable ? "pointer" : "not-allowed" }}
+            disabled={!fileState?.renderable}
+            title="Open this component in its own window"
+            onClick={() => fileState?.renderable && window.open(`/harness.html?file=${encodeURIComponent(fileState.canvasKey)}`, "_blank")}
+          >
+            <Sym name="open_in_new" size={13} />
+            Preview
+          </button>
         </div>
-        <button
-          className="hv-primary"
-          style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 5, height: 24, padding: "0 10px", ...primaryBtn, opacity: fileState?.renderable ? 1 : 0.5, cursor: fileState?.renderable ? "pointer" : "not-allowed" }}
-          disabled={!fileState?.renderable}
-          title={
-            !fileState
-              ? "Nothing open — open a component (or a page's view) first"
-              : fileState.renderable
-                ? "Open this component in a new window — real size, fully interactive"
-                : `${fileState.file.split("/").pop()} is a server component — it can't render on the canvas`
-          }
-          onClick={() => fileState?.renderable && window.open(`/harness.html?file=${encodeURIComponent(fileState.canvasKey)}`, "_blank")}
-        >
-          <Sym name="open_in_new" size={13} />
-          Preview
-        </button>
       </div>
 
       {/* ------------------------------------------------ Workspace toolbar */}
@@ -1577,7 +1544,7 @@ export function App() {
           <button className="hv-ctl" style={{ ...ctlBtn, color: styleEdits ? C.body : C.faint }} onClick={() => { send({ type: "token-clear" }); void styleTokens.refetch(); }}>Reset preview</button>
           <div style={{ flex: "1 1 0", minWidth: 8 }} />
           <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>
-            {styleEdits ? `${styleEdits} change${styleEdits === 1 ? "" : "s"} written to the app's css` : "in sync with the app's css"}
+            {styleEdits ? `${styleEdits} change${styleEdits === 1 ? "" : "s"} · app css` : "in sync"}
           </span>
         </div>
       )}
@@ -1617,7 +1584,7 @@ export function App() {
             {Math.round(wsMat.graphZoom * 100)}%
           </button>
           <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO, fontSize: 11, color: C.faint }}>
-            {wsMat.matEdits ? `${wsMat.matEdits} unsaved change${wsMat.matEdits === 1 ? "" : "s"} · globals.css` : "in sync with globals.css"}
+            {wsMat.matEdits ? `${wsMat.matEdits} unsaved · globals.css` : "in sync"}
           </span>
         </div>
       )}
@@ -1630,7 +1597,6 @@ export function App() {
           title={(id) => PANEL_TITLE[basePanel(id)] ?? id}
           icon={(id) => PANEL_ICON[basePanel(id)] ?? "square"}
           panelMenu={groupPanels(group)}
-          closable={(id) => id !== GROUP_MAIN[group]}
           newInstance={(id) => (basePanel(id) === "canvas" ? nextInstanceId(layout, "canvas") : null)}
           renderHeader={renderPanelHeader}
           render={renderPanel}
@@ -1755,33 +1721,12 @@ export function App() {
               </Row>
 
               <div style={{ marginTop: 6, padding: "8px 10px", background: C.sunken, border: `1px dashed ${C.border}`, borderRadius: 6, fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
-                More settings will land here as the editor grows — keyboard remapping, default device, canvas theme, target switching.
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ---------------------------------------------------------- StatusBar */}
-      <div style={{ flex: "0 0 26px", display: "flex", alignItems: "center", gap: 10, padding: "0 10px", background: C.panel, borderTop: `1px solid ${C.border}`, fontSize: 11, minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
-        <span style={{ flex: "0 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", fontFamily: MONO, color: C.muted }}>{crumb}</span>
-        <div style={{ flex: "1 1 0", minWidth: 8 }} />
-        <span style={{ flex: "0 0 auto", color: C.green }}>{savedAt ? `saved to source at ${savedAt}` : "in sync with source"}</span>
-        {touchedFiles.size > 0 && (
-          <>
-            <div style={{ ...vdiv, height: 14 }} />
-            <span style={{ flex: "0 0 auto", color: C.amber, cursor: "help" }} title={[...touchedFiles].join("\n")}>
-              {touchedFiles.size} file{touchedFiles.size === 1 ? "" : "s"} edited — review with git
-            </span>
-          </>
-        )}
-        <div style={{ ...vdiv, height: 14 }} />
-        <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 4 }}>
-          <button style={{ width: 19, height: 18, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 4, color: C.body, cursor: "pointer", lineHeight: 1 }} title="Zoom out" onClick={() => zoomBy(-1)}>−</button>
-          <span style={{ fontFamily: MONO, color: C.body, width: 32, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
-          <button style={{ width: 19, height: 18, background: C.ctl, border: `1px solid ${C.border}`, borderRadius: 4, color: C.body, cursor: "pointer", lineHeight: 1 }} title="Zoom in" onClick={() => zoomBy(1)}>+</button>
-        </div>
-      </div>
     </div>
   );
 }

@@ -182,6 +182,38 @@ also no way to click on borders other than those directly between 2 windows"*).
   comfortable target, and they sit above the panes — a right-click over the
   canvas would otherwise be swallowed by the iframe and never reach us.
 
+**Chrome trimmed** (Sam, 2026-08-25). The editor had three horizontal strips
+around the dock; it now has one.
+
+- **The document row is gone.** It restated the title bar — target, file path,
+  save state, Preview — so all four moved into the top bar beside the
+  workspace tabs.
+- **The status bar is gone.** File path and save state were duplicated from
+  the document row; the touched-files count moved to the top bar; the canvas
+  zoom stepper moved into the canvas pane header, next to the device controls
+  it modifies. That is 60px of canvas back.
+- **Session role and Theme are gone** from the canvas header. The live canvas
+  is the real running app, which signs in and themes itself — those pickers
+  only ever drove the component harness. The harness still needs *a* session,
+  so `CANVAS_ROLE` is a constant now. The Style workspace keeps its own theme
+  preview, which is a different control that still does something.
+- **Prose removed**: the workspace hints ("edit the real running app"), the
+  Preferences filler paragraph, and the chattier status strings.
+
+**Pane and sash tweaks** (same round):
+
+- **No close button on a pane.** Join is how a pane goes away; View ▸ Panels
+  is how a panel does. The × was a third mechanism for neither.
+- **The sash grip is centred by transform**, not by flex. The seam is GAP px
+  across, and under the app's CSS zoom the track and the grip rounded
+  independently, so the three dots visibly drifted off the seam. Now within
+  0.01px at every zoom.
+- **`ew-`/`ns-resize` on a sash**, not `col-`/`row-resize`: those draw a split
+  bar, which is the wrong promise on something you drag to resize. The split
+  modal keeps a split-shaped cursor, where it means what it draws. The outer
+  border gets `context-menu`, because it opens a menu and cannot be dragged —
+  it previously changed nothing at all, which read as dead.
+
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 
 ## Where we are (2026-08-16)
