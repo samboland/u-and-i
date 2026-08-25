@@ -102,6 +102,25 @@ try {
     `only the canvas pane lacks a close button: ${JSON.stringify(headers.map((h) => [h.active, h.closable]))}`,
   );
 
+  // Panes are rounded cards separated by a real gap, with a grip on the sash
+  // — the barrier is the space, not a drawn line.
+  const cards = await page.evaluate(() => {
+    const leaf = document.querySelector("[data-dock-leaf]");
+    const s = getComputedStyle(leaf);
+    const sash = document.querySelector("[data-dock-splitter]");
+    return {
+      radius: parseInt(s.borderTopLeftRadius, 10),
+      outlined: parseInt(s.borderTopWidth, 10) === 1,
+      gap: Math.round(sash?.getBoundingClientRect().width ?? 0),
+      grips: document.querySelectorAll("[data-dock-grip]").length,
+      splitters: document.querySelectorAll("[data-dock-splitter]").length,
+    };
+  });
+  check(
+    cards.radius >= 6 && cards.outlined && cards.gap >= 6 && cards.grips === cards.splitters && cards.grips > 0,
+    `panes are rounded cards with a gap and a sash grip: ${JSON.stringify(cards)}`,
+  );
+
   // --- drag a tab onto another leaf's tab strip: they stack as tabs --------
   const propsBar = await box('[data-dock-leaf] [data-dock-tab="properties"]');
   await dragTabTo("insert", propsBar.x + propsBar.width + 30, propsBar.y + propsBar.height / 2);

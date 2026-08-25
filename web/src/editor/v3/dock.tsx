@@ -242,7 +242,12 @@ const DRAG_SLOP = 5;
  * edge zone sat right on them and made a caret drop there nearly unhittable.
  */
 const EDGE = 12;
-const GUTTER = 6;
+/** Space around the pane grid, and between panes. The panes are rounded
+ *  cards; this gap is what separates them. */
+const GUTTER = 8;
+const GAP = 8;
+/** Card corner radius. */
+const RADIUS = 8;
 
 interface DragState {
   id: string;
@@ -621,11 +626,14 @@ function DockSplitView({ node, path, ...rest }: BranchProps & { node: DockSplit 
 }
 
 /**
- * The seam between two panes. Painted as a single dark hairline — panes are
- * lighter than the gap, so the line reads as space between raised surfaces.
- * The grab area is much wider than the line: a 1px target would be miserable
- * to hit, and a 6px slab of near-panel grey (what this used to be, on top of
- * each pane's own border) just looked like a smudge.
+ * The seam between two panes. Not a drawn line: the panes are rounded cards
+ * with a real gap between them, so the barrier IS the gap, the way VS Code's
+ * newer window chrome does it. A hairline squeezed between two square panes
+ * read as a smudge and Sam called it — cards and space are legible, a 1px
+ * divider between flush surfaces is not.
+ *
+ * The only mark is a three-dot grip at the middle of the seam, so a draggable
+ * gap doesn't look like dead space.
  */
 function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEvent) => void }) {
   const [hot, setHot] = useState(false);
@@ -636,24 +644,38 @@ function Splitter({ row, onDown }: { row: boolean; onDown: (e: React.PointerEven
       onPointerEnter={() => setHot(true)}
       onPointerLeave={() => setHot(false)}
       style={{
-        flex: "0 0 7px",
+        flex: `0 0 ${GAP}px`,
         display: "flex",
-        alignItems: "stretch",
+        alignItems: "center",
         justifyContent: "center",
-        flexDirection: row ? "row" : "column",
         background: "transparent",
         cursor: row ? "col-resize" : "row-resize",
         zIndex: 6,
       }}
     >
       <div
+        data-dock-grip
         style={{
-          flex: `0 0 ${hot ? 3 : 1}px`,
-          background: hot ? C.blue : C.void,
-          borderRadius: 2,
-          transition: "flex-basis 90ms, background 90ms",
+          display: "flex",
+          flexDirection: row ? "column" : "row",
+          gap: 2,
+          opacity: hot ? 1 : 0.5,
+          transition: "opacity 120ms ease-out",
         }}
-      />
+      >
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            style={{
+              width: 2,
+              height: 2,
+              borderRadius: 1,
+              background: hot ? C.blueLight : C.faint,
+              transition: "background 120ms ease-out",
+            }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -707,9 +729,20 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
     <div
       ref={ref}
       data-dock-leaf={key}
-      // No border of its own: the seam between panes is the Splitter, and
-      // doubling them made one mushy band instead of a clean line.
-      style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: C.panel, overflow: "hidden" }}
+      // A rounded card with a hairline outline, floating on the dock's void.
+      // The outline is what keeps the canvas pane — whose body is the same
+      // near-black as the gap — from dissolving into the background.
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        minHeight: 0,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: RADIUS,
+        overflow: "hidden",
+      }}
     >
       <div
         data-dock-tabbar

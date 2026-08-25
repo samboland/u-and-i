@@ -59,6 +59,15 @@ open source — so the numbers below are read off `editordroptarget.css` and
 We keep a 32% split rather than VS Code's 50%, because the preview must match
 what you actually get and a half-and-half sidebar is wrong for this app.
 
+**Panes are rounded cards on a void, not flush surfaces with a divider** (Sam,
+2026-08-18, with a screenshot of VS Code's window chrome). The barrier is the
+*gap*: `GAP`/`GUTTER` of 8px, `RADIUS` 8, one hairline outline per card, and a
+three-dot grip at the middle of each sash. Two earlier attempts at a drawn
+divider — a 6px slab, then a 1px hairline — both read as a smudge, because a
+line between two flush surfaces has nothing to separate. The outline matters
+for the canvas pane specifically: its body is the same near-black as the gap,
+so without it the card dissolves into the background.
+
 Decisions Sam settled at design time: **individual cards**, not whole
 workspaces; cards always dock somewhere — nothing floats FL-Studio-style;
 the arrangement saves itself into the per-project session; and yes, the
