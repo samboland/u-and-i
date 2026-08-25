@@ -373,7 +373,7 @@ try {
   await openSash('[data-dock-splitter="vertical"]');
   const vItems = await areaItems();
   check(
-    vItems.map((i) => i.label.split(" ·")[0]).join("|") === "Vertical Split|Horizontal Split|Join Left|Join Right|Swap Areas",
+    vItems.map((i) => i.label.split(" ·")[0]).join("|") === "Vertical Split|Horizontal Split|Join Right|Join Left|Swap Areas",
     `a vertical sash offers Blender's area options: ${JSON.stringify(vItems.map((i) => i.label))}`,
   );
   // Split names the pane it will act on — the side of the seam you clicked.
@@ -387,10 +387,12 @@ try {
   await viewMenuItem("Reset layout");
 
   await openSash('[data-dock-splitter="vertical"]');
+  // Blender's label is the direction the survivor GROWS: "Join Right" keeps
+  // the left pane (Insert) and expands it over Canvas.
   await pick("Join Right");
   check(
-    (await shape()) === "row[canvas+insert, col[outliner, properties]]",
-    `Join keeps the named side and moves the other's panels in: ${await shape()}`,
+    (await shape()) === "row[insert+canvas, col[outliner, properties]]",
+    `Join Right keeps the left pane and moves the other's panels in: ${await shape()}`,
   );
   await viewMenuItem("Reset layout");
 
@@ -401,8 +403,9 @@ try {
     hItems.some((i) => i.label === "Join Up") && hItems.some((i) => i.label === "Join Down"),
     `a horizontal sash joins Up/Down: ${JSON.stringify(hItems.map((i) => i.label))}`,
   );
+  // "Join Up" keeps the BOTTOM pane (Properties) and grows it upward.
   await pick("Join Up");
-  check((await shape()) === "row[insert, canvas, outliner+properties]", `Join Up merges the stacked pair: ${await shape()}`);
+  check((await shape()) === "row[insert, canvas, properties+outliner]", `Join Up keeps the lower pane and grows it up: ${await shape()}`);
   await viewMenuItem("Reset layout");
 
   // Split works where a panel can be duplicated — click the canvas side.

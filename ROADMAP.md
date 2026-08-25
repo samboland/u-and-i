@@ -90,13 +90,30 @@ Two things worth knowing:
 **Area Options** (Sam, 2026-08-18, from Blender's sash menu). Right-click any
 sash: Vertical Split, Horizontal Split, Join <dir>, Swap Areas.
 
-- **Join** keeps the named side and moves the other's panels into it as tabs —
-  it never destroys a panel. Directions are Left/Right on a vertical sash,
-  Up/Down on a horizontal one.
+Checked against Blender's own source (`editors/screen/screen_ops.cc`,
+`screen_area_options_invoke`) — which corrected our Join labels, see below.
+
+- **Join** — the label names the direction the *survivor grows*, not the side
+  you keep: "Join Right" keeps the LEFT pane and expands it rightwards. We had
+  this inverted until we read the source. Blender's menu order follows suit:
+  Right-then-Left on a vertical sash, Up-then-Down on a horizontal one (its Y
+  axis points up, ours down, so the two cases keep opposite children).
+  Blender's `screen_area_join_aligned` ends in `screen_delarea(sa2)` — it
+  *destroys* the losing editor. We move its panels in as tabs instead: Blender
+  can delete an editor because any area can become any editor, whereas our
+  panel ids are unique and a deleted panel has to be hunted back out of the
+  type dropdown.
+- **Merge Edge** — Blender's fourth item, offered when
+  `screen_geom_edge_can_extend`. It extends a sash across aligned neighbours,
+  which needs free-form vertex geometry; our layout is a split tree with no
+  vertices to align, so there is nothing for it to do. Deliberately absent.
 - **Swap** trades the pair. Sizes stay with the *position*, not the pane, so
   the geometry is untouched and only the contents move.
 - **Split** acts on whichever neighbour you right-clicked nearer, named in the
-  menu so it isn't a guess. Blender clones the editor into the new half; our
+  menu so it isn't a guess. (Blender picks the area the cursor is in, then lets
+  you *drag* the split line — `area_split_invoke` seeds `factor` from the
+  cursor and goes modal. Ours lands at 50%; dragging the new sash is the same
+  gesture one beat later.) Blender clones the editor into the new half; our
   panels are unique instances, so instead the pane's ACTIVE tab moves into it
   — tearing a stacked tab out into its own area. A pane holding one panel can
   only split if that panel is duplicable (the canvas), otherwise the item is

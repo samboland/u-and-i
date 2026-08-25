@@ -206,8 +206,14 @@ function addTabsToFirstLeaf(n: DockNode, ids: string[]): DockNode {
 
 /**
  * Blender's Join: the two areas either side of a sash become one. `keep` says
- * which side survives; the other side's panels move into it as tabs rather
- * than being destroyed, and the survivor takes the combined space.
+ * which side survives and takes the combined space — note the MENU labels the
+ * direction the survivor grows, so "Join Right" keeps the *left* pane.
+ *
+ * One deliberate departure from `screen_area_join_aligned`, which calls
+ * `screen_delarea(sa2)`: we move the other side's panels in as tabs instead of
+ * destroying them. Blender can afford to delete an editor because any area can
+ * become any editor; our panel ids are unique, so a destroyed panel would have
+ * to be hunted back out of the type dropdown.
  */
 export function joinAt(root: DockNode, path: Path, i: number, keep: "first" | "second"): DockNode {
   const s = nodeAt(root, path);
@@ -873,7 +879,21 @@ function AreaOptions({
     const n = parent.children[k];
     return n.kind === "leaf" ? title(n.active) : "group";
   });
-  const [firstWord, secondWord] = menu.dir === "row" ? ["Left", "Right"] : ["Up", "Down"];
+  /* Order and meaning read from Blender's `screen_area_options_invoke`: the
+   * label is the direction the SURVIVOR grows, not which pane you keep. "Join
+   * Right" keeps the left pane and expands it rightwards. Blender lists
+   * Right-then-Left for a vertical seam and Up-then-Down for a horizontal one
+   * (its Y axis points up, ours down — hence the asymmetric `keep`). */
+  const joins: { word: string; icon: string; keep: "first" | "second" }[] =
+    menu.dir === "row"
+      ? [
+          { word: "Right", icon: "arrow_forward", keep: "first" },
+          { word: "Left", icon: "arrow_back", keep: "second" },
+        ]
+      : [
+          { word: "Up", icon: "arrow_upward", keep: "second" },
+          { word: "Down", icon: "arrow_downward", keep: "first" },
+        ];
 
   const act = (next: DockNode) => {
     onClose();
@@ -894,16 +914,11 @@ function AreaOptions({
       run: () => act(splitLeafAt(layout, targetPath, "col", dup)),
     },
     { label: "", icon: "", sep: true, run: () => {} },
-    {
-      label: `Join ${firstWord}`,
-      icon: menu.dir === "row" ? "arrow_back" : "arrow_upward",
-      run: () => act(joinAt(layout, menu.path, menu.i, "first")),
-    },
-    {
-      label: `Join ${secondWord}`,
-      icon: menu.dir === "row" ? "arrow_forward" : "arrow_downward",
-      run: () => act(joinAt(layout, menu.path, menu.i, "second")),
-    },
+    ...joins.map((j) => ({
+      label: `Join ${j.word}`,
+      icon: j.icon,
+      run: () => act(joinAt(layout, menu.path, menu.i, j.keep)),
+    })),
     { label: "", icon: "", sep: true, run: () => {} },
     { label: "Swap Areas", icon: "swap_horiz", run: () => act(swapAt(layout, menu.path, menu.i)) },
   ];
