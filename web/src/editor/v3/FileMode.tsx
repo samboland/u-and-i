@@ -13,13 +13,46 @@ import { type FileEdit, type JsxNodeModel } from "./model";
 // Outliner
 // ---------------------------------------------------------------------------
 
+/** Material Symbols icon per JSX tag (rounded set, self-hosted font). */
 function nodeGlyph(m: JsxNodeModel): { glyph: string; color: string } {
-  if (/^[A-Z]/.test(m.tag)) return { glyph: "⧉", color: C.blueLight };
-  if (/^h[1-6]$/.test(m.tag)) return { glyph: "H", color: C.muted };
-  if (m.tag === "p" || m.tag === "span") return { glyph: "¶", color: C.muted };
-  if (m.tag === "img" || m.tag === "svg") return { glyph: "▨", color: C.muted };
-  if (m.tag === "button" || m.tag === "a") return { glyph: "▭", color: C.muted };
-  return { glyph: "◇", color: C.muted };
+  if (/^[A-Z]/.test(m.tag)) return { glyph: "deployed_code", color: C.blueLight };
+  if (/^h[1-6]$/.test(m.tag)) return { glyph: `format_h${m.tag[1]}`, color: C.muted };
+  if (m.tag === "p" || m.tag === "span") return { glyph: "notes", color: C.muted };
+  if (m.tag === "img" || m.tag === "svg") return { glyph: "image", color: C.muted };
+  if (m.tag === "button") return { glyph: "smart_button", color: C.muted };
+  if (m.tag === "a") return { glyph: "link", color: C.muted };
+  if (m.tag === "ul" || m.tag === "ol" || m.tag === "li") return { glyph: "format_list_bulleted", color: C.muted };
+  if (m.tag === "input" || m.tag === "textarea" || m.tag === "select") return { glyph: "input", color: C.muted };
+  if (m.tag === "table") return { glyph: "table", color: C.muted };
+  return { glyph: "crop_square", color: C.muted };
+}
+
+/** Blender's collapsed-parent icon row: the hidden subtree's icons, merged by
+ *  kind with a count overlaid as text when more than one. Visual-only. */
+function CollapsedIcons({ nodes }: { nodes: JsxNodeModel[] }) {
+  const merged = new Map<string, { color: string; n: number }>();
+  const walk = (list: JsxNodeModel[]) => {
+    for (const c of list) {
+      const g = nodeGlyph(c);
+      const e = merged.get(g.glyph);
+      if (e) e.n += 1;
+      else merged.set(g.glyph, { color: g.color, n: 1 });
+      walk(c.children);
+    }
+  };
+  walk(nodes);
+  const entries = [...merged.entries()].slice(0, 4);
+  return (
+    <span style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 3, marginLeft: 4, opacity: 0.6 }}>
+      {entries.map(([glyph, e]) => (
+        <span key={glyph} style={{ display: "inline-flex", alignItems: "center", gap: 1 }}>
+          <span aria-hidden className="material-symbols-rounded" style={{ fontSize: 12, lineHeight: 1, color: e.color }}>{glyph}</span>
+          {e.n > 1 && <span style={{ fontFamily: MONO, fontSize: 9, color: C.faint }}>{e.n}</span>}
+        </span>
+      ))}
+      {merged.size > 4 && <span style={{ fontFamily: MONO, fontSize: 9, color: C.faint }}>…</span>}
+    </span>
+  );
 }
 
 function OutlinerNodes({
@@ -52,7 +85,9 @@ function OutlinerNodes({
               dim={m.dynamic}
               selected={focusId === m.id}
               mark={C.orange}
-              caret={m.children.length ? (open ? "▾" : "▸") : undefined}
+              caret={m.children.length ? (open ? "open" : "closed") : undefined}
+              after={!open && m.children.length > 0 ? <CollapsedIcons nodes={m.children} /> : undefined}
+              guideXs={Array.from({ length: depth }, (_, j) => 16 + j * 12)}
               right={m.dynamic ? (m.dynamicLabel ?? "dynamic") : undefined}
               onToggle={() => onToggle(m.id)}
               onClick={() => onSelect(m)}

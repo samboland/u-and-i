@@ -10,7 +10,7 @@ button { font: inherit; }
 .hv-danger:hover { background: #3a2424 !important; border-color: #5a3030 !important; }
 .hv-amber:hover { background: #4a3f24 !important; }
 .hv-primary:hover { background: #328ec1 !important; }
-.hv-row:hover { background: #242935 !important; }
+.hv-row:hover::after { content: ""; position: absolute; inset: 0; border-radius: 4px; background: rgba(255, 255, 255, 0.07); pointer-events: none; }
 .hv-card:hover { border-color: #3a4356 !important; }
 .hv-close:hover { background: #c42b1c !important; color: #ffffff !important; }
 .fc:focus { border-color: #328ec1 !important; outline: none; }

@@ -62,13 +62,14 @@ function Rows({
     <>
       <OutlinerRow
         pad={10 + depth * 13}
-        glyph={node.isGroup ? "( )" : node.isDynamic ? "[·]" : node.files.page ? "▤" : isApiOnly(node) ? "⚙" : "▸"}
+        glyph={node.isGroup ? "folder_open" : node.isDynamic ? "data_array" : node.files.page ? "description" : isApiOnly(node) ? "api" : "folder"}
         glyphColor={node.files.page ? C.blueLight : node.isGroup ? C.faint : C.muted}
         label={label}
         dim={node.isGroup || (!node.files.page && !isApiOnly(node))}
         selected={selectedId === id}
         mark={node.ownership === "owned" ? C.orange : C.blue}
-        caret={hasChildren ? (open ? "▾" : "▸") : undefined}
+        caret={hasChildren ? (open ? "open" : "closed") : undefined}
+        guideXs={Array.from({ length: depth }, (_, j) => 16 + j * 13)}
         right={badges.join(" · ") || undefined}
         onToggle={() => toggle(id)}
         onClick={() => {
