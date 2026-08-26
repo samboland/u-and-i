@@ -40,8 +40,9 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
     wired to the target's tsconfig).
 - `web/src/editor/v3/` — chrome. `App.tsx` owns all state; every mutation
   goes through the `editFile` funnel (write → replace model → re-anchor
-  selection to focusId → push undo → touched-files). Undo = byte-verbatim
-  `/api/restore` of `before`/`after`. `FileMode.tsx` = JSX outliner + node
+  selection to focusId → push undo). Undo = byte-verbatim `/api/restore` of
+  `before`/`after`; a rejected edit raises a transient toast, which is the
+  only report there is — there is no status strip to fall back on. `FileMode.tsx` = JSX outliner + node
   card. Sample render props live in localStorage only.
   `dock.tsx` = the docking layout: panels are cards in a pure-data
   split/tab tree, dragged by their header icon, persisted per project.
