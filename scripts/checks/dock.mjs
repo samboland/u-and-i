@@ -395,11 +395,13 @@ try {
 
   await openSash('[data-dock-splitter="vertical"]');
   // Blender's label is the direction the survivor GROWS: "Join Right" keeps
-  // the left pane (Insert) and expands it over Canvas.
+  // the left pane (Insert) and expands it over Canvas. The loser is DESTROYED
+  // (screen_delarea), not folded in as a tab — folding quietly built stacks
+  // nobody asked for (Sam, 2026-08-26).
   await pick("Join Right");
   check(
-    (await shape()) === "row[insert+canvas, col[outliner, properties]]",
-    `Join Right keeps the left pane and moves the other's panels in: ${await shape()}`,
+    (await shape()) === "row[insert, col[outliner, properties]]",
+    `Join Right keeps the left pane and destroys the other: ${await shape()}`,
   );
   await viewMenuItem("Reset layout");
 
@@ -412,7 +414,7 @@ try {
   );
   // "Join Up" keeps the BOTTOM pane (Properties) and grows it upward.
   await pick("Join Up");
-  check((await shape()) === "row[insert, canvas, properties+outliner]", `Join Up keeps the lower pane and grows it up: ${await shape()}`);
+  check((await shape()) === "row[insert, canvas, properties]", `Join Up keeps the lower pane and grows it up: ${await shape()}`);
   await viewMenuItem("Reset layout");
 
   // --- Blender's modal split: a phantom you place, then click to commit ----
@@ -586,8 +588,8 @@ try {
   }
   const lonely = await leafMap();
   check(
-    lonely.length === 1 && lonely[0].tabs.length === 4,
-    `joining every pane away leaves one holding all four panels: ${JSON.stringify(lonely.map((l) => l.tabs))}`,
+    lonely.length === 1 && lonely[0].tabs.length === 1,
+    `joining every pane away leaves ONE pane holding one panel, not a stack: ${JSON.stringify(lonely.map((l) => l.tabs))}`,
   );
   check((await page.locator("[data-dock-splitter]").count()) === 0, "a lone pane has no sash to right-click");
 
@@ -603,9 +605,56 @@ try {
   await page.waitForTimeout(350);
   const back = await leafMap();
   check(
-    back.length === 2 && back.flatMap((l) => l.tabs).length === 4,
-    `the outer border splits a lone pane back into two, losing nothing: ${JSON.stringify(back.map((l) => l.tabs))}`,
+    back.length === 2 && back.flatMap((l) => l.tabs).length === 2,
+    `the outer border splits a lone pane back into two: ${JSON.stringify(back.map((l) => l.tabs))}`,
   );
+  await viewMenuItem("Reset layout");
+
+  // --- a stacked tab can be got rid of again -------------------------------
+  // Join no longer builds stacks, but dragging one tab onto another pane's
+  // header still does — deliberately. Without a way back out, a panel dragged
+  // there would be stuck: there is no × and Join destroys whole panes.
+  await dragTabTo(
+    "insert",
+    (await box('[data-dock-tab="properties"]')).x + 60,
+    (await box('[data-dock-tab="properties"]')).y + 8,
+  );
+  check((await shape()).includes("+"), `a tab can still be stacked on purpose: ${await shape()}`);
+
+  const stackedTab = await box('[data-dock-tab="insert"]');
+  await page.mouse.click(stackedTab.x + stackedTab.width / 2, stackedTab.y + stackedTab.height / 2, { button: "right" });
+  await page.waitForTimeout(250);
+  const tabItems = await areaItems();
+  check(
+    tabItems.some((i) => i.label === "Close Insert") && tabItems.some((i) => i.label.startsWith("Close others")),
+    `right-clicking a tab offers a way out: ${JSON.stringify(tabItems.map((i) => i.label))}`,
+  );
+  await page.locator("[data-dock-areamenu] button", { hasText: "Close Insert" }).click();
+  await page.waitForTimeout(350);
+  check(!(await shape()).includes("insert"), `closing a tab removes it: ${await shape()}`);
+  await viewMenuItem("Reset layout");
+
+  // The dock's last panel has nowhere to go, so the item says so rather than
+  // quietly doing nothing.
+  for (let guard = 0; guard < 8; guard++) {
+    if ((await page.locator("[data-dock-splitter]").count()) === 0) break;
+    const sel = (await page.locator('[data-dock-splitter="horizontal"]').count())
+      ? '[data-dock-splitter="horizontal"]'
+      : '[data-dock-splitter="vertical"]';
+    await openSash(sel);
+    await page.locator("[data-dock-areamenu] button", { hasText: "Join" }).first().click();
+    await page.waitForTimeout(300);
+  }
+  const lastTab = await box("[data-dock-tab]");
+  await page.mouse.click(lastTab.x + lastTab.width / 2, lastTab.y + lastTab.height / 2, { button: "right" });
+  await page.waitForTimeout(250);
+  const lastItems = await areaItems();
+  check(
+    lastItems.length === 1 && lastItems[0].disabled,
+    `the dock's last panel cannot be closed away: ${JSON.stringify(lastItems)}`,
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
   await viewMenuItem("Reset layout");
 
   // --- overlays must survive the app's CSS zoom ----------------------------

@@ -218,35 +218,32 @@ export function nextInstanceId(root: DockNode, base: string): string {
 // ------------------------------------------------- area options (the sash)
 
 /** Append tabs to the first leaf of a subtree — the top-left one. */
-function addTabsToFirstLeaf(n: DockNode, ids: string[]): DockNode {
-  if (ids.length === 0) return n;
-  if (n.kind === "leaf") return { ...n, tabs: [...n.tabs, ...ids] };
-  return { ...n, children: n.children.map((c, k) => (k === 0 ? addTabsToFirstLeaf(c, ids) : c)) };
-}
-
 /**
  * Blender's Join: the two areas either side of a sash become one. `keep` says
  * which side survives and takes the combined space — note the MENU labels the
  * direction the survivor grows, so "Join Right" keeps the *left* pane.
  *
- * One deliberate departure from `screen_area_join_aligned`, which calls
- * `screen_delarea(sa2)`: we move the other side's panels in as tabs instead of
- * destroying them. Our panes stack and Blender's do not, so folding is the
- * less destructive option; nothing is lost either way, since any panel can be
- * recreated from any pane's type dropdown.
+ * The loser is DESTROYED, as in `screen_area_join_aligned`'s
+ * `screen_delarea(sa2)`. We used to fold its panels into the survivor as tabs,
+ * on the theory that folding is gentler than deleting. It wasn't: joining a
+ * few panes silently produced a pane with four stacked tabs nobody asked for
+ * (Sam, 2026-08-26). Deleting is safe now that every panel is duplicable and
+ * can be recreated from any pane's type dropdown — which was not true when
+ * the folding was written.
  */
 export function joinAt(root: DockNode, path: Path, i: number, keep: "first" | "second"): DockNode {
   const s = nodeAt(root, path);
   if (s?.kind !== "split" || !s.children[i + 1]) return root;
   const keepIdx = keep === "first" ? i : i + 1;
   const dropIdx = keep === "first" ? i + 1 : i;
-  const survivor = addTabsToFirstLeaf(s.children[keepIdx], panelsIn(s.children[dropIdx]));
+  // Never join away the last pane in the dock — there would be nothing left.
+  if (s.children.length === 2 && panelsIn(s.children[keepIdx]).length === 0) return root;
 
   const children: DockNode[] = [];
   const sizes: number[] = [];
   for (let k = 0; k < s.children.length; k++) {
     if (k === dropIdx) continue;
-    children.push(k === keepIdx ? survivor : s.children[k]);
+    children.push(s.children[k]);
     sizes.push(k === keepIdx ? s.sizes[i] + s.sizes[i + 1] : s.sizes[k]);
   }
   const next: DockNode = children.length === 1 ? children[0] : { kind: "split", dir: s.dir, children, sizes };
@@ -1048,7 +1045,8 @@ type SashMenu =
       i: number;
       dir: "row" | "col";
     }
-  | { kind: "edge"; x: number; y: number; /** The one adjoining pane. */ leaf: Path };
+  | { kind: "edge"; x: number; y: number; /** The one adjoining pane. */ leaf: Path }
+  | { kind: "tab"; x: number; y: number; /** The pane holding it. */ leaf: Path; id: string };
 
 function DockBranch(props: BranchProps) {
   const { node, path } = props;
@@ -1199,6 +1197,40 @@ function Splitter({
   );
 }
 
+/** The dock's popup shell, positioned in local pixels (see `zoomOf`). */
+function MenuBox({ x, y, scale, title, children }: { x: number; y: number; scale: number; title: string; children: ReactNode }) {
+  const left = Math.max(4, Math.min(x / scale, window.innerWidth / scale - 210));
+  const top = Math.max(4, Math.min(y / scale, window.innerHeight / scale - 120));
+  return (
+    <div
+      data-dock-areamenu
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      style={{ position: "fixed", left, top, minWidth: 196, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 200 }}
+    >
+      <div style={{ padding: "3px 10px 5px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", whiteSpace: "nowrap" }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function MenuRow({ icon, label, disabled, hint, onPick }: { icon: string; label: string; disabled?: boolean; hint?: string; onPick: () => void }) {
+  return (
+    <button
+      className={disabled ? undefined : "hv-menu"}
+      disabled={disabled}
+      title={hint}
+      onClick={onPick}
+      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: disabled ? C.faint : C.body, cursor: disabled ? "default" : "pointer", textAlign: "left" }}
+    >
+      <Sym name={icon} size={14} />
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+    </button>
+  );
+}
+
 /**
  * Blender's Area Options, on right-click of a sash. Join and Swap act on the
  * pair either side of it; Split arms a phantom you then place by hand, so it
@@ -1233,6 +1265,41 @@ function AreaOptions({
 
   const nameOf = (n: DockNode | null | undefined) =>
     n?.kind === "leaf" ? title(n.active) : "group";
+
+  /* A tab's own menu. Join destroys a pane now, and there is no ×, so without
+   * this a panel dragged onto another pane's header would be stuck there —
+   * which is exactly what Sam hit (2026-08-26). Right-click is already the
+   * dock's idiom for "options about this thing": sashes and the outer border
+   * both use it. */
+  if (menu.kind === "tab") {
+    const leafNode = nodeAt(layout, menu.leaf);
+    const stacked = leafNode?.kind === "leaf" ? leafNode.tabs.length : 1;
+    // `closePanel` refuses to drop the dock's last panel; say so rather than
+    // offering a menu item that quietly does nothing.
+    const last = panelsIn(layout).length <= 1;
+    return (
+      <MenuBox x={menu.x} y={menu.y} scale={scale} title={`${title(menu.id)}`}>
+        <MenuRow
+          icon="close"
+          label={`Close ${title(menu.id)}`}
+          disabled={last}
+          hint={last ? "the dock's last panel" : undefined}
+          onPick={() => { onClose(); onLayout(closePanel(layout, menu.id)); }}
+        />
+        {stacked > 1 && (
+          <MenuRow
+            icon="layers_clear"
+            label="Close others in this pane"
+            onPick={() => {
+              onClose();
+              const others = leafNode?.kind === "leaf" ? leafNode.tabs.filter((t) => t !== menu.id) : [];
+              onLayout(others.reduce((tree, t) => closePanel(tree, t), layout));
+            }}
+          />
+        )}
+      </MenuBox>
+    );
+  }
 
   const pair = menu.kind === "pair" ? nodeAt(layout, menu.path) : null;
   if (menu.kind === "pair" && pair?.kind !== "split") return null;
@@ -1392,7 +1459,7 @@ function iconBtn(active: boolean, faded: boolean): CSSProperties {
  * inline to its right. Other panels docked here sit beside it as bare icons —
  * no wide text tabs, and no separate title bar underneath.
  */
-function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu, registerLeaf, onTabDown, dragging, layout, onLayout }: BranchProps & { node: DockLeaf }) {
+function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu, registerLeaf, onTabDown, onSashMenu, dragging, layout, onLayout }: BranchProps & { node: DockLeaf }) {
   const key = path.join(".");
   const ref = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1445,9 +1512,15 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
             className="hv-ctl"
             data-dock-tab={node.active}
             data-dock-type
-            title={`${title(node.active)} — click to switch, drag to move`}
+            title={`${title(node.active)} — click to switch, drag to move, right-click to close`}
             onPointerDown={(e) => onTabDown(node.active, e, () => setMenuOpen((v) => !v))}
             onClick={(e) => e.stopPropagation()}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setMenuOpen(false);
+              onSashMenu({ kind: "tab", x: e.clientX, y: e.clientY, leaf: path, id: node.active });
+            }}
             style={iconBtn(true, dragging === node.active)}
           >
             <Sym name={icon(node.active)} size={15} />
@@ -1485,9 +1558,14 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
               key={id}
               className="hv-ctl"
               data-dock-tab={id}
-              title={title(id)}
+              title={`${title(id)} — right-click to close`}
               onPointerDown={(e) => onTabDown(id, e, () => onLayout(focusPanel(layout, id)))}
               onClick={(e) => e.stopPropagation()}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onSashMenu({ kind: "tab", x: e.clientX, y: e.clientY, leaf: path, id });
+              }}
               style={iconBtn(false, dragging === id)}
             >
               <Sym name={icon(id)} size={15} />

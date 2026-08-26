@@ -55,8 +55,16 @@ zoom stepper). Panels sharing a pane show as bare icons. No labels anywhere:
 names live in the dropdown and in tooltips. That folded four title bars into
 the tab strip and bought back a row per pane.
 
-**No close button.** Join is how a pane goes away, View ▸ Panels is how a
-panel does; the × was a third mechanism for neither.
+**No close button.** Join is how a *pane* goes away; **right-click a tab** to
+close a *panel* ("Close X", plus "Close others in this pane" when stacked), and
+View ▸ Panels toggles one by name. Right-click is already the dock's idiom for
+"options about this thing" — sashes and the outer border both use it.
+
+Tabs only ever come from a deliberate drag onto another pane's header now that
+Join destroys. The tab menu is what makes that reversible; without it a panel
+dragged there is stuck, since there is no × and Join takes whole panes. The
+dock's last panel can't be closed — the item says so rather than quietly doing
+nothing.
 
 **Panes are rounded cards on a void, not flush surfaces with a divider.** The
 barrier is the *gap*: `GAP` and `GUTTER` 4, `RADIUS` 8, one hairline outline
@@ -140,10 +148,15 @@ corrected two things we had guessed wrong.
   inverted. The menu order follows the same rule — Right-then-Left on a
   vertical sash, Up-then-Down on a horizontal one (Blender's Y axis points up,
   ours down, so the two cases keep opposite children).
-  Blender's `screen_area_join_aligned` ends in `screen_delarea(sa2)`; we fold
-  the losing pane's panels in as tabs instead, because our panes stack and
-  Blender's don't. Nothing is lost either way now that any panel can be
-  recreated from any type dropdown.
+  The loser is **destroyed**, as in `screen_area_join_aligned`'s
+  `screen_delarea(sa2)`. We folded its panels into the survivor as tabs at
+  first, on the theory that folding is gentler than deleting. It wasn't:
+  joining a few panes silently built a pane with four stacked tabs nobody
+  asked for, and with no × there was no way back out (Sam, 2026-08-26 — *"there's
+  no way to delete them or manage them. That should never have happened
+  anyways"*). Deleting is safe now that every panel is duplicable and can be
+  recreated from any type dropdown, which was not true when the folding was
+  written.
 - **Swap** trades the pair. Sizes stay with the *position*, not the pane, so
   the geometry is untouched and only the contents move.
 - **Split is modal** — picking it cuts nothing, it arms a phantom you place by
