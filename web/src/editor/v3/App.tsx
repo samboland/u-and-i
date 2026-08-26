@@ -248,23 +248,41 @@ function loadPrefs(): Prefs {
   }
 }
 
+/**
+ * Bump when a change makes previously-saved dock trees wrong rather than
+ * merely old — a persisted layout from an earlier model loads structurally
+ * fine and then behaves oddly, which is worse than losing it. A mismatch
+ * drops the saved trees and starts from the preset defaults; everything else
+ * in the session (open file, device, zoom, live path) survives.
+ *
+ * 2 — panels became duplicable and Join stopped folding panes into tab
+ *     stacks, so trees saved before that could hold stacks the UI no longer
+ *     produces (Sam, 2026-08-26: "my layout is busted now from the old
+ *     state").
+ */
+const LAYOUT_VERSION = 2;
+
 interface ProjectSession {
+  layoutVersion?: number;
   openFile?: string;
   device?: DeviceName;
   zoom?: number;
   workspace?: Workspace;
   livePath?: string;
-  /** Dock tree per layout group. Anything malformed falls back to the default. */
+  /** Dock tree per preset. Anything malformed, or stamped with an older
+   *  `layoutVersion`, falls back to the default. */
   layouts?: Partial<Record<Preset, DockNode>>;
   /** Path per extra live canvas pane, keyed by panel instance id. */
   extraLivePaths?: Record<string, string>;
 }
 
-/** Merge persisted trees over the defaults, dropping any that don't parse. */
-function layoutsFromSession(saved: ProjectSession["layouts"]): Record<Preset, DockNode> {
+/** Merge persisted trees over the defaults, dropping any that don't parse or
+ *  that predate the current layout model. */
+function layoutsFromSession(session: ProjectSession): Record<Preset, DockNode> {
   const out = defaultLayouts();
+  if (session.layoutVersion !== LAYOUT_VERSION) return out;
   for (const g of PRESETS) {
-    const t = saved?.[g];
+    const t = session.layouts?.[g];
     // No panel is mandatory any more, so any well-formed tree is acceptable.
     // `closePanel` refuses to remove the last one, so none can be empty.
     if (isDockNode(t) && panelsIn(t).length > 0) out[g] = t;
@@ -397,7 +415,7 @@ export function App() {
           setWorkspace(session.workspace);
         }
         if (session.livePath?.startsWith("/")) setLivePath(session.livePath);
-        setLayouts(layoutsFromSession(session.layouts));
+        setLayouts(layoutsFromSession(session));
         if (session.extraLivePaths) setExtraLivePaths(session.extraLivePaths);
         if (loadPrefs().reopenLast && session.openFile) {
           void openFileRef.current(session.openFile).catch(() => {});
@@ -427,6 +445,7 @@ export function App() {
       // brief window during boot restore) — closing isn't a concept here.
       const existing = loadProjectSession(targetRoot);
       const session: ProjectSession = {
+        layoutVersion: LAYOUT_VERSION,
         openFile: fileState?.file ?? existing.openFile,
         device,
         zoom,

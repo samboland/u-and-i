@@ -657,6 +657,55 @@ try {
   await page.waitForTimeout(150);
   await viewMenuItem("Reset layout");
 
+  // --- a layout saved under an older model is discarded, not loaded --------
+  // A stale tree loads structurally fine and then behaves oddly, which is
+  // worse than losing it (Sam, 2026-08-26: "my layout is busted now from the
+  // old state"). Everything else in the session has to survive the reset.
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((s) => s.startsWith("uai:proj:"));
+    localStorage.setItem(
+      k,
+      JSON.stringify({
+        openFile: "src/components/layout/footer.tsx",
+        device: "Tablet",
+        livePath: "/terms",
+        // A pre-change session: a four-tab stack and no layoutVersion.
+        layouts: { edit: { kind: "leaf", tabs: ["insert", "canvas", "outliner", "properties"], active: "canvas" } },
+      }),
+    );
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2500);
+  const rebuilt = (await leafMap()).map((l) => l.tabs);
+  check(
+    rebuilt.length === 4 && rebuilt.every((t) => t.length === 1),
+    `a layout from an older model is replaced by the default: ${JSON.stringify(rebuilt)}`,
+  );
+  const kept = await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((s) => s.startsWith("uai:proj:"));
+    const s = JSON.parse(localStorage.getItem(k));
+    return { v: s.layoutVersion, openFile: s.openFile, device: s.device, livePath: s.livePath };
+  });
+  check(
+    kept.v === 2 && kept.openFile?.endsWith("footer.tsx") && kept.device === "Tablet" && kept.livePath === "/terms",
+    `resetting the layout keeps the rest of the session: ${JSON.stringify(kept)}`,
+  );
+
+  // A tree stamped with the current version is left alone.
+  await page.evaluate(() => {
+    const k = Object.keys(localStorage).find((s) => s.startsWith("uai:proj:"));
+    const s = JSON.parse(localStorage.getItem(k));
+    s.layouts.edit = { kind: "leaf", tabs: ["canvas"], active: "canvas" };
+    localStorage.setItem(k, JSON.stringify(s));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2500);
+  check(
+    (await shape()) === "canvas",
+    `a current-version layout survives a reload untouched: ${await shape()}`,
+  );
+  await viewMenuItem("Reset layout");
+
   // --- overlays must survive the app's CSS zoom ----------------------------
   // The shell carries `zoom: appZoom`, so getBoundingClientRect reports visual
   // pixels while an absolutely-positioned overlay is laid out in local ones.

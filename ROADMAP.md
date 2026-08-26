@@ -212,6 +212,14 @@ into that parent, which gains a splitter and re-flows its siblings by 1–2px.
 The phantom describes the pane being split, not its neighbours' reaction to
 the commit. Splits that nest (a different axis) are pixel-exact.
 
+**Persisted layouts carry a `LAYOUT_VERSION`.** A tree saved under an older
+model loads structurally fine and then behaves oddly — Sam was left with a
+four-tab stack the UI no longer produces and no obvious way to know why
+(2026-08-26). A version mismatch now drops the saved trees and starts from the
+preset defaults; the rest of the session (open file, device, zoom, live path)
+survives. Bump it whenever a change makes old trees *wrong* rather than merely
+old.
+
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 
 ## Editor chrome (2026-08-25)

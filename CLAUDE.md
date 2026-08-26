@@ -52,7 +52,8 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   restrictions. Panel state that an instance owns goes through
   `usePaneState` in `App.tsx`, or two Outliners move as one.
   Layout and Component **share one tree** so the harness iframe survives
-  that switch. Blender-style chrome: one header row per pane — icon
+  that switch. Saved trees carry `LAYOUT_VERSION` — bump it when a change
+  makes old ones wrong, or they load fine and then misbehave. Blender-style chrome: one header row per pane — icon
   dropdown, then that panel's own controls inline — so panels split into
   `renderPanelHeader` + `renderPanel` in `App.tsx`. Panel names appear only
   in the dropdown and tooltips; the icons are Material Symbols ligatures,
