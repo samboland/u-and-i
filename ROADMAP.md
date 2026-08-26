@@ -9,8 +9,9 @@ The three fixed columns are gone. Panels — Insert, Canvas, Outliner,
 Properties, Style, Workshop — are cards in a split/tab tree
 (`web/src/editor/v3/dock.tsx`); drag a pane's icon onto another pane's header
 to stack them, or onto a pane's edge to split it. Drag to the dock's outer
-edge for a full-width/height band. Splitters resize; the × closes a panel and
-View ▸ Panels reopens it (plus **New canvas pane** and **Reset layout**).
+edge for a full-width/height band. Splitters resize; Join is how a pane goes
+away and View ▸ Panels toggles a panel (plus **New canvas pane** and **Reset
+layout**).
 
 **Headers follow Blender, not VS Code** (Sam, 2026-08-18: text tabs ate too
 much room). Each pane has ONE header row: a small icon dropdown naming the
@@ -99,10 +100,10 @@ Checked against Blender's own source (`editors/screen/screen_ops.cc`,
   Right-then-Left on a vertical sash, Up-then-Down on a horizontal one (its Y
   axis points up, ours down, so the two cases keep opposite children).
   Blender's `screen_area_join_aligned` ends in `screen_delarea(sa2)` — it
-  *destroys* the losing editor. We move its panels in as tabs instead: Blender
-  can delete an editor because any area can become any editor, whereas our
-  panel ids are unique and a deleted panel has to be hunted back out of the
-  type dropdown.
+  *destroys* the losing editor. We move its panels in as tabs instead, because
+  our panes stack (Blender's don't) and folding is less destructive than
+  deleting. Nothing is lost either way now that every panel can be recreated
+  from any pane's type dropdown.
 - **Merge Edge** — Blender's fourth item, offered when
   `screen_geom_edge_can_extend`. It extends a sash across aligned neighbours,
   which needs free-form vertex geometry; our layout is a split tree with no
@@ -127,11 +128,10 @@ Checked against Blender's own source (`editors/screen/screen_ops.cc`,
     aligns to free vertices; we have none, so we snap to the other panes'
     sashes along the same axis — same intent in a split tree.
   - `area_split_allowed` (pane must be ≥2× the minimum on the axis) carries
-    over as-is. Our extra condition: something must move into the new half.
-    Blender clones the editor; our panel ids are unique, so instead the pane's
-    ACTIVE tab moves — tearing a stacked tab out into its own area. A pane
-    holding one un-duplicable panel therefore refuses, showing the whole-area
-    ghost. That's the honest limit of unique panel ids, not an oversight.
+    over as-is, and is now the ONLY thing that refuses a split — a pane too
+    small to halve shows the whole-area ghost. A stacked pane tears its ACTIVE
+    tab into the new half (Blender has no tabs, so no equivalent); a pane
+    holding one panel clones it, which is what Blender does every time.
   - A running modal **owns the keyboard**, as it does in Blender, where a modal
     operator eats events before the keymap. `dockModalActive()` makes App's
     global chord handler stand down; without it App's Tab (toggle interact)
@@ -227,6 +227,36 @@ Standing check: `scripts/checks/chrome.mjs`, which forces a rejection through
   modal keeps a split-shaped cursor, where it means what it draws. The outer
   border gets `context-menu`, because it opens a menu and cannot be dragged —
   it previously changed nothing at all, which read as dead.
+
+**One panel universe** (Sam, 2026-08-26: *"everything should be duplicable,
+and the different tabs at the top are only preset arrangements of all possible
+windows"* — after asking why the Insert pane refused to split). This is
+Blender's rule: any area can be any editor, and workspaces are saved
+arrangements, not restrictions. What changed:
+
+- **Every panel is duplicable**, not just the canvas. `newInstance` returns
+  `nextInstanceId(layout, basePanel(id))` for anything, so a split always has
+  something to clone into the new half and no pane refuses for want of it.
+- **Every panel is offered in every pane, in every workspace** — Style and
+  Workshop included on Layout. `groupPanels` and `GROUP_MAIN` are gone; there
+  is no mandatory panel, and `closePanel` already refuses to remove the last
+  one, so nothing can strand you.
+- **`LayoutGroup` is now `Preset`**: which saved arrangement a tab shows, and
+  what it starts as. Layout and Component still share one, so the harness
+  iframe survives that switch.
+- **The type dropdown SETS the pane's type** (`setPaneType`), Blender's editor
+  menu. It used to pull the named panel here from wherever it lived, which
+  only made sense while panels were unique — picking "Outliner" would rip the
+  Outliner out of the sidebar. Now it clones one here and leaves the original
+  alone.
+- **Per-instance panel state** (`usePaneState`). Two Outliners would otherwise
+  move as one, since a panel is one component rendered per instance id rather
+  than an independent editor. Outliner mode and Insert's search are keyed by
+  instance; `setAll` exists for the genuinely global acts (opening a file
+  switches every Outliner to File).
+- **`MIN_PANE` 120 → 72.** Doubled, it is also the narrowest a pane can be and
+  still split, and 240 quietly excluded every sidebar — the Insert column is
+  ~238px. Blender's own minimum is about one header's worth.
 
 Standing check: `scripts/checks/dock.mjs` (u-and-i's dev server only).
 

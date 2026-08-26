@@ -83,7 +83,7 @@ type Workspace = (typeof WORKSPACES)[number]["label"];
 
 /**
  * Panel titles. Instance ids ("canvas#2") share their base panel's title —
- * see `basePanel`. Only the canvas may appear more than once; the extras are
+ * see `basePanel`. Any panel may appear more than once; extra canvases are
  * additional live views of the running app, each with its own path.
  */
 const PANEL_TITLE: Record<string, string> = {
@@ -106,39 +106,54 @@ const PANEL_ICON: Record<string, string> = {
 };
 
 /**
- * Layout and Component share one tree. They hold the same panels and differ
- * only in what the canvas draws — and sharing keeps the canvas leaf in the
- * same place across the switch, so the harness iframe (with its mounted
- * module and sample props) survives it, exactly as it did before docking.
+ * EVERY panel can go in EVERY pane, and any number of times — Blender's rule
+ * (Sam, 2026-08-26: *"everything should be duplicable, and the different tabs
+ * at the top are only preset arrangements of all possible windows"*). Nothing
+ * below is a restriction: a preset only decides what you START with.
  */
-type LayoutGroup = "edit" | "Style" | "Workshop";
-const LAYOUT_GROUPS: LayoutGroup[] = ["edit", "Style", "Workshop"];
-function groupOf(ws: Workspace): LayoutGroup {
+const ALL_PANELS = ["insert", "canvas", "outliner", "properties", "style", "workshop"];
+
+/**
+ * Which saved arrangement a workspace tab shows. Layout and Component share
+ * one, because they hold the same panels and differ only in what the canvas
+ * draws — sharing keeps the canvas leaf in place across that switch, so the
+ * harness iframe (mounted module, sample props) survives it.
+ */
+type Preset = "edit" | "Style" | "Workshop";
+const PRESETS: Preset[] = ["edit", "Style", "Workshop"];
+function presetOf(ws: Workspace): Preset {
   return ws === "Style" || ws === "Workshop" ? ws : "edit";
 }
 
-/** The panel a group is built around; it can't be closed away. */
-const GROUP_MAIN: Record<LayoutGroup, string> = {
-  edit: "canvas",
-  Style: "style",
-  Workshop: "workshop",
-};
-
-/** Which panels a group offers in View ▸ Panels, in menu order. */
-function groupPanels(g: LayoutGroup): string[] {
-  return g === "edit" ? ["insert", "canvas", "outliner", "properties"] : [GROUP_MAIN[g], "outliner", "properties"];
-}
-
-/** The pre-dock three-column arrangement, as a starting tree. */
-function defaultLayout(g: LayoutGroup): DockNode {
+/** What a preset starts as. Only a starting point — rearrange it freely, and
+ *  the arrangement is what persists from then on. */
+function defaultLayout(g: Preset): DockNode {
   const side = split("col", [leaf(["outliner"]), leaf(["properties"])], [0.44, 0.56]);
   return g === "edit"
     ? split("row", [leaf(["insert"]), leaf(["canvas"]), side], [0.15, 0.66, 0.19])
-    : split("row", [leaf([GROUP_MAIN[g]]), side], [0.81, 0.19]);
+    : split("row", [leaf([g === "Style" ? "style" : "workshop"]), side], [0.81, 0.19]);
 }
 
-function defaultLayouts(): Record<LayoutGroup, DockNode> {
+function defaultLayouts(): Record<Preset, DockNode> {
   return { edit: defaultLayout("edit"), Style: defaultLayout("Style"), Workshop: defaultLayout("Workshop") };
+}
+
+/**
+ * Panel state that must NOT be shared between duplicate panes. Blender's
+ * editors are independent; ours are one component rendered once per instance
+ * id, so anything an instance owns has to be keyed by that id or two Outliners
+ * would move as one.
+ */
+function usePaneState<T>(initial: T) {
+  // The fallback is what a pane that has never touched the control shows, so
+  // `setAll` has to move it too — otherwise a global act (opening a file
+  // switches every Outliner to File) would miss the untouched panes.
+  const [fallback, setFallback] = useState(initial);
+  const [map, setMap] = useState<Record<string, T>>({});
+  const get = useCallback((id: string) => (id in map ? map[id] : fallback), [map, fallback]);
+  const set = useCallback((id: string, v: T) => setMap((m) => ({ ...m, [id]: v })), []);
+  const setAll = useCallback((v: T) => { setFallback(v); setMap({}); }, []);
+  return [get, set, setAll] as const;
 }
 
 const PRIMITIVES: { label: string; icon: string; jsx: string }[] = [
@@ -240,19 +255,19 @@ interface ProjectSession {
   workspace?: Workspace;
   livePath?: string;
   /** Dock tree per layout group. Anything malformed falls back to the default. */
-  layouts?: Partial<Record<LayoutGroup, DockNode>>;
+  layouts?: Partial<Record<Preset, DockNode>>;
   /** Path per extra live canvas pane, keyed by panel instance id. */
   extraLivePaths?: Record<string, string>;
 }
 
 /** Merge persisted trees over the defaults, dropping any that don't parse. */
-function layoutsFromSession(saved: ProjectSession["layouts"]): Record<LayoutGroup, DockNode> {
+function layoutsFromSession(saved: ProjectSession["layouts"]): Record<Preset, DockNode> {
   const out = defaultLayouts();
-  for (const g of LAYOUT_GROUPS) {
+  for (const g of PRESETS) {
     const t = saved?.[g];
-    // A tree that lost its group's main panel would strand the user with no
-    // canvas and no way back except Reset layout — take the default.
-    if (isDockNode(t) && panelsIn(t).includes(GROUP_MAIN[g])) out[g] = t;
+    // No panel is mandatory any more, so any well-formed tree is acceptable.
+    // `closePanel` refuses to remove the last one, so none can be empty.
+    if (isDockNode(t) && panelsIn(t).length > 0) out[g] = t;
   }
   return out;
 }
@@ -301,7 +316,7 @@ export function App() {
   const [editError, setEditError] = useState<string | null>(null);
 
   const [workspace, setWorkspace] = useState<Workspace>("Layout");
-  const [outlinerMode, setOutlinerMode] = useState<"File" | "Routes">("Routes");
+  const [outlinerModeOf, setOutlinerModeOf, setAllOutlinerModes] = usePaneState<"File" | "Routes">("Routes");
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [prefsOpen, setPrefsOpen] = useState(false);
   const [reopenLast, setReopenLast] = useState(() => loadPrefs().reopenLast);
@@ -310,7 +325,7 @@ export function App() {
   const [zoom, setZoom] = useState<number>(DEVICES.Desktop.zoom);
   const [targetRoot, setTargetRoot] = useState<string | null>(null);
   const [themeDark, setThemeDark] = useState(false);
-  const [search, setSearch] = useState("");
+  const [searchOf, setSearchOf] = usePaneState("");
   const [interact, setInteract] = useState(false);
   const interactRef = useRef(interact);
   interactRef.current = interact;
@@ -340,8 +355,8 @@ export function App() {
   }, []);
 
   // Docking: one tree per layout group, rearranged by dragging tabs.
-  const [layouts, setLayouts] = useState<Record<LayoutGroup, DockNode>>(defaultLayouts);
-  const group = groupOf(workspace);
+  const [layouts, setLayouts] = useState<Record<Preset, DockNode>>(defaultLayouts);
+  const group = presetOf(workspace);
   const layout = layouts[group];
   const setLayout = useCallback(
     (next: DockNode) => setLayouts((all) => ({ ...all, [group]: next })),
@@ -442,7 +457,7 @@ export function App() {
     setRouteSel(null);
     setFileFocusId(null);
     setFileCollapsed(new Set());
-    setOutlinerMode("File");
+    setAllOutlinerModes("File");
     const d = await api<{ model: JsxNodeModel[]; props: PropSpec[]; renderable: boolean }>(
       `/api/component?file=${encodeURIComponent(file)}`,
     );
@@ -1023,13 +1038,12 @@ export function App() {
           action: () => setWorkspace(w.label),
         })),
         { sep: true },
-        ...groupPanels(group).map((id) => {
+        ...ALL_PANELS.map((id) => {
           const open = panelsIn(layout).includes(id);
           return {
             label: `Panel: ${PANEL_TITLE[id]}`,
             check: tick(open),
-            disabled: id === GROUP_MAIN[group],
-            action: () => setLayout(open ? closePanel(layout, id) : addPanel(layout, id, GROUP_MAIN[group])),
+            action: () => setLayout(open ? closePanel(layout, id) : addPanel(layout, id, panelsIn(layout)[0])),
           };
         }),
         ...(group === "edit"
@@ -1037,8 +1051,6 @@ export function App() {
           : []),
         { label: "Reset layout", action: () => setLayout(defaultLayout(group)) },
         { sep: true },
-        { label: "Outliner: file", check: dot(outlinerMode === "File"), action: () => setOutlinerMode("File") },
-        { label: "Outliner: routes", check: dot(outlinerMode === "Routes"), action: () => setOutlinerMode("Routes") },
         { sep: true },
         { label: "Rulers", check: tick(rulersOn), action: () => setRulersOn((v) => !v) },
         { sep: true },
@@ -1094,14 +1106,14 @@ export function App() {
             type="text"
             aria-label="Search components"
             placeholder={fileState ? "Search components" : "open a file first"}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchOf(id)}
+            onChange={(e) => setSearchOf(id, e.target.value)}
             style={{ ...inputStyle, flex: "1 1 90px", minWidth: 70, height: 20, fontSize: 11 }}
           />
         );
 
       case "outliner":
-        return <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerMode === m, onClick: () => setOutlinerMode(m) }))} />;
+        return <Seg items={(["File", "Routes"] as const).map((m) => ({ label: m, active: outlinerModeOf(id) === m, onClick: () => setOutlinerModeOf(id, m) }))} />;
 
       case "properties":
         return (
@@ -1183,7 +1195,7 @@ export function App() {
                 if (!components) {
                   return <div style={{ margin: 10, fontSize: 11, color: C.faint }}>Loading component list…</div>;
                 }
-                const q = search.trim().toLowerCase();
+                const q = searchOf(id).trim().toLowerCase();
                 const groups = new Map<string, string[]>();
                 for (const f of components.files) {
                   const short = f.replace(/^src\/components\//, "");
@@ -1349,7 +1361,7 @@ export function App() {
           <>
             {/* No title row: the File/Routes switch lives in the pane header. */}
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", paddingBottom: 8, paddingTop: 4 }}>
-              {outlinerMode === "File" && fileState && (
+              {outlinerModeOf(id) === "File" && fileState && (
                 <>
                   <div style={{ padding: "4px 10px 3px", fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: "0.09em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={fileState.file}>
                     {fileState.file.split("/").pop()}
@@ -1373,12 +1385,12 @@ export function App() {
                   />
                 </>
               )}
-              {outlinerMode === "File" && !fileState && (
+              {outlinerModeOf(id) === "File" && !fileState && (
                 <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
                   No file open. Pick a component from Insert or a route from the Routes tree.
                 </div>
               )}
-              {outlinerMode === "Routes" && routeTree && (
+              {outlinerModeOf(id) === "Routes" && routeTree && (
                 <RouteTree
                   tree={routeTree}
                   selectedId={routeSel ? routeId(routeSel) : null}
@@ -1394,7 +1406,7 @@ export function App() {
                   }}
                 />
               )}
-              {outlinerMode === "Routes" && !routeTree && (
+              {outlinerModeOf(id) === "Routes" && !routeTree && (
                 <div style={{ padding: "10px", fontSize: 11, color: C.faint, lineHeight: 1.5 }}>
                   No route tree — is the target folder a Next.js app?
                 </div>
@@ -1566,8 +1578,10 @@ export function App() {
           onLayout={setLayout}
           title={(id) => PANEL_TITLE[basePanel(id)] ?? id}
           icon={(id) => PANEL_ICON[basePanel(id)] ?? "square"}
-          panelMenu={groupPanels(group)}
-          newInstance={(id) => (basePanel(id) === "canvas" ? nextInstanceId(layout, "canvas") : null)}
+          panelMenu={ALL_PANELS}
+          // Blender clones the editor into the new half; every panel here can
+          // be cloned the same way, so a split never has nothing to put there.
+          newInstance={(id) => nextInstanceId(layout, basePanel(id))}
           renderHeader={renderPanelHeader}
           render={renderPanel}
         />

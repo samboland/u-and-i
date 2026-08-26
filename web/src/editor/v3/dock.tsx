@@ -186,6 +186,26 @@ export function focusPanel(root: DockNode, id: string): DockNode {
 }
 
 /** Next free instance id for a duplicable panel, e.g. "canvas#3". */
+/**
+ * Blender's editor-type dropdown: the area BECOMES that editor. The pane's
+ * active tab is replaced by a fresh instance of `base` — which is only
+ * possible now that every panel can be duplicated. If the pane already holds
+ * that kind of panel, this just brings it to the front instead.
+ *
+ * It used to PULL the named panel here from wherever else it lived, which made
+ * sense while panels were unique and is surprising now: picking "Outliner"
+ * would rip the Outliner out of the sidebar rather than make one here.
+ */
+export function setPaneType(root: DockNode, path: Path, base: string): DockNode {
+  const l = nodeAt(root, path);
+  if (l?.kind !== "leaf") return root;
+  const already = l.tabs.find((t) => basePanel(t) === base);
+  if (already) return focusPanel(root, already);
+  const id = nextInstanceId(root, base);
+  const tabs = l.tabs.map((t) => (t === l.active ? id : t));
+  return normalize(replaceAt(root, path, { kind: "leaf", tabs, active: id })) ?? root;
+}
+
 export function nextInstanceId(root: DockNode, base: string): string {
   const taken = new Set(panelsIn(root));
   if (!taken.has(base)) return base;
@@ -211,9 +231,9 @@ function addTabsToFirstLeaf(n: DockNode, ids: string[]): DockNode {
  *
  * One deliberate departure from `screen_area_join_aligned`, which calls
  * `screen_delarea(sa2)`: we move the other side's panels in as tabs instead of
- * destroying them. Blender can afford to delete an editor because any area can
- * become any editor; our panel ids are unique, so a destroyed panel would have
- * to be hunted back out of the type dropdown.
+ * destroying them. Our panes stack and Blender's do not, so folding is the
+ * less destructive option; nothing is lost either way, since any panel can be
+ * recreated from any pane's type dropdown.
  */
 export function joinAt(root: DockNode, path: Path, i: number, keep: "first" | "second"): DockNode {
   const s = nodeAt(root, path);
@@ -247,11 +267,11 @@ export function swapAt(root: DockNode, path: Path, i: number): DockNode {
 }
 
 /**
- * Blender's Split. Blender clones the editor into the new half; our panels are
- * unique instances, so instead the pane's ACTIVE tab moves into the new half
- * — tearing a stacked tab out into its own area. A pane holding a single
- * panel can only be split if that panel is duplicable (the canvas), for which
- * the caller supplies a fresh instance id.
+ * Blender's Split. A stacked pane tears its ACTIVE tab out into the new half
+ * (Blender has no tabs, so it has no equivalent); a pane holding one panel
+ * CLONES it, which is what Blender does for every split. Every panel is
+ * duplicable, so `newId` is always available and no pane refuses for want of
+ * something to put across the seam.
  */
 export function splitLeafAt(
   root: DockNode,
@@ -322,8 +342,15 @@ export function isDockNode(v: unknown): v is DockNode {
 
 // ------------------------------------------------------------------ drag UI
 
-/** Smallest a pane may be squeezed to by a splitter drag. */
-const MIN_PANE = 120;
+/**
+ * Smallest a pane may be squeezed to by a splitter drag, and — doubled —
+ * the narrowest a pane can be and still split (Blender's `area_split_allowed`
+ * asks the same). It was 120, which quietly made every sidebar too narrow to
+ * split down the middle: the Insert column is ~238px, just under the 240 that
+ * needed. Blender's own minimum is about one header's worth, so this is now
+ * sized to a pane that can still show its type dropdown and one control.
+ */
+const MIN_PANE = 72;
 /** Pointer travel before a tab press becomes a drag. */
 const DRAG_SLOP = 5;
 
@@ -1433,16 +1460,14 @@ function DockLeafView({ node, path, title, icon, render, renderHeader, panelMenu
               style={{ position: "absolute", top: 23, left: 0, minWidth: 170, background: C.menu, border: `1px solid ${C.border}`, borderRadius: 6, boxShadow: "0 14px 30px rgba(0,0,0,0.55)", padding: "4px 0", zIndex: 50 }}
             >
               {panelMenu.map((id) => {
-                const here = node.tabs.includes(id);
+                const here = node.tabs.some((t) => basePanel(t) === id);
                 return (
                   <button
                     key={id}
                     className="hv-menu"
                     onClick={() => {
                       setMenuOpen(false);
-                      // Already in this pane? Just show it. Otherwise pull it
-                      // here from wherever it lives.
-                      onLayout(here ? focusPanel(layout, id) : dockTab(layout, id, path, "center"));
+                      onLayout(setPaneType(layout, path, id));
                     }}
                     style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", height: 24, padding: "0 10px", background: "none", border: "none", color: here ? "#fff" : C.body, cursor: "pointer", textAlign: "left" }}
                   >

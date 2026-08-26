@@ -45,6 +45,11 @@ uncommitted WIP there: verify per-file cleanliness, not repo-wide.
   card. Sample render props live in localStorage only.
   `dock.tsx` = the docking layout: panels are cards in a pure-data
   split/tab tree, dragged by their header icon, persisted per project.
+  Blender's rule: **any pane can hold any panel, any number of times** —
+  every panel is duplicable (`panel#2`), every panel is in every pane's
+  type dropdown, and the workspace tabs are preset arrangements, not
+  restrictions. Panel state that an instance owns goes through
+  `usePaneState` in `App.tsx`, or two Outliners move as one.
   Layout and Component **share one tree** so the harness iframe survives
   that switch. Blender-style chrome: one header row per pane — icon
   dropdown, then that panel's own controls inline — so panels split into

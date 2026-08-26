@@ -178,8 +178,9 @@ try {
     ),
   );
   check(
-    ["Insert", "Canvas", "Outliner", "Properties"].every((n) => menuNames.includes(n)),
-    `type dropdown lists panels by name: ${JSON.stringify(menuNames)}`,
+    JSON.stringify(menuNames) ===
+      JSON.stringify(["Insert", "Canvas", "Outliner", "Properties", "Style", "Workshop"]),
+    `every panel is offered in every pane, Style and Workshop included: ${JSON.stringify(menuNames)}`,
   );
 
   await page.locator("[data-dock-typemenu] button", { hasText: "Properties" }).last().click();
@@ -497,8 +498,18 @@ try {
   await page.keyboard.press("Escape");
   await page.waitForTimeout(150);
 
-  // A pane too small to halve, or holding a lone un-duplicable panel, refuses
-  // with a whole-area ghost — Blender's area_split_allowed.
+  // Nothing refuses a split for lack of something to put in the new half any
+  // more — every panel can be cloned. What still refuses is a pane too small
+  // to halve: Blender's area_split_allowed. Squeeze one under it first.
+  const sash0 = await box('[data-dock-splitter="vertical"]');
+  await page.mouse.move(sash0.x + sash0.width / 2, sash0.y + sash0.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(4, sash0.y + sash0.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  const squeezed = (await leafMap()).find((l) => l.tabs.includes("insert")).box;
+  check(squeezed.width < 150, `a pane can be squeezed under the split minimum: ${Math.round(squeezed.width)}px`);
+
   await openSash('[data-dock-splitter="vertical"]');
   await page.locator("[data-dock-areamenu] button", { hasText: "Vertical Split" }).click();
   const ib = (await leafMap()).find((l) => l.tabs.includes("insert")).box;
@@ -510,10 +521,40 @@ try {
   }));
   check(
     blocked.ghosts.join("|") === "whole" && blocked.aim === "blocked",
-    `a pane that can't be split shows one whole-area ghost: ${JSON.stringify(blocked)}`,
+    `a pane too small to halve shows one whole-area ghost: ${JSON.stringify(blocked)}`,
   );
   await page.keyboard.press("Escape");
   await page.waitForTimeout(150);
+  await viewMenuItem("Reset layout");
+
+  // --- every panel is duplicable, so any pane can split --------------------
+  // The Insert column holds one panel and used to refuse both axes for want
+  // of anything to move across (Sam, 2026-08-26: "why cant i horizontal split
+  // the insert tab").
+  const insBox = (await leafMap()).find((l) => l.tabs.includes("insert")).box;
+  await page.mouse.click(insBox.x + insBox.width + 2, insBox.y + insBox.height / 2, { button: "right" });
+  await page.waitForTimeout(250);
+  await page.locator("[data-dock-areamenu] button", { hasText: "Horizontal Split" }).click();
+  await page.mouse.move(insBox.x + insBox.width / 2, insBox.y + insBox.height * 0.4);
+  await page.waitForTimeout(150);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(350);
+  check(
+    (await shape()) === "row[col[insert, insert#2], canvas, col[outliner, properties]]",
+    `a lone panel's pane splits, cloning it: ${await shape()}`,
+  );
+
+  // The type dropdown SETS the pane's type, Blender-style — it no longer
+  // drags the named panel here from wherever else it lived.
+  await page.locator('[data-dock-leaf]:has([data-dock-tab="insert#2"]) [data-dock-type]').click();
+  await page.waitForTimeout(250);
+  await page.locator("[data-dock-typemenu] button", { hasText: "Outliner" }).click();
+  await page.waitForTimeout(350);
+  check(
+    (await shape()) === "row[col[insert, outliner#2], canvas, col[outliner, properties]]",
+    `picking a type replaces the pane's panel and leaves the original alone: ${await shape()}`,
+  );
   await viewMenuItem("Reset layout");
 
   // --- the dock's outer border is live, not dead space ---------------------
