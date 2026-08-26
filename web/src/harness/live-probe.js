@@ -54,7 +54,11 @@
    * app, and we hit-test through it ourselves. Hovering outlines the
    * element a click would select, with its tag as a chip. Interact (view)
    * mode removes all of it and hands the page back. */
-  var selecting = true;
+  // A static page served by the proxy itself (the offline card) sets
+  // __uaiStatic before this script: nothing on it is selectable, so the
+  // overlay stays off for good — but pan/zoom/keys still relay below.
+  var staticPage = !!window.__uaiStatic;
+  var selecting = !staticPage;
   var overlay = null;
   var hoverBox = null;
   var hoverChip = null;
@@ -303,7 +307,9 @@
     "mousedown",
     function (e) {
       if (e.button !== 1) return;
-      if (!selecting && !e.ctrlKey) return;
+      // Interact mode gives plain middle-drag to the app (Ctrl reclaims it);
+      // a static page has no app to give it to, so it always pans.
+      if (!selecting && !staticPage && !e.ctrlKey) return;
       e.preventDefault();
       e.stopPropagation();
       panDrag = { x: e.screenX, y: e.screenY };
@@ -406,7 +412,7 @@
     var msg = e.data;
     if (!msg || !msg.uaiCmd) return;
     if (msg.uaiCmd === "set-interact") {
-      selecting = !msg.on;
+      selecting = staticPage ? false : !msg.on;
       applyMode();
     } else if (msg.uaiCmd === "ping") {
       var el = document.querySelector("main, #__next, body");

@@ -67,9 +67,13 @@ const setLivePort = (p: number) => {
 };
 
 /** The "your app isn't running" page — shown in the canvas instead of a
- * browser connection error, because the fix is a command, not a bug. */
+ * browser connection error, because the fix is a command, not a bug.
+ * It gets the probe like any other page — without it the iframe swallows
+ * ctrl+wheel and middle-drag, so zoom and pan die the moment the cursor
+ * crosses this card. `__uaiStatic` tells the probe there is nothing to
+ * select here (no overlay, text stays copyable), only gestures to relay. */
 function offlinePage(upstream: string, detail: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>app not running</title></head>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>app not running</title><script>window.__uaiStatic=true</script>${PROBE_TAG}</head>
 <body style="margin:0;display:grid;place-items:center;height:100vh;background:#16181d;color:#c8cdd6;font:14px/1.6 system-ui">
   <div style="max-width:34rem;padding:1.5rem;border:1px solid #2b2f39;border-radius:10px">
     <p style="margin:0 0 .6rem;font-weight:600;color:#e6e9ef">The app isn't running.</p>
