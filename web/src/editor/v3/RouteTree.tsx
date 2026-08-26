@@ -45,7 +45,7 @@ function Rows({
   node: RouteNode;
   depth: number;
   expanded: Set<string>;
-  toggle: (id: string) => void;
+  toggle: (node: RouteNode, recursive: boolean) => void;
   selectedId: string | null;
   onSelect: (node: RouteNode) => void;
 }) {
@@ -71,10 +71,10 @@ function Rows({
         caret={hasChildren ? (open ? "open" : "closed") : undefined}
         guideXs={Array.from({ length: depth }, (_, j) => 16 + j * 13)}
         right={badges.join(" · ") || undefined}
-        onToggle={() => toggle(id)}
+        onToggle={(recursive) => toggle(node, recursive)}
         onClick={() => {
           if (node.files.page || isApiOnly(node)) onSelect(node);
-          else if (hasChildren) toggle(id);
+          else if (hasChildren) toggle(node, false);
         }}
       />
       {open &&
@@ -103,11 +103,22 @@ export function RouteTree({
   onSelect: (node: RouteNode) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([routeId(tree)]));
-  const toggle = (id: string) =>
+  /** Shift-click (recursive) opens or closes the whole subtree, Blender's
+   *  triangle behavior. */
+  const toggle = (node: RouteNode, recursive: boolean) =>
     setExpanded((s) => {
       const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const opening = !next.has(routeId(node));
+      const ids: string[] = [];
+      const collect = (n: RouteNode) => {
+        ids.push(routeId(n));
+        if (recursive) n.children.forEach(collect);
+      };
+      collect(node);
+      for (const i of ids) {
+        if (opening) next.add(i);
+        else next.delete(i);
+      }
       return next;
     });
   return (

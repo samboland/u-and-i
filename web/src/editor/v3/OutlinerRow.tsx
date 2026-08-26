@@ -3,7 +3,7 @@
  *  white wash on hover layered on top (v3.css .hv-row:hover::after), real
  *  Material Symbols icons, and vertical hierarchy guides drawn per row so
  *  they stack into continuous lines. */
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { C, MONO } from "./chrome";
 
 export function OutlinerRow({
@@ -41,12 +41,20 @@ export function OutlinerRow({
   dim?: boolean;
   /** x offsets of ancestor hierarchy guide lines. */
   guideXs?: number[];
-  onToggle?: () => void;
+  /** `recursive` is true on Shift-click: apply to the whole subtree. */
+  onToggle?: (recursive: boolean) => void;
   onClick: () => void;
   onCtx?: (e: { preventDefault(): void; clientX: number; clientY: number }) => void;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  // A selection arriving from the canvas or an edit re-anchor may land on a
+  // row far outside the scrolled view; "nearest" makes clicks a no-op.
+  useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
   return (
     <div
+      ref={rowRef}
       className="hv-row"
       style={{
         position: "relative",
@@ -72,7 +80,7 @@ export function OutlinerRow({
       ))}
       <button
         style={{ flex: "0 0 13px", width: 13, background: "none", border: "none", padding: 0, color: C.faint, cursor: "pointer", lineHeight: 1 }}
-        onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
+        onClick={(e) => { e.stopPropagation(); onToggle?.(e.shiftKey); }}
       >
         {caret && (
           <span aria-hidden className="material-symbols-rounded" style={{ fontSize: 15, lineHeight: 1, verticalAlign: "middle" }}>

@@ -62,7 +62,7 @@ import {
   materialLines,
   type WorkshopState,
 } from "./Workshop";
-import { findModelNode, type FileEdit, type JsxNodeModel } from "./model";
+import { findModelNode, flattenModel, remapModelIds, visibleModelNodes, type FileEdit, type JsxNodeModel } from "./model";
 
 const MIME_JSX = "application/x-uai-jsx";
 /** The component harness needs *a* session to render authed components. It is
@@ -322,6 +322,8 @@ export function App() {
   const fileFocusRef = useRef(fileFocusId);
   fileFocusRef.current = fileFocusId;
   const [fileCollapsed, setFileCollapsed] = useState<Set<string>>(new Set());
+  const fileCollapsedRef = useRef(fileCollapsed);
+  fileCollapsedRef.current = fileCollapsed;
   const editFileRef = useRef<(edit: FileEdit, expectTag: string) => void | Promise<void>>(() => {});
   const openFileRef = useRef<(file: string) => Promise<void>>(async () => {});
 
@@ -542,6 +544,7 @@ export function App() {
           `/api/component?file=${encodeURIComponent(fs.file)}`,
         );
         setFileState((s) => (s ? { ...s, model: d.model } : s));
+        setFileCollapsed((c) => remapModelIds(c, fs.model, d.model));
         setFileFocusId(null);
         return;
       }
@@ -552,6 +555,9 @@ export function App() {
       }
       const focusBefore = fileFocusRef.current;
       setFileState((s) => (s ? { ...s, model: body.model! } : s));
+      // Ids are ephemeral; re-match the collapsed set onto the new model so a
+      // structural edit doesn't silently re-fold different nodes.
+      setFileCollapsed((c) => remapModelIds(c, fs.model, body.model!));
       setFileFocusId(body.focusId ?? null);
       setHistory((h) => [
         ...h.slice(-59),
@@ -630,6 +636,7 @@ export function App() {
           `/api/component?file=${encodeURIComponent(entry.file)}`,
         );
         setFileState((s) => (s ? { ...s, model: d.model } : s));
+        setFileCollapsed((c) => remapModelIds(c, fsNow.model, d.model));
         setFileFocusId(direction === "undo" ? entry.focusBefore : entry.focusAfter);
       }
     },
@@ -832,6 +839,90 @@ export function App() {
     return () => window.removeEventListener("message", onMessage);
   }, [send, device, zoom, appZoom, zoomBy, beginTextEdit, resolveLiveClick]);
 
+  // Reveal the selection (Blender's show_active): wherever focus comes from —
+  // a canvas click, an edit re-anchor, a walk key — open every collapsed
+  // ancestor so the focused row exists on screen. The row itself scrolls into
+  // view from OutlinerRow.
+  useEffect(() => {
+    if (!fileFocusId || !fileState) return;
+    const byId = new Map(flattenModel(fileState.model).map((m) => [m.id, m]));
+    setFileCollapsed((c) => {
+      let changed = false;
+      const next = new Set(c);
+      let p = byId.get(fileFocusId)?.parentId ?? null;
+      while (p) {
+        if (next.delete(p)) changed = true;
+        p = byId.get(p)?.parentId ?? null;
+      }
+      return changed ? next : c;
+    });
+  }, [fileFocusId, fileState]);
+
+  /** Blender's outliner walk: arrows move along the visible rows; left closes
+   *  or climbs to the parent, right opens or descends; Shift+left/right
+   *  close/open the whole subtree. Returns whether the key was claimed. */
+  const walkOutliner = useCallback(
+    (key: string, shift: boolean): boolean => {
+      const fs = fileStateRef.current;
+      if (!fs) return false;
+      const collapsed = fileCollapsedRef.current;
+      const visible = visibleModelNodes(fs.model, collapsed);
+      if (!visible.length) return false;
+      const select = (m: JsxNodeModel) => {
+        setFileFocusId(m.id);
+        send({ type: "select", id: m.id });
+      };
+      const cur = fileFocusRef.current ? visible.findIndex((m) => m.id === fileFocusRef.current) : -1;
+      if (cur < 0) {
+        select(key === "ArrowUp" ? visible[visible.length - 1] : visible[0]);
+        return true;
+      }
+      const node = visible[cur];
+      if (key === "ArrowUp") {
+        if (cur > 0) select(visible[cur - 1]);
+        return true;
+      }
+      if (key === "ArrowDown") {
+        if (cur < visible.length - 1) select(visible[cur + 1]);
+        return true;
+      }
+      const open = node.children.length > 0 && !collapsed.has(node.id);
+      if (shift && node.children.length > 0) {
+        const ids = flattenModel([node]).map((m) => m.id);
+        setFileCollapsed((c) => {
+          const next = new Set(c);
+          for (const i of ids) {
+            if (key === "ArrowLeft") next.add(i);
+            else next.delete(i);
+          }
+          return next;
+        });
+        return true;
+      }
+      if (key === "ArrowLeft") {
+        if (open) setFileCollapsed((c) => new Set(c).add(node.id));
+        else if (node.parentId) {
+          const parent = findModelNode(fs.model, node.parentId);
+          if (parent) select(parent);
+        }
+        return true;
+      }
+      if (key === "ArrowRight") {
+        if (node.children.length === 0) return true;
+        if (!open) {
+          setFileCollapsed((c) => {
+            const next = new Set(c);
+            next.delete(node.id);
+            return next;
+          });
+        } else select(node.children[0]);
+        return true;
+      }
+      return false;
+    },
+    [send],
+  );
+
   // ------------------------------------------------------------------ keyboard
 
   const handleChord = useCallback(
@@ -873,7 +964,14 @@ export function App() {
       // modal operator does in Blender — otherwise Tab below would eat the
       // axis flip before the modal's own listener ran.
       if (dockModalActive()) return false;
-      if (c.mod && !c.shift && k === "z") undoAction();
+      if (
+        !c.mod &&
+        !c.alt &&
+        (c.key === "ArrowUp" || c.key === "ArrowDown" || c.key === "ArrowLeft" || c.key === "ArrowRight") &&
+        walkOutliner(c.key, c.shift)
+      ) {
+        /* outliner walk claimed the key */
+      } else if (c.mod && !c.shift && k === "z") undoAction();
       else if (c.mod && c.shift && k === "z") redoAction();
       else if (c.key === "Tab" && (workspace === "Layout" || workspace === "Component")) {
         setInteract((v) => !v);
@@ -891,7 +989,7 @@ export function App() {
       else return false;
       return true;
     },
-    [undoAction, redoAction, zoomBy, device, workspace, editFile, beginTextEdit],
+    [undoAction, redoAction, zoomBy, device, workspace, editFile, beginTextEdit, walkOutliner],
   );
   handleChordRef.current = handleChord;
 
@@ -1389,11 +1487,16 @@ export function App() {
                     model={fileState.model}
                     focusId={fileFocusId}
                     collapsed={fileCollapsed}
-                    onToggle={(id) =>
+                    onToggle={(nodeId, recursive) =>
                       setFileCollapsed((c) => {
                         const next = new Set(c);
-                        if (next.has(id)) next.delete(id);
-                        else next.add(id);
+                        const closing = !next.has(nodeId);
+                        const node = recursive ? findModelNode(fileState.model, nodeId) : null;
+                        const ids = node ? flattenModel([node]).map((m) => m.id) : [nodeId];
+                        for (const i of ids) {
+                          if (closing) next.add(i);
+                          else next.delete(i);
+                        }
                         return next;
                       })
                     }

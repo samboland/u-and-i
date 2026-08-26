@@ -67,7 +67,7 @@ function OutlinerNodes({
   depth: number;
   focusId: string | null;
   collapsed: Set<string>;
-  onToggle: (id: string) => void;
+  onToggle: (id: string, recursive: boolean) => void;
   onSelect: (m: JsxNodeModel) => void;
 }) {
   return (
@@ -89,7 +89,7 @@ function OutlinerNodes({
               after={!open && m.children.length > 0 ? <CollapsedIcons nodes={m.children} /> : undefined}
               guideXs={Array.from({ length: depth }, (_, j) => 16 + j * 12)}
               right={m.dynamic ? (m.dynamicLabel ?? "dynamic") : undefined}
-              onToggle={() => onToggle(m.id)}
+              onToggle={(recursive) => onToggle(m.id, recursive)}
               onClick={() => onSelect(m)}
             />
             {open && m.children.length > 0 && (
@@ -113,7 +113,7 @@ export function FileOutliner(props: {
   model: JsxNodeModel[];
   focusId: string | null;
   collapsed: Set<string>;
-  onToggle: (id: string) => void;
+  onToggle: (id: string, recursive: boolean) => void;
   onSelect: (m: JsxNodeModel) => void;
 }) {
   return (

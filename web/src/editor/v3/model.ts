@@ -77,3 +77,46 @@ export function findModelNode(nodes: JsxNodeModel[], id: string | null): JsxNode
   if (!id) return null;
   return flattenModel(nodes).find((m) => m.id === id) ?? null;
 }
+
+/** Draw-order list of the rows the outliner actually shows: children of a
+ *  collapsed node are skipped. The walk keys move along this list. */
+export function visibleModelNodes(
+  nodes: JsxNodeModel[],
+  collapsed: Set<string>,
+  out: JsxNodeModel[] = [],
+): JsxNodeModel[] {
+  for (const m of nodes) {
+    out.push(m);
+    if (!collapsed.has(m.id)) visibleModelNodes(m.children, collapsed, out);
+  }
+  return out;
+}
+
+/** Carry a set of ephemeral ids across a model rebuild by re-matching each
+ *  node's child-slot path from the root (Blender re-matches its TreeStore by
+ *  identity the same spirit; a path is the closest thing we have). Nodes whose
+ *  path no longer resolves are dropped. */
+export function remapModelIds(
+  ids: Set<string>,
+  oldModel: JsxNodeModel[],
+  newModel: JsxNodeModel[],
+): Set<string> {
+  const pathById = new Map<string, string>();
+  const idByPath = new Map<string, string>();
+  const index = (nodes: JsxNodeModel[], prefix: string, into: (id: string, path: string) => void) => {
+    nodes.forEach((m, i) => {
+      const p = prefix ? `${prefix}.${i}` : String(i);
+      into(m.id, p);
+      index(m.children, p, into);
+    });
+  };
+  index(oldModel, "", (id, p) => pathById.set(id, p));
+  index(newModel, "", (id, p) => idByPath.set(p, id));
+  const out = new Set<string>();
+  for (const id of ids) {
+    const p = pathById.get(id);
+    const mapped = p ? idByPath.get(p) : undefined;
+    if (mapped) out.add(mapped);
+  }
+  return out;
+}
