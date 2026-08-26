@@ -5,6 +5,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "description": "Visual editor for React/CSS where the code is the source of truth",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
     "app": "electron .",

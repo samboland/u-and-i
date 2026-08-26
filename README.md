@@ -57,3 +57,17 @@ npm run dev      # dev server only, editor at http://localhost:4400
   identical; a Prettier pass restores it).
 - The canvas chrome (fonts, session shape, provider stack) has
   adventure-alerts-specific niceties; other targets get a generic fallback.
+
+## License
+
+Copyright (C) 2026 Sam Boland.
+
+u—i is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software
+Foundation, either **version 3 of the License, or (at your option) any later
+version**.
+
+It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See the [GNU General Public License](LICENSE) for more
+details.
