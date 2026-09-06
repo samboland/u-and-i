@@ -1,7 +1,7 @@
 # Roadmap
 
 Where u-and-i is and what's next. Update this as priorities shift — it's the
-first thing a new session should read after CLAUDE.md.
+first thing a new session should read after AGENTS.md.
 
 ## Docking windows (DONE — built 2026-08-18, reworked through 2026-08-26)
 
