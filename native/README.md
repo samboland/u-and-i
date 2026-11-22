@@ -1,13 +1,17 @@
 # Native u&i
 
-Run `cargo run --manifest-path native/Cargo.toml` from the repository root.
+The first Rust port covers project inspection in the Electron editor’s Layout workspace. Both frontends read the same route tree, component list, and JSX model from the existing project daemon. Rust handles the window, panel layout, navigation, selection, and property display. Requests run on a worker thread so parsing a component cannot block window input.
 
-Click **Add label** in Parts. Drag the label on the canvas. The Properties pane edits its text and position. Positions use logical points measured from the canvas corner. The document lives in memory for this first interaction test.
+## Run
 
-## Runtime choices
+With the existing editor or its Vite daemon listening at localhost:4400, run:
 
-Rust owns the document and input handling. egui draws the toolbox, canvas, and inspector from that document. eframe opens the desktop window and connects egui to the graphics system.
+```powershell
+cargo run --manifest-path native/Cargo.toml
+```
 
-A label stores its text and two coordinates. Dragging the label and typing a coordinate update the same value. The canvas reads that value when it draws the next frame. This keeps a visual edit and its precise numerical adjustment together.
+Start the daemon with `npm run dev` from the repository root if needed. Click **Reload project** in **File** after reconnecting.
 
-This prototype uses an empty local document so you can judge placement without loading another project. Startup time and drag latency still need measurements before comparing runtimes.
+Filter the **Insert** list and click a component. Click an element in the **File** outliner to inspect its properties. Switch to **Routes** to inspect a route and its layout chain. Click a route file in **Properties** to inspect its JSX.
+
+The center pane currently shows the device frame. Live rendering, JSX edits, rearrangeable docks, and the other workspaces are pending. This version only reads the target project.
