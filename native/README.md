@@ -14,4 +14,4 @@ Start the daemon with `npm run dev` from the repository root if needed. Click **
 
 Filter the **Insert** list and click a component. Click an element in the **File** outliner to inspect its properties. Switch to **Routes** to inspect a route and its layout chain. Click a route file in **Properties** to inspect its JSX.
 
-The center pane currently shows the device frame. Live rendering, JSX edits, rearrangeable docks, and the other workspaces are pending. This version only reads the target project.
+On Windows, the center pane embeds the live proxy in WebView2. Enter a path and press Enter to navigate. Start the target app to see its pages. JSX edits, rearrangeable docks, and the other workspaces are pending. This version only reads the target project.

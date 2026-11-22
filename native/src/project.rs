@@ -55,7 +55,13 @@ struct Project {
     src_dir: String,
 }
 #[derive(Deserialize)]
+pub struct Live {
+    pub origin: String,
+    pub upstream: String,
+}
+#[derive(Deserialize)]
 struct Info {
+    live: Live,
     project: Project,
 }
 #[derive(Deserialize)]
@@ -71,6 +77,7 @@ struct File {
     model: Vec<Element>,
 }
 pub struct Catalog {
+    pub live: Live,
     pub name: String,
     pub groups: BTreeMap<String, Vec<String>>,
     pub routes: Route,
@@ -116,6 +123,7 @@ fn catalog(client: &Client) -> Result<Catalog, String> {
         groups.entry(group).or_default().push(file);
     }
     Ok(Catalog {
+        live: info.live,
         name: info.project.label,
         groups,
         routes: routes.tree,

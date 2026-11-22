@@ -1,4 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#[cfg(windows)]
+mod canvas;
+mod chrome;
 mod project;
 use eframe::egui::{self, Color32, RichText};
 use project::{Catalog, Element, Reply, Request, Route};
@@ -28,10 +31,19 @@ struct Editor {
     routes: bool,
     device: usize,
     zoom: f32,
+    path: String,
+    draft: String,
+    canvas_rect: egui::Rect,
+    reload: bool,
+    #[cfg(windows)]
+    web: Option<canvas::Canvas>,
+    #[cfg(windows)]
+    web_error: Option<String>,
 }
 
 impl Editor {
     fn new(ctx: &egui::Context) -> Self {
+        chrome::fonts(ctx);
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = PANEL;
         visuals.extreme_bg_color = BAR;
@@ -41,6 +53,12 @@ impl Editor {
         visuals.override_text_color = Some(Color32::from_rgb(215, 218, 224));
         ctx.set_visuals(visuals);
         ctx.global_style_mut(|s| {
+            s.spacing.window_margin = egui::Margin::ZERO;
+            s.spacing.item_spacing = egui::vec2(4., 3.);
+            s.text_styles
+                .insert(egui::TextStyle::Body, egui::FontId::proportional(12.));
+            s.text_styles
+                .insert(egui::TextStyle::Button, egui::FontId::proportional(12.));
             s.spacing.scroll.floating = false;
             s.spacing.scroll.bar_width = 5.;
             s.spacing.scroll.bar_inner_margin = 3.;
@@ -60,6 +78,14 @@ impl Editor {
             routes: true,
             device: 0,
             zoom: 0.5,
+            path: "/".into(),
+            draft: "/".into(),
+            canvas_rect: egui::Rect::NOTHING,
+            reload: false,
+            #[cfg(windows)]
+            web: None,
+            #[cfg(windows)]
+            web_error: None,
         }
     }
     fn open(&mut self, file: String) {
@@ -91,9 +117,15 @@ impl Editor {
         }
         let width = ui.available_width();
         egui::Panel::top("menus")
-            .frame(egui::Frame::new().fill(BAR).inner_margin(5))
+            .frame(
+                egui::Frame::new()
+                    .fill(BAR)
+                    .inner_margin(egui::Margin::symmetric(10, 4)),
+            )
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
+                    ui.set_min_height(24.);
+                    ui.spacing_mut().item_spacing.x = 9.;
                     ui.label(RichText::new("u—i").color(BLUE).monospace());
                     ui.menu_button("File", |ui| {
                         ui.label(format!(
@@ -112,21 +144,27 @@ impl Editor {
                         ui.add_enabled(false, egui::Button::new(menu).frame(false));
                     }
                     ui.separator();
-                    ui.label(RichText::new("Layout").strong());
+                    ui.selectable_label(true, "Layout")
+                        .on_hover_text("Layout workspace");
                     for ws in ["Style", "Workshop", "Component"] {
                         ui.add_enabled(false, egui::Button::new(ws).frame(false));
                     }
                 });
             });
         egui::Panel::left("insert")
+            .frame(chrome::pane(PANEL))
             .default_size(width * 0.15)
             .size_range(100.0..=360.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Insert");
+                    chrome::header_icon(ui, '\u{e1bd}', "Insert");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("Search components")
+                            .hint_text(if self.file.is_some() {
+                                "Search components"
+                            } else {
+                                "open a file first"
+                            })
                             .desired_width(f32::INFINITY),
                     );
                 });
@@ -135,30 +173,24 @@ impl Editor {
                 egui::ScrollArea::vertical()
                     .id_salt("library")
                     .show(ui, |ui| {
-                        ui.strong("Primitives");
-                        egui::Grid::new("primitives").num_columns(2).show(ui, |ui| {
-                            for (i, name) in [
-                                "Container",
-                                "Heading",
-                                "Paragraph",
-                                "Button",
-                                "Link",
-                                "Image",
-                            ]
-                            .iter()
-                            .enumerate()
-                            {
-                                ui.add_enabled_ui(false, |ui| {
-                                    ui.add_sized(
-                                        [((ui.available_width() - 6.) * 0.5).clamp(46., 90.), 24.],
-                                        egui::Button::new(*name),
-                                    );
-                                });
-                                if i % 2 == 1 {
-                                    ui.end_row();
-                                }
-                            }
+                        ui.horizontal(|ui| {
+                            ui.strong("Primitives");
+                            ui.weak("plain html");
                         });
+                        let half = (ui.available_width() - 4.) * 0.5;
+                        for pair in [
+                            [("▤", "Container"), ("H", "Heading")],
+                            [("¶", "Paragraph"), ("▭", "Button")],
+                            [("↗", "Link"), ("▨", "Image")],
+                        ] {
+                            ui.horizontal(|ui| {
+                                for (icon, name) in pair {
+                                    ui.add_enabled_ui(false, |ui| {
+                                        chrome::part_button(ui, [half, 28.], icon, name, false);
+                                    });
+                                }
+                            });
+                        }
                         if let Some(c) = &self.catalog {
                             let query = self.search.trim().to_lowercase();
                             for (group, files) in &c.groups {
@@ -177,15 +209,15 @@ impl Editor {
                                         .next()
                                         .unwrap_or(file)
                                         .trim_end_matches(".tsx");
-                                    if ui
-                                        .add_sized(
-                                            [ui.available_width(), 22.],
-                                            egui::Button::new(name)
-                                                .truncate()
-                                                .selected(self.file.as_ref() == Some(file)),
-                                        )
-                                        .on_hover_text(file)
-                                        .clicked()
+                                    if chrome::part_button(
+                                        ui,
+                                        [ui.available_width(), 26.],
+                                        "\u{e14d}",
+                                        name,
+                                        self.file.as_ref() == Some(file),
+                                    )
+                                    .on_hover_text(file)
+                                    .clicked()
                                     {
                                         open = Some(file.clone());
                                     }
@@ -198,17 +230,17 @@ impl Editor {
                 }
             });
         egui::Panel::right("details")
-            .default_size(width * 0.19)
+            .frame(egui::Frame::new().outer_margin(1)).default_size(width * 0.19)
             .size_range(140.0..=500.0)
             .show(ui, |ui| {
                 let height = ui.available_height() * 0.44;
                 egui::Panel::top("outliner")
-                    .default_size(height)
+                    .frame(chrome::pane(PANEL)).default_size(height)
                     .resizable(true)
                     .show(ui, |ui| {
                         ui.set_min_height(ui.available_height());
                         ui.horizontal(|ui| {
-                            ui.label("Outliner");
+                            chrome::header_icon(ui,'\u{e97a}',"Outliner");
                             ui.selectable_value(&mut self.routes, false, "File");
                             ui.selectable_value(&mut self.routes, true, "Routes");
                         });
@@ -219,6 +251,7 @@ impl Editor {
                                 if self.routes {
                                     if let Some(c) = &self.catalog {
                                         if let Some(route) = route_tree(ui, &c.routes, "app") {
+                                            if route.files.contains_key("page") && !route.path.contains('['){self.path=route.path.clone();self.draft=self.path.clone();}
                                             self.route = Some((
                                                 route.path.clone(),
                                                 route.files.clone().into_iter().collect(),
@@ -236,10 +269,10 @@ impl Editor {
                                 }
                             });
                     });
-                egui::ScrollArea::vertical()
+                chrome::pane(PANEL).show(ui,|ui|{ui.set_min_height(ui.available_height());ui.set_min_width(ui.available_width());egui::ScrollArea::vertical()
                     .id_salt("props")
                     .show(ui, |ui| {
-                        ui.strong("Properties");
+                        ui.horizontal(|ui|{chrome::header_icon(ui,'\u{e429}',"Properties");ui.label(if self.selected.is_some(){"Element"}else if self.route.is_some(){"Route"}else{"▪  Nothing open"});});
                         ui.separator();
                         if let Some(i) = self
                             .selected
@@ -280,14 +313,15 @@ impl Editor {
                                 self.open(f)
                             }
                         } else {
-                            ui.weak("Nothing open.");
+                            ui.weak("Nothing open. The Routes tree shows the app’s structure; Insert lists its components.");
                         }
-                    });
+                    });});
             });
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(VOID).inner_margin(8))
+            .frame(chrome::pane(VOID))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
+                    chrome::header_icon(ui, '\u{e30c}', "Canvas");
                     for (i, (name, _, zoom)) in DEVICES.iter().enumerate() {
                         if ui.selectable_label(self.device == i, *name).clicked() {
                             self.device = i;
@@ -315,31 +349,41 @@ impl Editor {
                         let _ = self.requests.send(Request::Reload);
                     }
                 }
-                let path = self
-                    .route
-                    .as_ref()
-                    .map(|r| r.0.as_str())
-                    .or(self.file.as_deref())
-                    .unwrap_or("/");
-                ui.monospace(path);
-                ui.separator();
-                egui::ScrollArea::both().show(ui, |ui| {
-                    let size = egui::vec2(DEVICES[self.device].1 * self.zoom, 790. * self.zoom);
-                    ui.add_space(8.);
-                    ui.horizontal(|ui| {
-                        ui.add_space(((ui.available_width() - size.x) * 0.5).max(0.));
-                        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                        ui.painter()
-                            .rect_filled(rect, 0., Color32::from_rgb(22, 24, 29));
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Live preview is not ported yet.",
-                            egui::FontId::proportional(12.),
-                            Color32::GRAY,
+                ui.horizontal(|ui| {
+                    ui.weak("PATH");
+                    let input = ui.add_sized(
+                        [(ui.available_width() - 112.).max(30.), 22.],
+                        egui::TextEdit::singleline(&mut self.draft),
+                    );
+                    if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        self.path = format!("/{}", self.draft.trim_start_matches('/'));
+                        self.draft = self.path.clone();
+                    }
+                    if ui.button("Reload").clicked() {
+                        self.reload = true;
+                        #[cfg(windows)]
+                        {
+                            self.web_error = None;
+                        }
+                    }
+                    if ui.button("Open").clicked()
+                        && let Some(c) = &self.catalog
+                    {
+                        let url = format!(
+                            "{}/{}",
+                            c.live.upstream.trim_end_matches('/'),
+                            self.path.trim_start_matches('/')
                         );
-                    });
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                    }
                 });
+                ui.separator();
+                ui.add_space(10.);
+                self.canvas_rect = ui.available_rect_before_wrap();
+                #[cfg(windows)]
+                if let Some(err) = &self.web_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
             });
     }
 }
@@ -408,8 +452,36 @@ fn element_tree(ui: &mut egui::Ui, node: &Element, selected: &mut Option<usize>)
     }
 }
 impl eframe::App for Editor {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.render(ui)
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.render(ui);
+        #[cfg(windows)]
+        if self.web_error.is_none()
+            && let Some(c) = &self.catalog
+            && let Some(url) = canvas::page_url(&c.live.origin, &self.path)
+        {
+            let size = (
+                DEVICES[self.device].1 as u32,
+                [790, 1112, 844][self.device],
+                self.zoom,
+            );
+            let result = (|| {
+                if self.web.is_none() {
+                    self.web = Some(canvas::Canvas::create(frame, &url, size)?);
+                }
+                self.web.as_mut().unwrap().update(
+                    self.canvas_rect,
+                    ui.ctx().pixels_per_point(),
+                    &url,
+                    size,
+                    std::mem::take(&mut self.reload),
+                )
+            })();
+            if let Err(e) = result {
+                self.web = None;
+                self.web_error = Some(e.to_string());
+                ui.ctx().request_repaint();
+            }
+        }
     }
 }
 fn main() -> eframe::Result {
