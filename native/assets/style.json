@@ -1,0 +1,244 @@
+{
+  "CATS": {
+    "Colors": {
+      "note": "app globals.css",
+      "groups": [
+        {
+          "name": "Provenance trust ladder",
+          "rows": [
+            {
+              "token": "--source-community",
+              "cssVar": "--source-community",
+              "usage": "where a crawled fact came from"
+            },
+            {
+              "token": "--source-marketplace",
+              "cssVar": "--source-marketplace",
+              "usage": "never status, never the beacon"
+            },
+            {
+              "token": "--source-expert",
+              "cssVar": "--source-expert",
+              "usage": "rung 3 of 6"
+            },
+            {
+              "token": "--source-handson",
+              "cssVar": "--source-handson",
+              "usage": "rung 4 of 6"
+            },
+            {
+              "token": "--source-exclusive",
+              "cssVar": "--source-exclusive",
+              "usage": "rung 5 of 6"
+            },
+            {
+              "token": "--source-verified",
+              "cssVar": "--source-verified",
+              "usage": "rung 6 of 6"
+            }
+          ]
+        },
+        {
+          "name": "Seven Seas · light",
+          "rows": [
+            {
+              "token": "--background",
+              "cssVar": "--background",
+              "usage": "parchment ground · L* 93.2"
+            },
+            {
+              "token": "--foreground",
+              "cssVar": "--foreground",
+              "usage": "warm ink · never pure black"
+            },
+            {
+              "token": "--muted",
+              "cssVar": "--muted",
+              "usage": "wells and placeholders"
+            },
+            {
+              "token": "--muted-foreground",
+              "cssVar": "--muted-foreground",
+              "usage": "captions, absent labels"
+            },
+            {
+              "token": "--ring",
+              "cssVar": "--ring",
+              "usage": "focus outlines"
+            },
+            {
+              "token": "--primary",
+              "cssVar": "--primary",
+              "usage": "interaction fill · teal, never gold"
+            }
+          ]
+        },
+        {
+          "name": "Dark · abyss",
+          "rows": [
+            {
+              "token": "--background (dark)",
+              "cssVar": "--background",
+              "occurrence": 1,
+              "usage": "abyss canvas ground"
+            },
+            {
+              "token": "--foreground (dark)",
+              "cssVar": "--foreground",
+              "occurrence": 1,
+              "usage": "body copy on abyss"
+            },
+            {
+              "token": "--muted-foreground (dark)",
+              "cssVar": "--muted-foreground",
+              "occurrence": 1,
+              "usage": "cards go lighter than the canvas"
+            }
+          ]
+        },
+        {
+          "name": "Beacon · one bit",
+          "rows": [
+            {
+              "token": "--beacon-armed",
+              "cssVar": "--beacon-armed",
+              "usage": "luminance slam, from",
+              "missingNote": "no such token in the app yet"
+            },
+            {
+              "token": "--beacon-fired",
+              "cssVar": "--beacon-fired",
+              "usage": "…to. Never hue.",
+              "missingNote": "no such token in the app yet"
+            }
+          ]
+        }
+      ]
+    },
+    "Type": {
+      "note": "src/fonts.css",
+      "groups": [
+        {
+          "name": "Families",
+          "rows": [
+            {
+              "token": "--font-display",
+              "cssVar": "--font-display",
+              "usage": "a punctuation mark, not the default voice",
+              "render": "sample"
+            },
+            {
+              "token": "--font-body",
+              "cssVar": "--font-body",
+              "usage": "body and UI",
+              "render": "sample"
+            },
+            {
+              "token": "--font-mono",
+              "cssVar": "--font-mono",
+              "usage": "mono",
+              "render": "sample"
+            }
+          ]
+        },
+        {
+          "name": "Heading scale",
+          "rows": [
+            {
+              "token": "--text-h1",
+              "usage": "Page title",
+              "render": "sample",
+              "missingNote": "sizes live per-component today"
+            },
+            {
+              "token": "--text-h2",
+              "usage": "Section title",
+              "render": "sample",
+              "missingNote": "sizes live per-component today"
+            },
+            {
+              "token": "--text-h3",
+              "usage": "Sub-heading",
+              "render": "sample",
+              "missingNote": "sizes live per-component today"
+            }
+          ]
+        }
+      ]
+    },
+    "Surfaces": {
+      "note": "ui.css recipes",
+      "groups": [
+        {
+          "name": "Radius",
+          "rows": [
+            {
+              "token": "--radius",
+              "cssVar": "--radius",
+              "usage": "default · sections and cards",
+              "render": "bar"
+            }
+          ]
+        },
+        {
+          "name": "Card material · straddle",
+          "rows": [
+            {
+              "token": "--ui-card-t1-start",
+              "cssVar": "--ui-card-t1-start",
+              "usage": "tier-1 top stop · above the ground"
+            },
+            {
+              "token": "--ui-card-t1-mid",
+              "cssVar": "--ui-card-t1-mid",
+              "usage": "tier-1 bottom stop · below the ground"
+            },
+            {
+              "token": "--ui-surface-grad-start",
+              "cssVar": "--ui-surface-grad-start",
+              "usage": "control surface · top stop"
+            },
+            {
+              "token": "--ui-surface-grad-mid",
+              "cssVar": "--ui-surface-grad-mid",
+              "usage": "control surface · mid stop"
+            },
+            {
+              "token": "--ui-surface-grad-end",
+              "cssVar": "--ui-surface-grad-end",
+              "usage": "control surface · lower boundary"
+            }
+          ]
+        }
+      ]
+    },
+    "Spacing": {
+      "note": "page document",
+      "groups": [
+        {
+          "name": "Block spacing",
+          "rows": [
+            {
+              "token": "Space · None",
+              "usage": "0 — spacing lives in the page document, not tokens",
+              "render": "bar",
+              "missingNote": ""
+            },
+            {
+              "token": "Space · 1rem",
+              "usage": "the Space control on any element",
+              "render": "bar",
+              "missingNote": ""
+            },
+            {
+              "token": "Space · 2rem",
+              "usage": "…and the box model takes any CSS length",
+              "render": "bar",
+              "missingNote": ""
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="dark">
+  <style>
+    * { box-sizing: border-box }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #101216 }
+    iframe { display: block; border: 0 }
+    #apron, #component { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden }
+    #live { outline: 1px solid #52545a; transform-origin: top left }
+    [hidden] { display: none !important }
+  </style>
+</head>
+<body>
+<div id="apron"><iframe id="live" title="Live app"></iframe></div>
+<iframe id="component" title="Component" hidden></iframe>
+<script>
+  const live = document.querySelector('#live');
+  const component = document.querySelector('#component');
+  const apron = document.querySelector('#apron');
+  let state, rendered, liveURL, anchor, popup;
+  let panX = 0, panY = 16, dragging = false;
+  function emit(message) {
+    window.ipc.postMessage(JSON.stringify({token: window.uaiCanvasToken, message}));
+  }
+  function send(frame, message) {
+    if (frame.hasAttribute('src')) frame.contentWindow.postMessage(message, new URL(frame.src).origin);
+  }
+  function syncComponent(force) {
+    const signature = JSON.stringify([state.file, state.props]);
+    if (state.file && (force || signature !== rendered)) {
+      send(component, {type: 'render', file: state.file, props: state.props});
+      rendered = signature;
+    }
+    for (const message of [
+      {type: 'set-interact', on: state.interact}, {type: 'set-device', width: state.width},
+      {type: 'set-zoom', zoom: state.zoom}, {type: 'set-theme', dark: state.dark},
+      {type: 'select', id: state.selection}
+    ]) send(component, message);
+  }
+  function place() {
+    live.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + state.zoom + ')';
+  }
+  function zoomAt(x, y, dir) {
+    anchor = {x, y, localX: (x - panX) / state.zoom, localY: (y - panY) / state.zoom};
+    emit({type: 'live-zoom', dir});
+  }
+  window.apply = (s, reload) => {
+    if (!state || state.width !== s.width) {
+      panX = Math.max(16, (innerWidth - s.width * s.zoom) / 2);
+      panY = 16;
+    } else if (anchor && s.zoom !== state.zoom) {
+      panX = anchor.x - anchor.localX * s.zoom;
+      panY = anchor.y - anchor.localY * s.zoom;
+    }
+    anchor = null;
+    state = s;
+    component.hidden = !s.component;
+    apron.hidden = s.component;
+    if (s.component && (!component.hasAttribute('src') || reload)) component.src = s.harness;
+    if (!s.component && (liveURL !== s.url || reload)) { live.src = s.url; liveURL = s.url; }
+    Object.assign(live.style, {width: s.width + 'px', height: s.height + 'px'});
+    place();
+    syncComponent(false);
+    send(live, {uaiCmd: 'set-interact', on: s.interact});
+  };
+  window.command = message => send(component, message);
+  window.signIn = () => {
+    if (popup && !popup.closed) return;
+    popup = window.open(new URL('/signin', state.upstream), '_blank');
+    if (!popup) return;
+    const timer = setInterval(() => {
+      if (popup.closed) { clearInterval(timer); live.src = state.url; }
+    }, 500);
+  };
+  window.dropNative = (x, y, payload) => {
+    const el = component.contentDocument?.elementFromPoint(x,y)?.closest('[data-uai]');
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    emit({...payload, type: 'file-drop', targetId: el.dataset.uai, position: y < box.top + box.height/2 ? 'before' : 'after'});
+  };
+  apron.addEventListener('pointerdown', e => {
+    if (e.button !== 1) return;
+    e.preventDefault(); dragging = true; apron.setPointerCapture(e.pointerId);
+  });
+  apron.addEventListener('pointermove', e => { if (dragging) { panX += e.movementX; panY += e.movementY; place(); } });
+  apron.addEventListener('lostpointercapture', () => { dragging = false; });
+  apron.addEventListener('wheel', e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault(); zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1 : -1);
+  }, {passive: false});
+  window.addEventListener('message', e => {
+    if (!state || !e.data || typeof e.data !== 'object') return;
+    const m = e.data;
+    if (e.source === component.contentWindow && e.origin === new URL(state.harness).origin) {
+      if (m.type === 'ready') syncComponent(true);
+      else if (state.component) emit(m);
+    } else if (e.source === live.contentWindow && e.origin === new URL(state.url).origin) {
+      if (m.type === 'live-ready') { send(live, {uaiCmd: 'set-interact', on: state.interact}); emit(m); }
+      else if (m.type === 'live-pan') { panX += m.dx; panY += m.dy; place(); }
+      else if (m.type === 'live-zoom') zoomAt(panX + m.x * state.zoom, panY + m.y * state.zoom, m.dir);
+      else if (!state.component && ['live-click','toggle-interact'].includes(m.type)) emit(m);
+    }
+  });
+  emit({type:'wrapper-ready'});
+</script>
+</body>
+</html>

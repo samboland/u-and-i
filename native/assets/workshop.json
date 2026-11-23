@@ -1,0 +1,173 @@
+{
+  "WS_SUBJECTS": [
+    {
+      "name": "New primitive",
+      "items": [
+        [
+          "Button",
+          "▭"
+        ],
+        [
+          "Card",
+          "▤"
+        ],
+        [
+          "Field",
+          "⌷"
+        ],
+        [
+          "Pill",
+          "▰"
+        ]
+      ]
+    },
+    {
+      "name": "From kit",
+      "items": [
+        [
+          "SearchBar",
+          "⌕"
+        ],
+        [
+          "Badge",
+          "◈"
+        ],
+        [
+          "Switch",
+          "⊙"
+        ],
+        [
+          "Navbar",
+          "≡"
+        ]
+      ]
+    }
+  ],
+  "WS_PARTS": {
+    "Button": [
+      "Surface",
+      "Label",
+      "Focus ring"
+    ],
+    "Card": [
+      "Surface",
+      "Rim",
+      "Content"
+    ],
+    "Field": [
+      "Well",
+      "Text",
+      "Focus ring"
+    ],
+    "Pill": [
+      "Surface",
+      "Label"
+    ],
+    "SearchBar": [
+      "Well",
+      "Icon",
+      "Text"
+    ],
+    "Badge": [
+      "Surface",
+      "Label"
+    ],
+    "Switch": [
+      "Track",
+      "Knob"
+    ],
+    "Navbar": [
+      "Bar",
+      "Item",
+      "Active item"
+    ]
+  },
+  "WS_STATES": [
+    "Default",
+    "Hover",
+    "Pressed",
+    "Disabled"
+  ],
+  "NODE_POS_DEFAULT": {
+    "light": {
+      "x": 20,
+      "y": 18
+    },
+    "surface": {
+      "x": 20,
+      "y": 156
+    },
+    "shadow": {
+      "x": 250,
+      "y": 18
+    },
+    "depth": {
+      "x": 250,
+      "y": 152
+    },
+    "rim": {
+      "x": 250,
+      "y": 286
+    },
+    "out": {
+      "x": 492,
+      "y": 120
+    }
+  },
+  "PREVIEW_LABEL": {
+    "Button": "Set alert",
+    "Pill": "verified",
+    "Badge": "Verified",
+    "Switch": "On",
+    "Navbar": "Alerts",
+    "Card": "Source coverage",
+    "Field": "Search bookings",
+    "SearchBar": "Search bookings"
+  },
+  "MAT_DEFAULT": {
+    "angle": 135,
+    "distance": 5,
+    "blur": 14,
+    "spread": 0,
+    "tint": "#f3e8db",
+    "innerMix": 16,
+    "rim": 95,
+    "radius": 10,
+    "pressed": 60
+  },
+  "MAT_PRESETS": {
+    "Raised": {
+      "angle": 135,
+      "distance": 5,
+      "blur": 14,
+      "spread": 0,
+      "tint": "#f3e8db",
+      "innerMix": 16,
+      "rim": 95,
+      "radius": 10,
+      "pressed": 60
+    },
+    "Inset": {
+      "angle": 135,
+      "distance": 4,
+      "blur": 10,
+      "spread": 0,
+      "tint": "#f3e8db",
+      "innerMix": 88,
+      "rim": 30,
+      "radius": 10,
+      "pressed": 60
+    },
+    "Flat": {
+      "angle": 135,
+      "distance": 1,
+      "blur": 4,
+      "spread": 0,
+      "tint": "#f3e8db",
+      "innerMix": 0,
+      "rim": 40,
+      "radius": 10,
+      "pressed": 60
+    }
+  }
+}

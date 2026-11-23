@@ -2,6 +2,15 @@
 #[cfg(windows)]
 mod canvas;
 mod chrome;
+mod daemon;
+mod dock;
+mod edit;
+mod studio;
+mod surface;
+mod workspace;
+use dock::{Action, Dock, Panel};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 mod project;
 use eframe::egui::{self, Color32, RichText};
 use project::{Catalog, Element, Reply, Request, Route};
@@ -19,6 +28,34 @@ const DEVICES: [(&str, f32, f32); 3] = [
 const ZOOM: [f32; 12] = [0.25, 0.4, 0.5, 0.62, 0.75, 0.9, 1., 1.25, 1.5, 2., 3., 4.];
 
 struct Editor {
+    reopen: bool,
+    app_zoom: f32,
+    saved_samples: serde_json::Map<String, Value>,
+    samples: Value,
+    specs: Vec<Value>,
+    renderable: bool,
+    workspace: usize,
+    docks: Vec<Dock>,
+    next_id: u64,
+    studio: studio::Studio,
+    primitives: Value,
+    editing: edit::Editing,
+    interact: bool,
+    rulers: bool,
+    rem: bool,
+    prefs: bool,
+    pending_split: Option<bool>,
+    drag: Option<u64>,
+    states: HashMap<u64, (String, bool)>,
+    canvas_views: HashMap<u64, egui::Rect>,
+    landed: HashMap<u64, String>,
+    extra_paths: HashMap<u64, (String, String)>,
+    collapsed: std::collections::HashSet<String>,
+    visible_nodes: Vec<usize>,
+    stage: egui::Vec2,
+    context: Option<egui::Pos2>,
+    shell: Value,
+    help: bool,
     requests: Sender<Request>,
     replies: Receiver<Reply>,
     catalog: Option<Catalog>,
@@ -36,7 +73,7 @@ struct Editor {
     canvas_rect: egui::Rect,
     reload: bool,
     #[cfg(windows)]
-    web: Option<canvas::Canvas>,
+    web: HashMap<u64, canvas::Canvas>,
     #[cfg(windows)]
     web_error: Option<String>,
 }
@@ -65,7 +102,36 @@ impl Editor {
         });
         let (requests, replies) = project::connect(ctx.clone());
         let _ = requests.send(Request::Reload);
-        Self {
+        let (docks, next_id, workspace, rulers, rem) = workspace::load();
+        let mut editor = Self {
+            reopen: true,
+            app_zoom: 1.,
+            saved_samples: Default::default(),
+            samples: json!({}),
+            specs: vec![],
+            renderable: false,
+            workspace,
+            docks,
+            next_id,
+            studio: Default::default(),
+            primitives: serde_json::from_str(include_str!("../assets/primitives.json")).unwrap(),
+            editing: Default::default(),
+            interact: false,
+            rulers,
+            rem,
+            prefs: false,
+            pending_split: None,
+            drag: None,
+            states: HashMap::new(),
+            canvas_views: HashMap::new(),
+            landed: HashMap::new(),
+            extra_paths: HashMap::new(),
+            collapsed: Default::default(),
+            visible_nodes: vec![],
+            stage: egui::Vec2::ZERO,
+            context: None,
+            shell: Value::Null,
+            help: false,
             requests,
             replies,
             catalog: None,
@@ -83,13 +149,29 @@ impl Editor {
             canvas_rect: egui::Rect::NOTHING,
             reload: false,
             #[cfg(windows)]
-            web: None,
+            web: HashMap::new(),
             #[cfg(windows)]
             web_error: None,
-        }
+        };
+        editor.resume_session(ctx);
+        editor
     }
     fn open(&mut self, file: String) {
         let _ = self.requests.send(Request::Open(file.clone()));
+        self.editing.next_selection = None;
+        self.editing.drafts.clear();
+        self.collapsed.clear();
+        for state in self.states.values_mut() {
+            state.1 = false;
+        }
+        if self.renderable
+            && let Some(old) = &self.file
+        {
+            self.saved_samples.insert(old.clone(), self.samples.clone());
+        }
+        self.renderable = false;
+        self.specs.clear();
+        self.samples = json!({});
         self.file = Some(file);
         self.elements.clear();
         self.selected = None;
@@ -106,16 +188,59 @@ impl Editor {
                 }
                 Reply::Catalog(Err(e)) => self.error = Some(e),
                 Reply::File(path, r) if Some(&path) == self.file.as_ref() => match r {
-                    Ok(nodes) => {
-                        self.selected = nodes.first().map(|n| n.index);
+                    Ok(file) => {
+                        self.specs = file.props;
+                        self.renderable = file.renderable;
+                        self.samples = json!({});
+                        for p in &self.specs {
+                            if p["optional"] != true {
+                                let value = match studio::string(&p["control"], "kind") {
+                                    "string" => p["name"].clone(),
+                                    "boolean" => json!(false),
+                                    "number" => json!(0),
+                                    "select" => p["control"]["options"][0].clone(),
+                                    _ => continue,
+                                };
+                                self.samples[studio::string(p, "name")] = value;
+                            }
+                        }
+                        if let Some(samples) = self.saved_samples.get(&path) {
+                            self.samples = samples.clone();
+                        }
+                        let nodes = file.model;
+                        self.selected = self.editing.next_selection.take();
                         self.elements = nodes;
                     }
                     Err(e) => self.error = Some(e),
                 },
+                Reply::Shell(f, Ok(v))
+                    if self.route.as_ref().is_some_and(|(_, files, _)| {
+                        files.iter().any(|(k, path)| k == "page" && path == &f)
+                    }) =>
+                {
+                    self.shell = v
+                }
+                Reply::Write(f, r) => self.changed(f, r),
+                Reply::Restored(f, r) => self.restored(f, r),
+                Reply::Api(name, Ok(v)) => match name {
+                    "tokens" => self.studio.tokens_received(v),
+                    "token" => {
+                        let _ = self.requests.send(Request::Api("tokens", None));
+                    }
+                    "material" => self.studio.written = true,
+                    "live-resolve" => {
+                        if let Some(f) = v["file"].as_str() {
+                            self.pick(f, v["id"].as_str().and_then(edit::index));
+                        }
+                    }
+                    _ => {}
+                },
+                Reply::Api(_, Err(e)) => self.error = Some(e),
                 _ => {}
             }
         }
-        let width = ui.available_width();
+        self.keys(ui);
+        self.canvas_views.clear();
         egui::Panel::top("menus")
             .frame(
                 egui::Frame::new()
@@ -140,37 +265,27 @@ impl Editor {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
-                    for menu in ["Edit", "Insert", "View", "Canvas", "Help"] {
-                        ui.add_enabled(false, egui::Button::new(menu).frame(false));
-                    }
-                    ui.separator();
-                    ui.selectable_label(true, "Layout")
-                        .on_hover_text("Layout workspace");
-                    for ws in ["Style", "Workshop", "Component"] {
-                        ui.add_enabled(false, egui::Button::new(ws).frame(false));
-                    }
+                    self.menus(ui);
                 });
             });
-        egui::Panel::left("insert")
-            .frame(chrome::pane(PANEL))
-            .default_size(width * 0.15)
-            .size_range(100.0..=360.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    chrome::header_icon(ui, '\u{e1bd}', "Insert");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text(if self.file.is_some() {
-                                "Search components"
-                            } else {
-                                "open a file first"
-                            })
-                            .desired_width(f32::INFINITY),
-                    );
-                });
-                ui.separator();
-                let mut open = None;
-                egui::ScrollArea::vertical()
+        self.draw_workspace(ui);
+    }
+    fn insert_body(&mut self, ui: &mut egui::Ui, id: u64) {
+        ui.horizontal(|ui| {
+            self.pane_button(ui, id, Panel::Insert);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.search)
+                    .hint_text(if self.file.is_some() {
+                        "Search components"
+                    } else {
+                        "open a file first"
+                    })
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        ui.separator();
+        let mut open = None;
+        egui::ScrollArea::vertical()
                     .id_salt("library")
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -178,19 +293,16 @@ impl Editor {
                             ui.weak("plain html");
                         });
                         let half = (ui.available_width() - 4.) * 0.5;
-                        for pair in [
-                            [("▤", "Container"), ("H", "Heading")],
-                            [("¶", "Paragraph"), ("▭", "Button")],
-                            [("↗", "Link"), ("▨", "Image")],
-                        ] {
-                            ui.horizontal(|ui| {
-                                for (icon, name) in pair {
-                                    ui.add_enabled_ui(false, |ui| {
-                                        chrome::part_button(ui, [half, 28.], icon, name, false);
-                                    });
-                                }
-                            });
+                        let mut insert=None;
+                        for pair in self.primitives["PRIMITIVES"].as_array().unwrap().chunks(2){
+                            ui.horizontal(|ui|{for p in pair{
+                                let r=ui.add_enabled_ui(self.file.is_some(),|ui|chrome::part_button(ui,[half,28.],studio::string(p,"icon"),studio::string(p,"label"),false)).inner;
+                                if r.clicked(){insert=Some(studio::string(p,"jsx").to_owned());}
+                                r.dnd_set_drag_payload(json!({"insert":{"jsx":p["jsx"]}}));
+                            }});
                         }
+                        if let Some(jsx)=insert{self.insert(&jsx,json!([]));}
+                        let mut component_insert=None;
                         if let Some(c) = &self.catalog {
                             let query = self.search.trim().to_lowercase();
                             for (group, files) in &c.groups {
@@ -209,92 +321,115 @@ impl Editor {
                                         .next()
                                         .unwrap_or(file)
                                         .trim_end_matches(".tsx");
-                                    if chrome::part_button(
-                                        ui,
-                                        [ui.available_width(), 26.],
-                                        "\u{e14d}",
-                                        name,
-                                        self.file.as_ref() == Some(file),
-                                    )
-                                    .on_hover_text(file)
-                                    .clicked()
-                                    {
-                                        open = Some(file.clone());
-                                    }
+                                    let meta=c.meta.get(file);let server=meta.is_some_and(|m|m.server_only);
+                                    ui.horizontal(|ui|{
+                                        let export=meta.and_then(|m|m.export_name.as_deref()).filter(|_|self.file.is_some()&&!server);
+                                        let w=(ui.available_width()-if export.is_some(){24.}else{0.}).max(12.);
+                                        let caption=if server{format!("{name}   SERVER")}else{name.to_owned()};
+                                        let response=ui.add_enabled_ui(!server,|ui|chrome::part_button(ui,[w,26.],"\u{e14d}",&caption,self.file.as_ref()==Some(file))).inner.on_hover_text(file);
+                                        if response.clicked(){open=Some(file.clone());}
+                                        if let Some(export)=export{let jsx=format!("<{export} />");let imports=json!([{"source":format!("@/{}",file.trim_start_matches("src/").trim_end_matches(".tsx")),"named":[export]}]);
+                                            response.dnd_set_drag_payload(json!({"insert":{"jsx":jsx,"imports":imports}}));
+                                            if ui.small_button("+").clicked(){component_insert=Some((jsx,imports));}
+                                        }
+                                    });
+
                                 }
                             }
                         }
+                        if let Some((jsx,imports))=component_insert{self.insert(&jsx,imports);}
                     });
-                if let Some(f) = open {
-                    self.open(f)
+        if let Some(f) = open {
+            self.open(f)
+        }
+    }
+    fn outliner(&mut self, ui: &mut egui::Ui, id: u64) {
+        ui.horizontal(|ui| {
+            self.pane_button(ui, id, Panel::Outliner);
+            ui.selectable_value(&mut self.routes, false, "File");
+            ui.selectable_value(&mut self.routes, true, "Routes");
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .id_salt(("tree", self.routes, self.file.as_deref()))
+            .show(ui, |ui| {
+                if self.routes {
+                    if let Some(c) = &self.catalog {
+                        if let Some(route) = route_tree(ui, &c.routes, "app") {
+                            if route.files.contains_key("page") && !route.path.contains('[') {
+                                self.path = route.path.clone();
+                                self.draft = self.path.clone();
+                            }
+                            self.shell = Value::Null;
+                            if let Some(f) = route.files.get("page") {
+                                let _ = self.requests.send(Request::Shell(f.clone()));
+                            }
+                            self.route = Some((
+                                route.path.clone(),
+                                route.files.clone().into_iter().collect(),
+                                route.layouts.clone(),
+                            ));
+                            self.selected = None;
+                        }
+                    }
+                } else if self.file.is_none() {
+                    ui.weak("No file open.");
+                } else {
+                    if ui
+                        .selectable_label(
+                            self.selected.is_none(),
+                            self.file.as_deref().unwrap_or("Sample props"),
+                        )
+                        .on_hover_text("Sample props")
+                        .clicked()
+                    {
+                        self.selected = None;
+                    }
+                    let mut drop = None;
+                    let mut visible = vec![];
+                    for root in &self.elements {
+                        element_tree(
+                            ui,
+                            root,
+                            &mut self.selected,
+                            &mut self.collapsed,
+                            &mut visible,
+                            &mut drop,
+                        );
+                    }
+                    self.visible_nodes = visible;
+                    if let Some(op) = drop {
+                        self.drop_at(&op);
+                    }
                 }
             });
-        egui::Panel::right("details")
-            .frame(egui::Frame::new().outer_margin(1)).default_size(width * 0.19)
-            .size_range(140.0..=500.0)
-            .show(ui, |ui| {
-                let height = ui.available_height() * 0.44;
-                egui::Panel::top("outliner")
-                    .frame(chrome::pane(PANEL)).default_size(height)
-                    .resizable(true)
-                    .show(ui, |ui| {
-                        ui.set_min_height(ui.available_height());
-                        ui.horizontal(|ui| {
-                            chrome::header_icon(ui,'\u{e97a}',"Outliner");
-                            ui.selectable_value(&mut self.routes, false, "File");
-                            ui.selectable_value(&mut self.routes, true, "Routes");
-                        });
-                        ui.separator();
-                        egui::ScrollArea::both()
-                            .id_salt(("tree", self.routes, self.file.as_deref()))
-                            .show(ui, |ui| {
-                                if self.routes {
-                                    if let Some(c) = &self.catalog {
-                                        if let Some(route) = route_tree(ui, &c.routes, "app") {
-                                            if route.files.contains_key("page") && !route.path.contains('['){self.path=route.path.clone();self.draft=self.path.clone();}
-                                            self.route = Some((
-                                                route.path.clone(),
-                                                route.files.clone().into_iter().collect(),
-                                                route.layouts.clone(),
-                                            ));
-                                            self.selected = None;
-                                        }
-                                    }
-                                } else if self.file.is_none() {
-                                    ui.weak("No file open.");
-                                } else {
-                                    for root in &self.elements {
-                                        element_tree(ui, root, &mut self.selected)
-                                    }
-                                }
-                            });
-                    });
-                chrome::pane(PANEL).show(ui,|ui|{ui.set_min_height(ui.available_height());ui.set_min_width(ui.available_width());egui::ScrollArea::vertical()
+    }
+    fn properties(&mut self, ui: &mut egui::Ui, id: u64) {
+        ui.horizontal(|ui| {
+            self.pane_button(ui, id, Panel::Properties);
+            let name = self
+                .focus()
+                .map(|n| format!("<{}>", n.tag))
+                .or_else(|| self.route.as_ref().map(|r| r.0.clone()))
+                .unwrap_or_else(|| {
+                    if self.file.is_some() {
+                        "Sample props".into()
+                    } else {
+                        "Nothing open".into()
+                    }
+                });
+            ui.strong(name);
+        });
+        ui.separator();
+        egui::ScrollArea::vertical()
                     .id_salt("props")
                     .show(ui, |ui| {
-                        ui.horizontal(|ui|{chrome::header_icon(ui,'\u{e429}',"Properties");ui.label(if self.selected.is_some(){"Element"}else if self.route.is_some(){"Route"}else{"▪  Nothing open"});});
-                        ui.separator();
-                        if let Some(i) = self
-                            .selected
-                            .and_then(|id| self.elements.iter().find_map(|e| e.find(id)))
-                        {
-                            ui.strong(format!("<{}>", i.tag));
-                            for prop in &i.props {
-                                ui.label(format!("{}: {}", prop.name, prop.value));
-                            }
-                            for style in i.style_props.iter().flatten() {
-                                ui.label(format!(
-                                    "{}: {}",
-                                    style.name,
-                                    style.value.as_deref().unwrap_or("(expression)")
-                                ));
-                            }
-                            for text in &i.text_children {
-                                ui.label(format!("Text: {}", text.value));
-                            }
-                            for chunk in &i.class_chunks {
-                                ui.label(format!("className: {}", chunk.value));
-                            }
+                        if let Some(node)=self.selected.and_then(|i|self.elements.iter().find_map(|e|e.find(i))){
+                            let source=node.component_source.clone();
+                            let structural=node.can.structural;
+                            if let Some(op)=edit::inspector(ui,node,&mut self.editing.drafts){self.edit(op);}
+                            if let Some(f)=source && ui.button("Open component source").clicked(){self.open(f);}
+                            ui.separator();ui.strong("Placement");ui.horizontal_wrapped(|ui|{for label in ["Move up","Move down","Duplicate","Delete"]{if ui.add_enabled(structural,egui::Button::new(label)).clicked(){self.structural(label);}}});
                         } else if let Some((url, files, layouts)) = &self.route {
                             ui.strong(url);
                             let mut open = None;
@@ -303,6 +438,8 @@ impl Editor {
                                     open = Some(f.clone());
                                 }
                             }
+                            if let Some(note)=self.shell["contentNote"].as_str(){ui.label(note);}
+                            if let Some(view)=self.shell["viewFile"].as_str() && ui.button(format!("Open {}",studio::string(&self.shell,"viewTag"))).clicked(){open=Some(view.into());}
                             if !layouts.is_empty() {
                                 ui.label("Layout chain");
                                 for f in layouts {
@@ -312,79 +449,129 @@ impl Editor {
                             if let Some(f) = open {
                                 self.open(f)
                             }
+                        } else if self.file.is_some(){
+                            ui.strong("Sample props");for spec in &self.specs{let name=studio::string(spec,"name");ui.label(name);
+                                match studio::string(&spec["control"],"kind"){
+                                    "boolean"=>{let mut v=self.samples[name].as_bool().unwrap_or(false);if ui.checkbox(&mut v,name).changed(){self.samples[name]=json!(v);}},
+                                    "number"=>{let mut v=self.samples[name].as_f64().unwrap_or_default();if ui.add(egui::DragValue::new(&mut v)).changed(){self.samples[name]=json!(v);}},
+                                    "string"=>{let mut v=self.samples[name].as_str().unwrap_or("").to_owned();if ui.text_edit_singleline(&mut v).changed(){self.samples[name]=json!(v);}},
+                                    "select"=>{egui::ComboBox::from_id_salt(name).selected_text(self.samples[name].as_str().unwrap_or("")).show_ui(ui,|ui|{for v in spec["control"]["options"].as_array().into_iter().flatten(){ui.selectable_value(&mut self.samples[name],v.clone(),v.as_str().unwrap_or(""));}});},
+                                    _=>{ui.weak(studio::string(spec,"typeText"));}
+                                }
+                            }
                         } else {
                             ui.weak("Nothing open. The Routes tree shows the app’s structure; Insert lists its components.");
                         }
-                    });});
-            });
-        egui::CentralPanel::default()
-            .frame(chrome::pane(VOID))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    chrome::header_icon(ui, '\u{e30c}', "Canvas");
-                    for (i, (name, _, zoom)) in DEVICES.iter().enumerate() {
-                        if ui.selectable_label(self.device == i, *name).clicked() {
-                            self.device = i;
-                            self.zoom = *zoom;
-                        }
-                    }
-                    ui.monospace(format!("{}px", DEVICES[self.device].1));
-                    if ui.button("−").clicked() {
-                        self.zoom = ZOOM
-                            .iter()
-                            .copied()
-                            .rev()
-                            .find(|v| *v < self.zoom)
-                            .unwrap_or(ZOOM[0]);
-                    }
-                    ui.label(format!("{:.0}%", self.zoom * 100.));
-                    if ui.button("+").clicked() {
-                        self.zoom = ZOOM.iter().copied().find(|v| *v > self.zoom).unwrap_or(4.);
-                    }
-                });
-                ui.separator();
-                if let Some(error) = &self.error {
-                    ui.label(error);
-                    if ui.button("Retry project connection").clicked() {
-                        let _ = self.requests.send(Request::Reload);
-                    }
+                    });
+    }
+    fn canvas_body(&mut self, ui: &mut egui::Ui, id: u64) {
+        ui.horizontal_wrapped(|ui| {
+            self.pane_button(ui, id, Panel::Canvas);
+            for (i, (name, _, zoom)) in DEVICES.iter().enumerate() {
+                if ui.selectable_label(self.device == i, *name).clicked() {
+                    self.device = i;
+                    self.zoom = *zoom;
                 }
-                ui.horizontal(|ui| {
-                    ui.weak("PATH");
-                    let input = ui.add_sized(
-                        [(ui.available_width() - 112.).max(30.), 22.],
-                        egui::TextEdit::singleline(&mut self.draft),
-                    );
-                    if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        self.path = format!("/{}", self.draft.trim_start_matches('/'));
-                        self.draft = self.path.clone();
-                    }
-                    if ui.button("Reload").clicked() {
-                        self.reload = true;
-                        #[cfg(windows)]
-                        {
-                            self.web_error = None;
-                        }
-                    }
-                    if ui.button("Open").clicked()
-                        && let Some(c) = &self.catalog
+            }
+            ui.monospace(format!("{}px", DEVICES[self.device].1));
+            if ui.button("−").clicked() {
+                self.zoom = ZOOM
+                    .iter()
+                    .copied()
+                    .rev()
+                    .find(|v| *v < self.zoom)
+                    .unwrap_or(ZOOM[0]);
+            }
+            ui.label(format!("{:.0}%", self.zoom * 100.));
+            if ui.button("+").clicked() {
+                self.zoom = ZOOM.iter().copied().find(|v| *v > self.zoom).unwrap_or(4.);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.selectable_value(&mut self.interact, true, "View");
+                ui.selectable_value(&mut self.interact, false, "Edit");
+            });
+        });
+        ui.separator();
+        if let Some(error) = &self.error {
+            ui.label(error);
+            if ui.button("Retry project connection").clicked() {
+                let _ = self.requests.send(Request::Reload);
+            }
+        }
+        let primary = id == 1;
+        let component = self.workspace == 3 && primary;
+        if !component {
+            ui.horizontal(|ui| {
+                ui.weak("PATH");
+                let (path, draft) = if primary {
+                    (&mut self.path, &mut self.draft)
+                } else {
+                    let pair = self
+                        .extra_paths
+                        .entry(id)
+                        .or_insert_with(|| (self.path.clone(), self.path.clone()));
+                    (&mut pair.0, &mut pair.1)
+                };
+                let input = ui.add_sized(
+                    [(ui.available_width() - 112.).max(30.), 22.],
+                    egui::TextEdit::singleline(draft),
+                );
+                if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    *path = format!("/{}", draft.trim_start_matches('/'));
+                    *draft = path.clone();
+                }
+                if ui.button("Reload").clicked() {
+                    self.reload = true;
+                    #[cfg(windows)]
                     {
-                        let url = format!(
-                            "{}/{}",
-                            c.live.upstream.trim_end_matches('/'),
-                            self.path.trim_start_matches('/')
-                        );
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                        self.web_error = None;
                     }
-                });
-                ui.separator();
-                ui.add_space(10.);
-                self.canvas_rect = ui.available_rect_before_wrap();
-                #[cfg(windows)]
-                if let Some(err) = &self.web_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, err);
+                }
+                if ui.button("Open").clicked()
+                    && let Some(c) = &self.catalog
+                {
+                    let url = format!(
+                        "{}/{}",
+                        c.live.upstream.trim_end_matches('/'),
+                        path.trim_start_matches('/')
+                    );
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                 }
             });
+            ui.separator();
+            if let Some(landed) = self.landed.get(&id)
+                && landed
+                    != self
+                        .extra_paths
+                        .get(&id)
+                        .map(|p| &p.0)
+                        .unwrap_or(&self.path)
+            {
+                ui.horizontal(|ui| {
+                    ui.weak(format!("The app sent us to {landed}"));
+                    if ui.button("Sign in…").clicked() {
+                        #[cfg(windows)]
+                        if let Some(view) = self.web.get(&id) {
+                            view.sign_in();
+                        }
+                    }
+                });
+            }
+        } else if self.rulers {
+            self.draw_ruler(ui);
+        }
+        self.canvas_rect = ui.available_rect_before_wrap();
+        if component && self.route.is_some() {
+            ui.weak("Open the page’s view or its code from Properties.");
+        } else if component && self.file.is_some() && !self.renderable {
+            ui.weak("Server component. Use the Outliner to inspect its source.");
+        } else {
+            self.canvas_views.insert(id, self.canvas_rect);
+        }
+        #[cfg(windows)]
+        if let Some(err) = &self.web_error {
+            ui.colored_label(egui::Color32::LIGHT_RED, err);
+        }
     }
 }
 fn route_tree<'a>(ui: &mut egui::Ui, node: &'a Route, id: &str) -> Option<&'a Route> {
@@ -394,97 +581,175 @@ fn route_tree<'a>(ui: &mut egui::Ui, node: &'a Route, id: &str) -> Option<&'a Ro
         &node.segment
     };
     let mut selected = None;
-    if node.children.is_empty() {
-        if ui.selectable_label(false, label).clicked() {
-            selected = Some(node)
-        }
-    } else {
-        let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            ui.make_persistent_id(id),
-            node.segment.is_empty(),
-        );
-        state
-            .show_header(ui, |ui| {
-                if ui.selectable_label(false, label).clicked() {
-                    selected = Some(node)
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        ui.make_persistent_id(id),
+        node.segment.is_empty(),
+    );
+    let children = !node.children.is_empty();
+    let page = node.files.contains_key("page");
+    let api = node.files.contains_key("route") && !page;
+    let r = ui.horizontal(|ui| {
+        let caret = ui.add_sized(
+            [9., 16.],
+            egui::Button::new(if children {
+                if state.is_open() {
+                    "\u{e5c5}"
+                } else {
+                    "\u{e5cc}"
                 }
+            } else {
+                ""
             })
-            .body(|ui| {
-                for child in &node.children {
-                    if let Some(n) = route_tree(ui, child, &format!("{id}/{}", child.segment)) {
-                        selected = Some(n);
-                    }
+            .frame(false),
+        );
+        if caret.clicked() && children {
+            state.toggle(ui);
+        }
+        let glyph = if node.dynamic {
+            "\u{ead1}"
+        } else if page {
+            "\u{e873}"
+        } else if api {
+            "\u{f1b7}"
+        } else if node.group {
+            "\u{e2c8}"
+        } else {
+            "\u{e2c7}"
+        };
+        let r = ui.selectable_label(
+            false,
+            RichText::new(format!("{glyph}  {label}")).color(if page {
+                BLUE
+            } else {
+                chrome::FAINT
+            }),
+        );
+        let mut badges = vec![];
+        if api {
+            badges.push("API")
+        }
+        if node.files.contains_key("layout") {
+            badges.push("layout")
+        }
+        if node.ownership.as_deref() == Some("owned") {
+            badges.push("owned")
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.small(RichText::new(badges.join(" · ")).color(chrome::FAINT));
+        });
+        r.clicked()
+    });
+    if r.inner {
+        if page || api {
+            selected = Some(node)
+        } else if children {
+            state.toggle(ui);
+        }
+    }
+    if children {
+        state.show_body_indented(&r.response, ui, |ui| {
+            for child in &node.children {
+                if let Some(n) = route_tree(ui, child, &format!("{id}/{}", child.segment)) {
+                    selected = Some(n);
                 }
-            });
+            }
+        });
     }
     selected
 }
-fn element_tree(ui: &mut egui::Ui, node: &Element, selected: &mut Option<usize>) {
-    let label = format!("<{}>", node.tag);
-    if node.children.is_empty() {
-        if ui
-            .selectable_label(*selected == Some(node.index), label)
-            .clicked()
-        {
-            *selected = Some(node.index)
+fn element_tree(
+    ui: &mut egui::Ui,
+    node: &Element,
+    selected: &mut Option<usize>,
+    collapsed: &mut std::collections::HashSet<String>,
+    visible: &mut Vec<usize>,
+    drop: &mut Option<Value>,
+) {
+    visible.push(node.index);
+    let open = !collapsed.contains(&node.id);
+    ui.horizontal(|ui| {
+        let caret = if node.children.is_empty() {
+            " "
+        } else if open {
+            "\u{e5c5}"
+        } else {
+            "\u{e5cc}"
+        };
+        if ui.small_button(caret).clicked() {
+            if open {
+                collapsed.insert(node.id.clone());
+            } else {
+                collapsed.remove(&node.id);
+            }
         }
-    } else {
-        let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            ui.make_persistent_id(node.index),
-            node.index == 0,
+        let glyph = match node.tag.as_str() {
+            "p" | "span" => '\u{e26c}',
+            "button" => '\u{f1c1}',
+            "a" => '\u{e250}',
+            "img" | "svg" => '\u{e3f4}',
+            t if t.starts_with(|c: char| c.is_ascii_uppercase()) => '\u{f720}',
+            _ => '\u{e3c6}',
+        };
+        let r = ui.add(
+            egui::Button::selectable(
+                *selected == Some(node.index),
+                format!("{glyph}  {}", node.tag),
+            )
+            .sense(egui::Sense::click_and_drag()),
         );
-        state
-            .show_header(ui, |ui| {
-                if ui
-                    .selectable_label(*selected == Some(node.index), label)
-                    .clicked()
-                {
-                    *selected = Some(node.index)
-                }
-            })
-            .body(|ui| {
-                for child in &node.children {
-                    element_tree(ui, child, selected)
-                }
+        if r.clicked() {
+            *selected = Some(node.index);
+        }
+        if node.can.structural {
+            r.dnd_set_drag_payload(json!({"moveId":node.id}));
+        }
+        if let Some(v) = r.dnd_release_payload::<Value>() {
+            let mut v = (*v).clone();
+            v["targetId"] = json!(node.id);
+            v["position"] = json!(if r
+                .interact_pointer_pos()
+                .is_some_and(|p| p.y < r.rect.center().y)
+            {
+                "before"
+            } else {
+                "after"
             });
+            *drop = Some(v);
+        }
+    });
+    if open && !node.children.is_empty() {
+        ui.indent(&node.id, |ui| {
+            for child in &node.children {
+                element_tree(ui, child, selected, collapsed, visible, drop);
+            }
+        });
     }
 }
 impl eframe::App for Editor {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.render(ui);
         #[cfg(windows)]
-        if self.web_error.is_none()
-            && let Some(c) = &self.catalog
-            && let Some(url) = canvas::page_url(&c.live.origin, &self.path)
-        {
-            let size = (
-                DEVICES[self.device].1 as u32,
-                [790, 1112, 844][self.device],
-                self.zoom,
-            );
-            let result = (|| {
-                if self.web.is_none() {
-                    self.web = Some(canvas::Canvas::create(frame, &url, size)?);
-                }
-                self.web.as_mut().unwrap().update(
-                    self.canvas_rect,
-                    ui.ctx().pixels_per_point(),
-                    &url,
-                    size,
-                    std::mem::take(&mut self.reload),
-                )
-            })();
-            if let Err(e) = result {
-                self.web = None;
-                self.web_error = Some(e.to_string());
-                ui.ctx().request_repaint();
-            }
-        }
+        self.update_canvases(ui, frame);
+    }
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.persist();
     }
 }
 fn main() -> eframe::Result {
+    let _daemon = match daemon::start() {
+        Ok(owned) => owned,
+        Err(message) => {
+            return eframe::run_ui_native(
+                "u-and-i",
+                eframe::NativeOptions::default(),
+                move |ui, _| {
+                    ui.heading("Could not open the project");
+                    ui.label(&message);
+                },
+            );
+        }
+    };
     eframe::run_native(
         "u-and-i · Rust",
         eframe::NativeOptions {
@@ -528,6 +793,19 @@ mod tests {
             .unwrap()
             .save("target/native-layout.png")
             .unwrap();
+        for (index, name) in ["Style", "Workshop", "Component", "Layout"]
+            .iter()
+            .enumerate()
+        {
+            h.get_by_label(*name).click();
+            h.run();
+            let expected = [1, 2, 3, 0][index];
+            assert_eq!(h.state().as_ref().unwrap().workspace, expected);
+            h.render()
+                .unwrap()
+                .save(format!("target/native-{name}.png"))
+                .unwrap();
+        }
         // Select through the same component button the user sees.
         let file = h
             .state()
@@ -547,17 +825,154 @@ mod tests {
         while h.state().as_ref().unwrap().elements.is_empty() {
             assert!(
                 std::time::Instant::now() < deadline,
-                "component model timed out"
+                "component model timed out: file={:?} error={:?}",
+                h.state().as_ref().unwrap().file,
+                h.state().as_ref().unwrap().error
             );
             std::thread::sleep(std::time::Duration::from_millis(30));
             h.step();
         }
         let editor = h.state().as_ref().unwrap();
         assert_eq!(editor.file.as_ref(), Some(&file));
-        assert_eq!(editor.selected, Some(editor.elements[0].index));
+        assert!(editor.selected.is_none());
+        if std::env::var_os("UAI_NATIVE_FIXTURE").is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os("UAI_NATIVE_FIXTURE").unwrap())
+                .canonicalize()
+                .unwrap();
+            assert!(
+                root.starts_with(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("target")
+                        .canonicalize()
+                        .unwrap()
+                )
+            );
+            assert_eq!(
+                editor.catalog.as_ref().unwrap().name,
+                root.file_name().unwrap().to_string_lossy()
+            );
+            let css = root.join("src/app/globals.css");
+            let prior_css = std::fs::read_to_string(&css).unwrap();
+            h.get_by_label("Style").click();
+            h.run();
+            for _ in 0..100 {
+                h.step();
+                if h.query_all_by_value("#ff1414").next().is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            let input = h.get_all_by_value("#ff1414").next().unwrap();
+            input.click();
+            h.run();
+            h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::A);
+            h.run();
+            h.event(egui::Event::Text("#102030".into()));
+            h.run();
+            h.key_press(egui::Key::Enter);
+            h.run();
+            for _ in 0..100 {
+                h.step();
+                if std::fs::read_to_string(&css).unwrap().contains("#102030") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            assert!(std::fs::read_to_string(&css).unwrap().contains("#102030"));
+            h.get_by_label("Workshop").click();
+            h.run();
+            h.get_by_label("Inset").click();
+            h.run();
+            h.get_by_label("Write tokens").click();
+            h.run();
+            for _ in 0..150 {
+                h.step();
+                if h.state().as_ref().unwrap().studio.written {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            assert!(
+                std::fs::read_to_string(&css)
+                    .unwrap()
+                    .contains("--material-surface-inset-shadow-pressed: inset")
+                    || std::fs::read_to_string(&css)
+                        .unwrap()
+                        .contains("--material-surface-inset-shadow-pressed: ")
+            );
+            let edited_css = std::fs::read_to_string(&css).unwrap();
+            assert_ne!(edited_css, prior_css);
+            let client = reqwest::blocking::Client::new();
+            client
+                .post(format!("{}/api/restore", project::origin()))
+                .json(&json!({"file":"src/app/globals.css","text":prior_css}))
+                .send()
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            assert_eq!(std::fs::read_to_string(&css).unwrap(), prior_css);
+            h.set_size(egui::vec2(900., 640.));
+            h.run();
+            h.render()
+                .unwrap()
+                .save("target/native-workshop-small.png")
+                .unwrap();
+            h.set_size(egui::vec2(1500., 950.));
+            h.run();
+            h.get_by_label("Layout").click();
+            h.run();
+            let target = root.join(&file);
+            let before = std::fs::read(&target).unwrap();
+            h.get_by_label("Heading").click();
+            h.run();
+            let wait = |h: &mut Harness<'_, Option<Editor>>, want: bool| {
+                for _ in 0..300 {
+                    h.step();
+                    if h.state().as_ref().unwrap().can_restore(want) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                }
+                panic!("history timed out");
+            };
+            wait(&mut h, false);
+            assert!(
+                String::from_utf8(std::fs::read(&target).unwrap())
+                    .unwrap()
+                    .contains("<h2>Heading</h2>")
+            );
+            h.get_all_by_label("Edit").next().unwrap().click();
+            h.run();
+            h.get_by_label("Undo").click();
+            h.run();
+            wait(&mut h, true);
+            assert_eq!(std::fs::read(&target).unwrap(), before);
+            h.get_all_by_label("Edit").next().unwrap().click();
+            h.run();
+            h.get_by_label("Redo").click();
+            h.run();
+            wait(&mut h, false);
+            assert_ne!(std::fs::read(&target).unwrap(), before);
+            h.get_all_by_label("Edit").next().unwrap().click();
+            h.run();
+            h.get_by_label("Undo").click();
+            h.run();
+            wait(&mut h, true);
+            assert_eq!(std::fs::read(&target).unwrap(), before);
+        }
         h.render()
             .unwrap()
             .save("target/native-component.png")
             .unwrap();
     }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        self.persist();
+    }
+}
+#[cfg(not(windows))]
+impl Editor {
+    fn begin_text(&self) {}
 }

@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32};
 
 pub const BORDER: Color32 = Color32::from_rgb(42, 46, 55);
 pub const CONTROL: Color32 = Color32::from_rgb(36, 41, 53);
@@ -12,16 +12,6 @@ pub fn pane(fill: Color32) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(9, 4))
         .outer_margin(2)
 }
-pub fn header_icon(ui: &mut egui::Ui, glyph: char, title: &str) {
-    egui::Frame::new()
-        .fill(CONTROL)
-        .corner_radius(4)
-        .inner_margin(egui::Margin::symmetric(4, 1))
-        .show(ui, |ui| {
-            ui.label(RichText::new(format!("{glyph} ⌄")).size(12.))
-                .on_hover_text(title);
-        });
-}
 pub fn part_button(
     ui: &mut egui::Ui,
     size: [f32; 2],
@@ -29,7 +19,7 @@ pub fn part_button(
     label: &str,
     active: bool,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size.into(), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(size.into(), egui::Sense::click_and_drag());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
