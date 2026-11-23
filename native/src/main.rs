@@ -569,6 +569,10 @@ impl Editor {
             ui.weak("Server component. Use the Outliner to inspect its source.");
         } else {
             self.canvas_views.insert(id, self.canvas_rect);
+            #[cfg(windows)]
+            if let Some(view) = self.web.get_mut(&id) {
+                view.paint_snapshot(ui, self.canvas_rect);
+            }
         }
         #[cfg(windows)]
         if let Some(err) = &self.web_error {

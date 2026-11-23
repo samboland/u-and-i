@@ -80,6 +80,36 @@ pub fn preview_rect(mut rect: Rect, edge: Option<(bool, bool)>) -> Rect {
     rect
 }
 
+fn split_menu(ui: &mut Ui, pending: &mut Option<bool>) {
+    for (name, horizontal) in [("Vertical Split", true), ("Horizontal Split", false)] {
+        if ui.button(name).clicked() {
+            *pending = Some(horizontal);
+            ui.close();
+        }
+    }
+}
+
+pub fn outer_borders(ui: &mut Ui, rect: Rect, pending: &mut Option<bool>) {
+    let reach = 6.;
+    let mut sides = [rect; 4];
+    sides[0].max.x = rect.left() + reach;
+    sides[1].min.x = rect.right() - reach;
+    sides[2].max.y = rect.top() + reach;
+    sides[3].min.y = rect.bottom() - reach;
+    for (index, side) in sides.into_iter().enumerate() {
+        ui.interact(
+            side,
+            ui.id().with(("outer border", index)),
+            egui::Sense::click(),
+        )
+        .on_hover_cursor(egui::CursorIcon::ContextMenu)
+        .context_menu(|ui| {
+            ui.weak("Area Options");
+            split_menu(ui, pending);
+        });
+    }
+}
+
 impl Dock {
     fn leaf(id: u64, p: Panel) -> Self {
         Self::Pane {
@@ -155,7 +185,15 @@ impl Dock {
                     Rect::from_x_y_ranges(r.x_range(), y - 2.0..=y + 2.0)
                 };
                 let resp = ui
-                    .interact(line, ui.id().with(self_id(a)), egui::Sense::drag())
+                    .interact(
+                        line.expand2(if *horizontal {
+                            egui::vec2(4., 0.)
+                        } else {
+                            egui::vec2(0., 4.)
+                        }),
+                        ui.id().with(self_id(a)),
+                        egui::Sense::click_and_drag(),
+                    )
                     .on_hover_cursor(if *horizontal {
                         egui::CursorIcon::ResizeHorizontal
                     } else {
@@ -168,32 +206,27 @@ impl Dock {
                 }
                 let mut join = None;
                 resp.context_menu(|ui| {
-                    for (name, h) in [("Vertical Split", true), ("Horizontal Split", false)] {
-                        if ui.button(name).clicked() {
-                            *pending = Some(h);
+                    ui.weak("Area Options");
+                    split_menu(ui, pending);
+                    ui.separator();
+                    let directions = if *horizontal {
+                        [("Join Right", true), ("Join Left", false)]
+                    } else {
+                        [("Join Up", false), ("Join Down", true)]
+                    };
+                    for (label, keep_first) in directions {
+                        if ui.button(label).clicked() {
+                            join = Some(if keep_first {
+                                (**a).clone()
+                            } else {
+                                (**b).clone()
+                            });
                             ui.close();
                         }
                     }
+                    ui.separator();
                     if ui.button("Swap Areas").clicked() {
                         std::mem::swap(a, b);
-                        ui.close();
-                    }
-                    if ui
-                        .button(if *horizontal { "Join Left" } else { "Join Up" })
-                        .clicked()
-                    {
-                        join = Some((**b).clone());
-                        ui.close();
-                    }
-                    if ui
-                        .button(if *horizontal {
-                            "Join Right"
-                        } else {
-                            "Join Down"
-                        })
-                        .clicked()
-                    {
-                        join = Some((**a).clone());
                         ui.close();
                     }
                 });
@@ -245,9 +278,7 @@ impl Dock {
                 *active = tabs.len() - 1;
             }
             Action::Split(h) => {
-                let p = tabs[*active].1;
-                *node = Self::pair(h, 0.5, node.clone(), Self::leaf(*next, p));
-                *next += 1
+                self.split_at(id, h, 0.5, next);
             }
             Action::Close if !single => {
                 tabs.remove(*active);
@@ -318,21 +349,20 @@ impl Dock {
 
 impl Dock {
     pub fn split_at(&mut self, id: u64, horizontal: bool, fraction: f32, next: &mut u64) {
-        self.apply(id, Action::Split(horizontal), next);
-        fn set(node: &mut Dock, id: u64, amount: f32) -> bool {
-            match node {
-                Dock::Split { fraction, a, b, .. } => {
-                    if matches!(b.as_ref(),Dock::Pane{tabs,..} if tabs.len()==1 && tabs[0].0==id) {
-                        *fraction = amount;
-                        true
-                    } else {
-                        set(a, id, amount) || set(b, id, amount)
-                    }
-                }
-                _ => false,
-            }
-        }
-        set(self, *next - 1, fraction.clamp(0.05, 0.95));
+        let Some(node) = self.find(id) else { return };
+        let Self::Pane { tabs, active } = node else {
+            return;
+        };
+        let (moved, kind) = if tabs.len() > 1 {
+            let tab = tabs.remove(*active);
+            *active = 0;
+            tab
+        } else {
+            let id = *next;
+            *next += 1;
+            (id, tabs[0].1)
+        };
+        *node = Self::pair(horizontal, fraction, node.clone(), Self::leaf(moved, kind));
     }
     pub fn panel_id(&self, kind: Panel) -> Option<u64> {
         match self {
@@ -394,6 +424,68 @@ impl Dock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn border_menus_work_with_one_pane_and_with_neighbors() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let bounds = Rect::from_min_size(egui::pos2(20., 20.), egui::vec2(400., 250.));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(480., 320.))
+            .build_ui_state(
+                |ui, state: &mut (Dock, Option<bool>)| {
+                    let mut panes = vec![];
+                    state.0.panes(ui, bounds, &mut state.1, &mut panes);
+                    for (rect, _, _) in panes {
+                        ui.painter()
+                            .rect_filled(rect.shrink(2.), 4., egui::Color32::DARK_GRAY);
+                    }
+                    outer_borders(ui, bounds, &mut state.1);
+                },
+                (Dock::leaf(1, Panel::Canvas), None),
+            );
+        let right_click = |h: &mut Harness<'_, (Dock, Option<bool>)>, pos| {
+            h.event(egui::Event::PointerMoved(pos));
+            h.step();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                });
+                h.step();
+            }
+            h.run();
+        };
+        for pos in [
+            egui::pos2(21., 100.),
+            egui::pos2(419., 120.),
+            egui::pos2(190., 21.),
+            egui::pos2(190., 269.),
+        ] {
+            right_click(&mut h, pos);
+            h.get_by_label("Horizontal Split");
+            assert!(h.query_by_label("Swap Areas").is_none());
+            h.get_by_label("Vertical Split").click();
+            h.run();
+            assert_eq!(h.state_mut().1.take(), Some(true));
+        }
+        h.state_mut().0 = Dock::pair(
+            true,
+            0.5,
+            Dock::leaf(1, Panel::Canvas),
+            Dock::leaf(2, Panel::Insert),
+        );
+        h.run();
+        right_click(&mut h, bounds.center());
+        h.get_by_label("Swap Areas").click();
+        h.run();
+        assert_eq!(h.state().0.first(), 2);
+        right_click(&mut h, bounds.center());
+        h.get_by_label("Join Right").click();
+        h.run();
+        assert!(matches!(&h.state().0,Dock::Pane{tabs,..} if tabs==&[(2,Panel::Insert)]));
+    }
+
     #[test]
     fn drop_preview_matches_committed_edge() {
         let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 500.));

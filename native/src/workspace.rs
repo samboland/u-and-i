@@ -470,6 +470,7 @@ impl Editor {
                 }
             }
         }
+        let seam_rects: Vec<_> = panes.iter().map(|pane| pane.0).collect();
         for (rect, tabs, active) in panes {
             let (id, p) = tabs[active];
             if rect.width() < 12. || rect.height() < 12. {
@@ -533,23 +534,61 @@ impl Editor {
                     .input(|i| i.pointer.hover_pos())
                     .filter(|p| rect.contains(*p))
             {
-                let (a, b, frac) = if horizontal {
-                    (
-                        egui::pos2(pos.x, rect.top()),
-                        egui::pos2(pos.x, rect.bottom()),
-                        (pos.x - rect.left()) / rect.width(),
-                    )
+                let (start, span, pointer) = if horizontal {
+                    (rect.left(), rect.width(), pos.x)
                 } else {
-                    (
-                        egui::pos2(rect.left(), pos.y),
-                        egui::pos2(rect.right(), pos.y),
-                        (pos.y - rect.top()) / rect.height(),
-                    )
+                    (rect.top(), rect.height(), pos.y)
                 };
-                ui.painter().line_segment([a, b], (2., BLUE));
-                if ui.input(|i| i.pointer.primary_pressed()) {
-                    self.docks[g].split_at(id, horizontal, frac, &mut self.next_id);
-                    self.pending_split = None;
+                let inner = span - 4.;
+                let allowed = inner >= 144.;
+                let mut cut = pointer - start - 2.;
+                if ui.input(|i| i.modifiers.ctrl) && allowed {
+                    let ticks = (0..=12).map(|n| inner * n as f32 / 12.);
+                    let seams = seam_rects.iter().map(|r| {
+                        if horizontal {
+                            r.right() - start
+                        } else {
+                            r.bottom() - start
+                        }
+                    });
+                    cut = ticks
+                        .chain(seams)
+                        .filter(|x| *x > 0. && *x < inner)
+                        .min_by(|a, b| (a - cut).abs().total_cmp(&(b - cut).abs()))
+                        .unwrap_or(cut);
+                }
+                let outline = |r: egui::Rect| {
+                    ui.painter().rect_stroke(
+                        r.shrink(2.),
+                        4.,
+                        (2., BLUE),
+                        egui::StrokeKind::Inside,
+                    );
+                };
+                if allowed {
+                    cut = cut.clamp(72., inner - 72.);
+                    let mut first = rect;
+                    let mut second = rect;
+                    if horizontal {
+                        first.max.x = start + cut;
+                        second.min.x = first.max.x + 4.;
+                    } else {
+                        first.max.y = start + cut;
+                        second.min.y = first.max.y + 4.;
+                    }
+                    outline(first);
+                    outline(second);
+                    if ui.input(|i| i.pointer.primary_pressed()) {
+                        self.docks[g].split_at(
+                            id,
+                            horizontal,
+                            (cut + 2.) / span,
+                            &mut self.next_id,
+                        );
+                        self.pending_split = None;
+                    }
+                } else {
+                    outline(rect);
                 }
             }
             if let Some(src) = self.drag
@@ -579,6 +618,7 @@ impl Editor {
                 }
             }
         }
+        dock::outer_borders(ui, root.expand(2.), &mut self.pending_split);
         if ui.input(|i| i.pointer.any_released()) {
             self.drag = None;
         }
