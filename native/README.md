@@ -15,6 +15,10 @@ Rust and egui draw the editor and handle input. WebView2 renders the target page
 - **Style** groups CSS declarations by purpose. Edit a value and press Enter to write it. The native specimen previews supported token values.
 - **Workshop** edits the layers of a material. Drag nodes by their headers and adjust the controls to change the preview. **Write tokens** writes the CSS recipe.
 
+The top strip contains the application menus, workspace tabs, project and component selectors, and window controls. Drag the empty strip to move the window. Double-click it to maximize or restore. Drag the outer edge to resize the window.
+
+Use **+** to add a workspace. Right-click a workspace to duplicate, rename, delete, or reorder it. Ctrl+Page Up and Ctrl+Page Down switch workspaces.
+
 Drag a pane's header icon onto another pane to stack or split them. Open its menu to change its contents. The editor saves its workspace arrangement per target.
 
 ## Check the port

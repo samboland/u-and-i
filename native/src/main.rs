@@ -7,6 +7,7 @@ mod dock;
 mod edit;
 mod studio;
 mod surface;
+mod topbar;
 mod workspace;
 use dock::{Action, Dock, Panel};
 use serde_json::{Value, json};
@@ -34,6 +35,7 @@ struct Editor {
     samples: Value,
     specs: Vec<Value>,
     renderable: bool,
+    topbar: topbar::TopBar,
     workspace: usize,
     docks: Vec<Dock>,
     next_id: u64,
@@ -111,6 +113,7 @@ impl Editor {
             samples: json!({}),
             specs: vec![],
             renderable: false,
+            topbar: topbar::TopBar::new(workspace),
             workspace,
             docks,
             next_id,
@@ -243,34 +246,9 @@ impl Editor {
         }
         self.keys(ui);
         self.canvas_views.clear();
-        egui::Panel::top("menus")
-            .frame(
-                egui::Frame::new()
-                    .fill(BAR)
-                    .inner_margin(egui::Margin::symmetric(10, 4)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_min_height(24.);
-                    ui.spacing_mut().item_spacing.x = 9.;
-                    ui.label(RichText::new("u—i").color(BLUE).monospace());
-                    ui.menu_button("File", |ui| {
-                        ui.label(format!(
-                            "Target: {}",
-                            self.catalog.as_ref().map_or("…", |c| &c.name)
-                        ));
-                        if ui.button("Reload project").clicked() {
-                            let _ = self.requests.send(Request::Reload);
-                            ui.close();
-                        }
-                        if ui.button("Exit").clicked() {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    });
-                    self.menus(ui);
-                });
-            });
+        self.top_strip(ui);
         self.draw_workspace(ui);
+        topbar::frame_edges(ui);
     }
     fn insert_body(&mut self, ui: &mut egui::Ui, id: u64) {
         ui.horizontal(|ui| {
@@ -743,26 +721,22 @@ impl eframe::App for Editor {
     }
 }
 fn main() -> eframe::Result {
-    let _daemon = match daemon::start() {
-        Ok(owned) => owned,
-        Err(message) => {
-            return eframe::run_ui_native(
-                "u-and-i",
-                eframe::NativeOptions::default(),
-                move |ui, _| {
-                    ui.heading("Could not open the project");
-                    ui.label(&message);
-                },
-            );
-        }
-    };
+    let daemon = daemon::start();
+    let startup_error = daemon.as_ref().err().cloned();
     eframe::run_native(
         "u-and-i · Rust",
         eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([1500., 950.]),
+            viewport: egui::ViewportBuilder::default()
+                .with_decorations(false)
+                .with_min_inner_size([480., 320.])
+                .with_inner_size([1500., 950.]),
             ..Default::default()
         },
-        Box::new(|cc| Ok(Box::new(Editor::new(&cc.egui_ctx)))),
+        Box::new(move |cc| {
+            let mut editor = Editor::new(&cc.egui_ctx);
+            editor.error = startup_error;
+            Ok(Box::new(editor))
+        }),
     )
 }
 

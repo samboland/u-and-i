@@ -1,5 +1,5 @@
 use super::*;
-const TABS: [&str; 4] = ["Layout", "Style", "Workshop", "Component"];
+pub const TABS: [&str; 4] = ["Layout", "Style", "Workshop", "Component"];
 type Saved = (Vec<Dock>, u64, usize, bool, bool);
 fn settings() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("UAI_NATIVE_SETTINGS") {
@@ -23,7 +23,7 @@ pub fn load() -> Saved {
     if !cfg!(test)
         && let Ok(data) = std::fs::read(settings())
         && let Ok(v) = serde_json::from_slice::<Saved>(&data)
-        && v.0.len() == 3
+        && v.0.len() >= 3
         && v.2 < 4
         && v.0.iter().all(Dock::valid)
     {
@@ -40,6 +40,12 @@ impl Editor {
         if let Ok(data) = std::fs::read(path)
             && let Ok(v) = serde_json::from_slice::<Value>(&data)
         {
+            if let Ok(bar) = serde_json::from_value::<topbar::TopBar>(v["topbar"].clone())
+                && bar.valid(self.docks.len())
+            {
+                self.workspace = bar.tabs[bar.active].mode;
+                self.topbar = bar;
+            }
             self.reopen = v["reopen"] != false;
             self.app_zoom = v["appZoom"].as_f64().unwrap_or(1.).clamp(0.7, 1.5) as f32;
             ctx.set_zoom_factor(self.app_zoom);
@@ -70,7 +76,7 @@ impl Editor {
         if let Some(file) = &self.file {
             samples.insert(file.clone(), self.samples.clone());
         }
-        let session = json!({"file":self.file,"path":self.path,"device":self.device,"zoom":self.zoom,"samples":samples,"appZoom":self.app_zoom,"reopen":self.reopen});
+        let session = json!({"topbar":self.topbar,"file":self.file,"path":self.path,"device":self.device,"zoom":self.zoom,"samples":samples,"appZoom":self.app_zoom,"reopen":self.reopen});
         let _ = std::fs::write(p.with_extension("session.json"), session.to_string());
         if let Ok(data) = serde_json::to_vec(&(
             &self.docks,
@@ -82,13 +88,12 @@ impl Editor {
             let _ = std::fs::write(p, data);
         }
     }
-    fn group(&self) -> usize {
-        match self.workspace {
-            1 | 2 => self.workspace,
-            _ => 0,
-        }
+    pub fn group(&self) -> usize {
+        self.topbar.tabs[self.topbar.active].group
     }
-    fn switch(&mut self, i: usize) {
+    pub fn activate_tab(&mut self, index: usize) {
+        self.topbar.active = index;
+        let i = self.topbar.tabs[index].mode;
         self.workspace = i;
         if i == 1 {
             let _ = self.requests.send(Request::Api("tokens", None));
@@ -115,7 +120,7 @@ impl Editor {
         };
     }
     pub fn keys(&mut self, ui: &egui::Ui) {
-        if self.pending_split.is_some() {
+        if self.pending_split.is_some() || egui::Popup::is_any_open(ui.ctx()) {
             return;
         }
         if ui
@@ -238,44 +243,43 @@ impl Editor {
             }
         }
     }
-    pub fn menus(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Edit", |ui| {
-            if ui.button("Preferences…").clicked() {
-                self.prefs = true;
+    pub fn edit_menu(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Preferences…").clicked() {
+            self.prefs = true;
+            ui.close();
+        }
+        for (redo, label) in [(false, "Undo"), (true, "Redo")] {
+            if ui
+                .add_enabled(self.can_restore(redo), egui::Button::new(label))
+                .clicked()
+            {
+                self.restore(redo);
                 ui.close();
             }
-            for (redo, label) in [(false, "Undo"), (true, "Redo")] {
-                if ui
-                    .add_enabled(self.can_restore(redo), egui::Button::new(label))
-                    .clicked()
-                {
-                    self.restore(redo);
-                    ui.close();
-                }
-            }
+        }
+        if ui
+            .add_enabled(
+                self.focus().is_some_and(|n| n.can.text),
+                egui::Button::new("Edit text"),
+            )
+            .clicked()
+        {
+            self.begin_text();
+            ui.close();
+        }
+        for label in ["Duplicate", "Delete", "Move up", "Move down"] {
             if ui
                 .add_enabled(
-                    self.focus().is_some_and(|n| n.can.text),
-                    egui::Button::new("Edit text"),
+                    self.focus().is_some_and(|n| n.can.structural),
+                    egui::Button::new(label),
                 )
                 .clicked()
             {
-                self.begin_text();
+                self.structural(label);
                 ui.close();
             }
-            for label in ["Duplicate", "Delete", "Move up", "Move down"] {
-                if ui
-                    .add_enabled(
-                        self.focus().is_some_and(|n| n.can.structural),
-                        egui::Button::new(label),
-                    )
-                    .clicked()
-                {
-                    self.structural(label);
-                    ui.close();
-                }
-            }
-        });
+        }
+        ui.separator();
         ui.menu_button("Insert", |ui| {
             let mut item = None;
             for p in self.primitives["PRIMITIVES"].as_array().unwrap() {
@@ -294,86 +298,68 @@ impl Editor {
                 self.insert(&jsx, json!([]));
             }
         });
-        ui.menu_button("View", |ui| {
-            for (i, w) in TABS.iter().enumerate() {
-                if ui
-                    .selectable_label(self.workspace == i, format!("{w} workspace"))
-                    .clicked()
-                {
-                    self.switch(i);
-                    ui.close();
-                }
-            }
-            let g = self.group();
-            for p in dock::PANELS {
-                if ui.button(format!("Panel: {p:?}")).clicked() {
-                    self.docks[g].toggle(p, &mut self.next_id);
-                    ui.close();
-                }
-            }
-            if g == 0 && ui.button("New canvas pane").clicked() {
-                let id = self.docks[g]
-                    .panel_id(Panel::Canvas)
-                    .unwrap_or_else(|| self.docks[g].first());
-                self.docks[g].apply(id, Action::Tab(Panel::Canvas), &mut self.next_id);
-                ui.close();
-            }
-            if ui.button("Reset layout").clicked() {
-                self.docks[g] = Dock::preset(g);
-                ui.close();
-            }
-            ui.checkbox(&mut self.rulers, "Rulers");
-            for (name, step) in [("Zoom in", 1), ("Zoom out", -1), ("Reset zoom", 0)] {
-                if ui.button(name).clicked() {
-                    if step == 0 {
-                        self.zoom = DEVICES[self.device].2
-                    } else {
-                        self.zoom_by(step > 0)
-                    }
-                    ui.close();
-                }
-            }
-        });
-        ui.menu_button("Canvas", |ui| {
-            for (i, (name, _, z)) in DEVICES.iter().enumerate() {
-                if ui.selectable_label(self.device == i, *name).clicked() {
-                    self.device = i;
-                    self.zoom = *z;
-                    ui.close();
-                }
-            }
-            if ui.button("Reload canvas").clicked() {
-                self.reload = true;
-                ui.close();
-            }
-            if let Some(file) = &self.file
-                && ui.button("Preview in new window").clicked()
-            {
-                let mut url =
-                    reqwest::Url::parse(&format!("{}/harness.html", project::origin())).unwrap();
-                url.query_pairs_mut()
-                    .append_pair("file", &format!("app:{file}"));
-                ui.ctx().open_url(egui::OpenUrl::new_tab(url.to_string()));
-                ui.close();
-            }
-        });
-        ui.menu_button("Help", |ui| {
-            if ui.button("Keyboard shortcuts").clicked() {
-                self.help = true;
-                ui.close();
-            }
-        });
-        ui.separator();
-        for (i, name) in TABS.iter().enumerate() {
+    }
+    pub fn window_menu(&mut self, ui: &mut egui::Ui) {
+        for (i, w) in self.topbar.tabs.clone().iter().enumerate() {
             if ui
-                .add_sized(
-                    [name.len() as f32 * 6. + 22., 24.],
-                    egui::Button::selectable(self.workspace == i, *name),
-                )
+                .selectable_label(self.topbar.active == i, format!("{} workspace", w.name))
                 .clicked()
             {
-                self.switch(i);
+                self.activate_tab(i);
+                ui.close();
             }
+        }
+        let g = self.group();
+        for p in dock::PANELS {
+            if ui.button(format!("Panel: {p:?}")).clicked() {
+                self.docks[g].toggle(p, &mut self.next_id);
+                ui.close();
+            }
+        }
+        if matches!(self.workspace, 0 | 3) && ui.button("New canvas pane").clicked() {
+            let id = self.docks[g]
+                .panel_id(Panel::Canvas)
+                .unwrap_or_else(|| self.docks[g].first());
+            self.docks[g].apply(id, Action::Tab(Panel::Canvas), &mut self.next_id);
+            ui.close();
+        }
+        if ui.button("Reset layout").clicked() {
+            self.docks[g] = Dock::preset(topbar::preset(self.workspace));
+            ui.close();
+        }
+        ui.checkbox(&mut self.rulers, "Rulers");
+        for (name, step) in [("Zoom in", 1), ("Zoom out", -1), ("Reset zoom", 0)] {
+            if ui.button(name).clicked() {
+                if step == 0 {
+                    self.zoom = DEVICES[self.device].2
+                } else {
+                    self.zoom_by(step > 0)
+                }
+                ui.close();
+            }
+        }
+    }
+    pub fn render_menu(&mut self, ui: &mut egui::Ui) {
+        for (i, (name, _, z)) in DEVICES.iter().enumerate() {
+            if ui.selectable_label(self.device == i, *name).clicked() {
+                self.device = i;
+                self.zoom = *z;
+                ui.close();
+            }
+        }
+        if ui.button("Reload canvas").clicked() {
+            self.reload = true;
+            ui.close();
+        }
+        if let Some(file) = &self.file
+            && ui.button("Preview in new window").clicked()
+        {
+            let mut url =
+                reqwest::Url::parse(&format!("{}/harness.html", project::origin())).unwrap();
+            url.query_pairs_mut()
+                .append_pair("file", &format!("app:{file}"));
+            ui.ctx().open_url(egui::OpenUrl::new_tab(url.to_string()));
+            ui.close();
         }
     }
     pub fn pane_button(&mut self, ui: &mut egui::Ui, id: u64, p: Panel) {
