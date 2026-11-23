@@ -50,6 +50,36 @@ pub enum Action {
     Tab(Panel),
     Select(usize),
 }
+pub const DROP_SHARE: f32 = 0.32;
+
+pub fn drop_edge(rect: Rect, pos: egui::Pos2) -> Option<(bool, bool)> {
+    let x = (pos.x - rect.left()) / rect.width();
+    let y = (pos.y - rect.top()) / rect.height();
+    if (0.3..=0.7).contains(&x) && (0.3..=0.7).contains(&y) {
+        return None;
+    }
+    [
+        (x, true, true),
+        (1. - x, true, false),
+        (y, false, true),
+        (1. - y, false, false),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.0.total_cmp(&b.0))
+    .map(|(_, axis, first)| (axis, first))
+}
+
+pub fn preview_rect(mut rect: Rect, edge: Option<(bool, bool)>) -> Rect {
+    match edge {
+        Some((true, true)) => rect.max.x = rect.left() + rect.width() * DROP_SHARE,
+        Some((true, false)) => rect.min.x = rect.right() - rect.width() * DROP_SHARE,
+        Some((false, true)) => rect.max.y = rect.top() + rect.height() * DROP_SHARE,
+        Some((false, false)) => rect.min.y = rect.bottom() - rect.height() * DROP_SHARE,
+        None => {}
+    }
+    rect
+}
+
 impl Dock {
     fn leaf(id: u64, p: Panel) -> Self {
         Self::Pane {
@@ -234,7 +264,7 @@ impl Dock {
         let Some(Self::Pane { tabs, active }) = self.find(source) else {
             return;
         };
-        if tabs.iter().any(|t| t.0 == target) {
+        if edge.is_none() && tabs.iter().any(|t| t.0 == target) {
             return;
         }
         let Some(i) = tabs.iter().position(|t| t.0 == source) else {
@@ -250,9 +280,9 @@ impl Dock {
             let src = Self::leaf(source, item.1);
             let dest = node.clone();
             *node = if before {
-                Self::pair(horizontal, 0.5, src, dest)
+                Self::pair(horizontal, DROP_SHARE, src, dest)
             } else {
-                Self::pair(horizontal, 0.5, dest, src)
+                Self::pair(horizontal, 1. - DROP_SHARE, dest, src)
             };
         } else if let Self::Pane { tabs, active } = node {
             tabs.push(item);
@@ -364,6 +394,30 @@ impl Dock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn drop_preview_matches_committed_edge() {
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 500.));
+        let edge = drop_edge(rect, egui::pos2(140., 20.));
+        assert_eq!(edge, Some((false, true)));
+        assert_eq!(preview_rect(rect, edge).height(), 160.);
+        assert_eq!(drop_edge(rect, rect.center()), None);
+        let mut dock = Dock::leaf(10, Panel::Canvas);
+        dock.apply(10, Action::Tab(Panel::Insert), &mut 11);
+        dock.move_to(11, 10, edge);
+        let Dock::Split {
+            fraction,
+            horizontal,
+            a,
+            ..
+        } = dock
+        else {
+            panic!("tab did not split")
+        };
+        assert!(!horizontal);
+        assert_eq!(fraction, DROP_SHARE);
+        assert_eq!(a.first(), 11);
+    }
+
     #[test]
     fn rearrange_tabs_across_splits() {
         let mut dock = Dock::preset(0);

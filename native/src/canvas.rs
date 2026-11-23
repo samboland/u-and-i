@@ -13,6 +13,8 @@ pub struct Canvas {
     bounds: [i32; 4],
     last: Option<Value>,
     ready: bool,
+    visible: bool,
+    overlay: Option<[f32; 4]>,
     events: mpsc::Receiver<Value>,
 }
 pub fn page_url(origin: &str, path: &str) -> Option<String> {
@@ -55,6 +57,8 @@ impl Canvas {
             last: None,
             events,
             ready: false,
+            visible: false,
+            overlay: None,
         })
     }
     fn update(
@@ -64,6 +68,7 @@ impl Canvas {
         state: &Value,
         reload: bool,
         visible: bool,
+        overlay: Option<[f32; 4]>,
     ) -> wry::Result<Vec<Value>> {
         let bounds = [r.left(), r.top(), r.width(), r.height()].map(|v| (v * scale).round() as i32);
         if bounds != self.bounds {
@@ -73,8 +78,11 @@ impl Canvas {
             })?;
             self.bounds = bounds;
         }
-        self.web
-            .set_visible(visible && bounds[2] > 0 && bounds[3] > 0)?;
+        let show = visible && bounds[2] > 0 && bounds[3] > 0;
+        if self.visible != show {
+            self.web.set_visible(show)?;
+            self.visible = show;
+        }
         let mut messages = vec![];
         for msg in self.events.try_iter() {
             if msg["type"] == "wrapper-ready" {
@@ -88,6 +96,11 @@ impl Canvas {
             self.web
                 .evaluate_script(&format!("window.apply({state},{reload})"))?;
             self.last = Some(state.clone());
+        }
+        if self.ready && self.overlay != overlay {
+            self.web
+                .evaluate_script(&format!("window.previewDock({})", json!(overlay)))?;
+            self.overlay = overlay;
         }
         Ok(messages)
     }
@@ -117,7 +130,6 @@ impl Editor {
             && self.context.is_none()
             && !self.prefs
             && !self.help
-            && self.drag.is_none()
             && !egui::Popup::is_any_open(ui.ctx());
         let mut msgs = vec![];
         for (&id, &rect) in &self.canvas_views {
@@ -164,6 +176,18 @@ impl Editor {
                 &state,
                 reload,
                 visible,
+                self.dock_preview
+                    .map(|p| p.intersect(rect))
+                    .filter(|p| p.is_positive())
+                    .map(|p| {
+                        let scale = ui.ctx().zoom_factor();
+                        [
+                            (p.left() - rect.left()) * scale,
+                            (p.top() - rect.top()) * scale,
+                            p.width() * scale,
+                            p.height() * scale,
+                        ]
+                    }),
             ) {
                 Ok(events) => msgs.extend(events.into_iter().map(|msg| (id, msg))),
                 Err(e) => {

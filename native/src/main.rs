@@ -46,6 +46,7 @@ struct Editor {
     prefs: bool,
     pending_split: Option<bool>,
     drag: Option<u64>,
+    dock_preview: Option<egui::Rect>,
     states: HashMap<u64, (String, bool)>,
     canvas_views: HashMap<u64, egui::Rect>,
     landed: HashMap<u64, String>,
@@ -122,6 +123,7 @@ impl Editor {
             prefs: false,
             pending_split: None,
             drag: None,
+            dock_preview: None,
             states: HashMap::new(),
             canvas_views: HashMap::new(),
             landed: HashMap::new(),
@@ -764,6 +766,43 @@ fn main() -> eframe::Result {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn drag_pane_across_canvas_and_cancel() {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1500., 950.))
+            .build_ui_state(
+                |ui, editor: &mut Option<Editor>| {
+                    editor
+                        .get_or_insert_with(|| Editor::new(ui.ctx()))
+                        .render(ui)
+                },
+                None,
+            );
+        h.run();
+        let handle = format!("{}\u{e5c5}", Panel::Insert.glyph());
+        let widget = h.get_by_label(handle.as_str());
+        let start = widget.rect().center();
+        let canvas = h.state().as_ref().unwrap().canvas_views[&1];
+        h.event(egui::Event::PointerMoved(start));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.step();
+        h.event(egui::Event::PointerMoved(canvas.center()));
+        h.step();
+        h.run();
+        let editor = h.state().as_ref().unwrap();
+        assert_eq!(editor.drag, Some(0));
+        assert!(editor.dock_preview.unwrap().contains(canvas.center()));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.state().as_ref().unwrap().dock_preview.is_none());
+    }
 
     #[test]
     #[ignore = "requires the existing u-and-i project daemon on port 4400"]

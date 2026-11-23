@@ -377,51 +377,42 @@ impl Editor {
         }
     }
     pub fn pane_button(&mut self, ui: &mut egui::Ui, id: u64, p: Panel) {
-        let response = ui
-            .menu_button(format!("{}\u{e5c5}", p.glyph()), |ui| {
-                let mut action = None;
-                for kind in dock::PANELS {
-                    if ui
-                        .selectable_label(kind == p, format!("{kind:?}"))
-                        .clicked()
-                    {
-                        action = Some(Action::Change(kind));
-                    }
+        let handle = egui::Button::new(format!("{}\u{e5c5}", p.glyph()))
+            .sense(egui::Sense::click_and_drag());
+        let (response, _) = egui::containers::menu::MenuButton::from_button(handle).ui(ui, |ui| {
+            let mut action = None;
+            for kind in dock::PANELS {
+                if ui
+                    .selectable_label(kind == p, format!("{kind:?}"))
+                    .clicked()
+                {
+                    action = Some(Action::Change(kind));
                 }
-                ui.separator();
-                for (title, act) in [
-                    ("Split horizontally", Action::Split(true)),
-                    ("Split vertically", Action::Split(false)),
-                    ("Duplicate tab", Action::Tab(p)),
-                    ("Close panel", Action::Close),
-                ] {
-                    if ui.button(title).clicked() {
-                        action = Some(act);
-                    }
+            }
+            ui.separator();
+            for (title, act) in [
+                ("Split horizontally", Action::Split(true)),
+                ("Split vertically", Action::Split(false)),
+                ("Duplicate tab", Action::Tab(p)),
+                ("Close panel", Action::Close),
+            ] {
+                if ui.button(title).clicked() {
+                    action = Some(act);
                 }
-                if let Some(act) = action {
-                    let group = self.group();
-                    self.docks[group].apply(id, act, &mut self.next_id);
-                    if matches!(act, Action::Change(Panel::Style)) {
-                        let _ = self.requests.send(Request::Api("tokens", None));
-                    }
-                    ui.close();
+            }
+            if let Some(act) = action {
+                let group = self.group();
+                self.docks[group].apply(id, act, &mut self.next_id);
+                if matches!(act, Action::Change(Panel::Style)) {
+                    let _ = self.requests.send(Request::Api("tokens", None));
                 }
-            })
-            .response
-            .on_hover_text(format!("{p:?}"));
-        if ui.input(|i| {
-            i.pointer.primary_down()
-                && i.pointer.is_decidedly_dragging()
-                && i.pointer
-                    .press_origin()
-                    .is_some_and(|p| response.rect.contains(p))
-        }) {
+                ui.close();
+            }
+        });
+        let response = response.on_hover_text(format!("{p:?}"));
+        if response.drag_started_by(egui::PointerButton::Primary) {
             self.drag = Some(id);
             egui::Popup::close_all(ui.ctx());
-        }
-        if egui::DragAndDrop::payload::<u64>(ui.ctx()).as_deref() == Some(&id) {
-            self.drag = Some(id);
         }
     }
     pub fn draw_workspace(&mut self, ui: &mut egui::Ui) {
@@ -455,6 +446,7 @@ impl Editor {
         {
             self.pending_split = Some(!h);
         }
+        self.dock_preview = None;
         if let Some(src) = self.drag
             && let Some(pos) = ui
                 .input(|i| i.pointer.interact_pos())
@@ -470,10 +462,12 @@ impl Editor {
                 .into_iter()
                 .min_by(|a, b| a.0.total_cmp(&b.0))
                 .filter(|e| e.0 < 10.)
-                && ui.input(|i| i.pointer.any_released())
             {
-                self.docks[g].move_outer(src, h, before);
-                self.drag = None;
+                self.dock_preview = Some(dock::preview_rect(root, Some((h, before))));
+                if ui.input(|i| i.pointer.primary_released()) {
+                    self.docks[g].move_outer(src, h, before);
+                    self.drag = None;
+                }
             }
         }
         for (rect, tabs, active) in panes {
@@ -502,7 +496,8 @@ impl Editor {
                             if response.drag_started() {
                                 self.drag = Some(*tab_id);
                             }
-                            if response.contains_pointer()
+                            if self.dock_preview.is_none()
+                                && response.contains_pointer()
                                 && ui.input(|i| i.pointer.any_released())
                                 && let Some(source) = self.drag.take()
                             {
@@ -558,30 +553,46 @@ impl Editor {
                 }
             }
             if let Some(src) = self.drag
-                && src != id
+                && self.dock_preview.is_none()
+                && (src != id || tabs.len() > 1)
                 && let Some(pos) = ui
                     .input(|i| i.pointer.interact_pos())
                     .filter(|pos| rect.contains(*pos))
             {
-                let x = (pos.x - rect.left()) / rect.width();
-                let y = (pos.y - rect.top()) / rect.height();
-                let edge = if x < 0.23 || x > 0.77 {
-                    Some((true, x < 0.5))
-                } else if y < 0.23 || y > 0.77 {
-                    Some((false, y < 0.5))
-                } else {
+                let edge = if pos.y <= rect.top() + 27. {
                     None
+                } else {
+                    dock::drop_edge(rect, pos)
                 };
-                ui.painter()
-                    .rect_stroke(rect.shrink(3.), 4., (2., BLUE), egui::StrokeKind::Inside);
+                let target = if src == id && edge.is_some() {
+                    tabs.iter()
+                        .find(|(tab, _)| *tab != src)
+                        .map(|t| t.0)
+                        .unwrap_or(id)
+                } else {
+                    id
+                };
+                self.dock_preview = (src != target).then(|| dock::preview_rect(rect, edge));
                 if ui.input(|i| i.pointer.any_released()) {
-                    self.docks[g].move_to(src, id, edge);
+                    self.docks[g].move_to(src, target, edge);
                     self.drag = None;
                 }
             }
         }
         if ui.input(|i| i.pointer.any_released()) {
             self.drag = None;
+        }
+        if self.drag.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if let Some(rect) = self.dock_preview {
+                ui.painter().rect_filled(
+                    rect,
+                    0.,
+                    Color32::from_rgba_unmultiplied(83, 89, 93, 128),
+                );
+            }
+        } else {
+            self.dock_preview = None;
         }
         if let Some(pos) = self.context {
             let mut close = false;
