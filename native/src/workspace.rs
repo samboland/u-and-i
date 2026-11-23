@@ -119,8 +119,15 @@ impl Editor {
                 .unwrap_or(0.25)
         };
     }
-    pub fn keys(&mut self, ui: &egui::Ui) {
-        if self.pending_split.is_some() || egui::Popup::is_any_open(ui.ctx()) {
+    pub fn input_blocked(&self, ui: &egui::Ui) -> bool {
+        self.prefs
+            || self.help
+            || self.context.is_some()
+            || self.pending_split.is_some()
+            || egui::Popup::is_any_open(ui.ctx())
+    }
+    fn keys(&mut self, ui: &egui::Ui, owner: Option<Panel>) {
+        if self.input_blocked(ui) || self.drag.is_some() || self.finishing_split {
             return;
         }
         if ui
@@ -153,43 +160,49 @@ impl Editor {
                 return;
             }
         }
-        if !ui.input(|i| i.modifiers.alt || i.modifiers.command) {
+        if owner == Some(Panel::Outliner) && !ui.input(|i| i.modifiers.alt || i.modifiers.command) {
             for (key, name) in [
                 (Key::ArrowUp, "ArrowUp"),
                 (Key::ArrowDown, "ArrowDown"),
                 (Key::ArrowLeft, "ArrowLeft"),
                 (Key::ArrowRight, "ArrowRight"),
             ] {
-                if ui.input(|i| i.key_pressed(key)) {
-                    self.walk(name, ui.input(|i| i.modifiers.shift));
+                let modifiers = ui.input(|i| i.modifiers);
+                if ui.input_mut(|i| i.consume_key(modifiers, key)) {
+                    self.walk(name, modifiers.shift);
                 }
             }
         }
-        ui.input(|i| {
-            if i.modifiers.command && i.key_pressed(Key::Z) {
-                self.restore(i.modifiers.shift)
-            } else if i.modifiers.command && i.key_pressed(Key::D) {
-                self.structural("Duplicate")
-            } else if i.key_pressed(Key::Delete) {
-                self.structural("Delete")
-            } else if i.modifiers.alt && i.key_pressed(Key::ArrowUp) {
-                self.structural("Move up")
-            } else if i.modifiers.alt && i.key_pressed(Key::ArrowDown) {
-                self.structural("Move down")
-            } else if i.key_pressed(Key::Tab) {
-                self.interact = !self.interact
-            } else if i.key_pressed(Key::F2) {
-                self.begin_text()
-            } else if i.modifiers.command && i.key_pressed(Key::Minus) {
-                self.zoom_by(false)
-            } else if i.modifiers.command
-                && (i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus))
-            {
-                self.zoom_by(true)
-            } else if i.modifiers.command && i.key_pressed(Key::Num0) {
-                self.zoom = DEVICES[self.device].2;
+        let modifiers = ui.input(|i| i.modifiers);
+        let pressed = |key| ui.input_mut(|i| i.consume_key(modifiers, key));
+        if modifiers.command && pressed(Key::Z) {
+            self.restore(modifiers.shift);
+        } else if matches!(
+            owner,
+            Some(Panel::Canvas | Panel::Outliner | Panel::Properties)
+        ) {
+            if modifiers.command && pressed(Key::D) {
+                self.structural("Duplicate");
+            } else if pressed(Key::Delete) {
+                self.structural("Delete");
+            } else if modifiers.alt && pressed(Key::ArrowUp) {
+                self.structural("Move up");
+            } else if modifiers.alt && pressed(Key::ArrowDown) {
+                self.structural("Move down");
+            } else if pressed(Key::F2) {
+                self.begin_text();
+            } else if owner == Some(Panel::Canvas) {
+                if modifiers.is_none() && pressed(Key::Tab) {
+                    self.interact = !self.interact;
+                } else if modifiers.command && pressed(Key::Minus) {
+                    self.zoom_by(false);
+                } else if modifiers.command && (pressed(Key::Equals) || pressed(Key::Plus)) {
+                    self.zoom_by(true);
+                } else if modifiers.command && pressed(Key::Num0) {
+                    self.zoom = DEVICES[self.device].2;
+                }
             }
-        });
+        }
     }
     pub fn walk(&mut self, key: &str, recursive: bool) {
         let pos = self
@@ -422,7 +435,23 @@ impl Editor {
         let g = self.group();
         let mut panes = vec![];
         let root = ui.available_rect_before_wrap().shrink(2.);
-        self.docks[g].panes(ui, root, &mut self.pending_split, &mut panes);
+        self.resizing_pane = false;
+        self.docks[g].panes(
+            ui,
+            root,
+            &mut self.pending_split,
+            &mut self.resizing_pane,
+            &mut panes,
+        );
+        let key_position = ui
+            .memory(|m| m.focused())
+            .and_then(|id| ui.ctx().read_response(id))
+            .map(|r| r.rect.center())
+            .or_else(|| ui.input(|i| i.pointer.hover_pos()));
+        let owner = key_position
+            .and_then(|pos| panes.iter().find(|(rect, _, _)| rect.contains(pos)))
+            .map(|(_, tabs, active)| tabs[*active].1);
+        self.keys(ui, owner);
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.pending_split = None;
             self.drag = None;
@@ -480,12 +509,12 @@ impl Editor {
                             if response.clicked() {
                                 self.docks[g].apply(id, Action::Select(n), &mut self.next_id);
                             }
-                            if response.drag_started() {
+                            if response.drag_started_by(egui::PointerButton::Primary) {
                                 self.drag = Some(*tab_id);
                             }
                             if self.dock_preview.is_none()
                                 && response.contains_pointer()
-                                && ui.input(|i| i.pointer.any_released())
+                                && ui.input(|i| i.pointer.primary_released())
                                 && let Some(source) = self.drag.take()
                             {
                                 self.docks[g].place_tab(source, *tab_id);
@@ -572,6 +601,7 @@ impl Editor {
                             &mut self.next_id,
                         );
                         self.pending_split = None;
+                        self.finishing_split = true;
                     }
                 } else {
                     outline(rect);
@@ -598,14 +628,14 @@ impl Editor {
                     id
                 };
                 self.dock_preview = (src != target).then(|| dock::preview_rect(rect, edge));
-                if ui.input(|i| i.pointer.any_released()) {
+                if ui.input(|i| i.pointer.primary_released()) {
                     self.docks[g].move_to(src, target, edge);
                     self.drag = None;
                 }
             }
         }
         dock::outer_borders(ui, root.expand(2.), &mut self.pending_split);
-        if ui.input(|i| i.pointer.any_released()) {
+        if ui.input(|i| i.pointer.primary_released()) {
             self.drag = None;
         }
         if self.drag.is_some() {

@@ -14,12 +14,10 @@ serde = { version = "1", features = ["derive"] }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 raw-window-handle = "0.6"
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
 windows-core = "0.62"
 webview2-com = "0.39"
 wry = { version = "0.57.3", default-features = false }
 
 [dev-dependencies]
 egui_kittest = { version = "0.36.2", features = ["wgpu"] }
-
-[target.'cfg(windows)'.dev-dependencies]
-windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }

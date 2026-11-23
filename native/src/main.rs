@@ -8,6 +8,8 @@ mod edit;
 mod studio;
 mod surface;
 mod topbar;
+#[cfg(windows)]
+mod window_frame;
 mod workspace;
 use dock::{Action, Dock, Panel};
 use serde_json::{Value, json};
@@ -47,6 +49,8 @@ struct Editor {
     rem: bool,
     prefs: bool,
     pending_split: Option<bool>,
+    finishing_split: bool,
+    resizing_pane: bool,
     drag: Option<u64>,
     dock_preview: Option<egui::Rect>,
     states: HashMap<u64, (String, bool)>,
@@ -99,7 +103,18 @@ impl Editor {
                 .insert(egui::TextStyle::Body, egui::FontId::proportional(12.));
             s.text_styles
                 .insert(egui::TextStyle::Button, egui::FontId::proportional(12.));
-            s.spacing.scroll.floating = false;
+            s.spacing.scroll.floating = true;
+            s.spacing.scroll.floating_allocated_width = 8.;
+            s.spacing.scroll.floating_width = 5.;
+            for widget in [
+                &mut s.visuals.widgets.inactive,
+                &mut s.visuals.widgets.hovered,
+                &mut s.visuals.widgets.active,
+                &mut s.visuals.widgets.open,
+            ] {
+                widget.bg_stroke = egui::Stroke::NONE;
+                widget.expansion = 0.;
+            }
             s.spacing.scroll.bar_width = 5.;
             s.spacing.scroll.bar_inner_margin = 3.;
         });
@@ -125,6 +140,8 @@ impl Editor {
             rem,
             prefs: false,
             pending_split: None,
+            finishing_split: false,
+            resizing_pane: false,
             drag: None,
             dock_preview: None,
             states: HashMap::new(),
@@ -244,10 +261,41 @@ impl Editor {
                 _ => {}
             }
         }
-        self.keys(ui);
         self.canvas_views.clear();
-        self.top_strip(ui);
-        self.draw_workspace(ui);
+        let full = ui.available_rect_before_wrap();
+        let inset = if ui.input(|i| {
+            i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true)
+        }) {
+            0.
+        } else {
+            topbar::FRAME_WIDTH
+        };
+        ui.painter().rect_stroke(
+            full,
+            0.,
+            (inset, Color32::from_gray(52)),
+            egui::StrokeKind::Inside,
+        );
+        let mut client = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("editor client")
+                .max_rect(full.shrink(inset)),
+        );
+        if self.pending_split.is_some()
+            || self.finishing_split
+            || self.context.is_some()
+            || self.prefs
+            || self.help
+        {
+            client.visuals_mut().disabled_alpha = 1.;
+            client.disable();
+        }
+        self.top_strip(&mut client);
+        self.draw_workspace(&mut client);
+        if self.finishing_split && !ui.input(|i| i.pointer.primary_down()) {
+            self.finishing_split = false;
+        }
+        #[cfg(not(windows))]
         topbar::frame_edges(ui);
     }
     fn insert_body(&mut self, ui: &mut egui::Ui, id: u64) {
@@ -278,7 +326,7 @@ impl Editor {
                             ui.horizontal(|ui|{for p in pair{
                                 let r=ui.add_enabled_ui(self.file.is_some(),|ui|chrome::part_button(ui,[half,28.],studio::string(p,"icon"),studio::string(p,"label"),false)).inner;
                                 if r.clicked(){insert=Some(studio::string(p,"jsx").to_owned());}
-                                r.dnd_set_drag_payload(json!({"insert":{"jsx":p["jsx"]}}));
+                                if r.drag_started_by(egui::PointerButton::Primary) {r.dnd_set_drag_payload(json!({"insert":{"jsx":p["jsx"]}}));}
                             }});
                         }
                         if let Some(jsx)=insert{self.insert(&jsx,json!([]));}
@@ -309,7 +357,7 @@ impl Editor {
                                         let response=ui.add_enabled_ui(!server,|ui|chrome::part_button(ui,[w,26.],"\u{e14d}",&caption,self.file.as_ref()==Some(file))).inner.on_hover_text(file);
                                         if response.clicked(){open=Some(file.clone());}
                                         if let Some(export)=export{let jsx=format!("<{export} />");let imports=json!([{"source":format!("@/{}",file.trim_start_matches("src/").trim_end_matches(".tsx")),"named":[export]}]);
-                                            response.dnd_set_drag_payload(json!({"insert":{"jsx":jsx,"imports":imports}}));
+                                            if response.drag_started_by(egui::PointerButton::Primary) {response.dnd_set_drag_payload(json!({"insert":{"jsx":jsx,"imports":imports}}));}
                                             if ui.small_button("+").clicked(){component_insert=Some((jsx,imports));}
                                         }
                                     });
@@ -685,10 +733,12 @@ fn element_tree(
         if r.clicked() {
             *selected = Some(node.index);
         }
-        if node.can.structural {
+        if node.can.structural && r.drag_started_by(egui::PointerButton::Primary) {
             r.dnd_set_drag_payload(json!({"moveId":node.id}));
         }
-        if let Some(v) = r.dnd_release_payload::<Value>() {
+        if ui.input(|i| i.pointer.primary_released())
+            && let Some(v) = r.dnd_release_payload::<Value>()
+        {
             let mut v = (*v).clone();
             v["targetId"] = json!(node.id);
             v["position"] = json!(if r
@@ -714,7 +764,15 @@ impl eframe::App for Editor {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.render(ui);
         #[cfg(windows)]
-        self.update_canvases(ui, frame);
+        {
+            window_frame::update(
+                frame,
+                ui.ctx(),
+                self.topbar.caption,
+                self.input_blocked(ui) || self.drag.is_some() || ui.ctx().dragged_id().is_some(),
+            );
+            self.update_canvases(ui, frame);
+        }
     }
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         self.persist();

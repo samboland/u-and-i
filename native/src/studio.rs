@@ -619,10 +619,10 @@ impl Studio {
                         )
                         .sense(egui::Sense::click_and_drag()),
                     );
-                    if resp.clicked() || resp.dragged() {
+                    if resp.clicked() || resp.dragged_by(egui::PointerButton::Primary) {
                         self.selected = id.into();
                     }
-                    if resp.dragged() {
+                    if resp.dragged_by(egui::PointerButton::Primary) {
                         *self.positions.get_mut(id).unwrap() += resp.drag_delta() / z;
                     }
                     ui.separator();

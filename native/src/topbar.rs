@@ -1,8 +1,10 @@
 use super::*;
-use egui::{
-    Align, Button, CursorIcon, Layout, Popup, Rect, ResizeDirection, Sense, Ui, ViewportCommand,
-};
+use egui::{Align, Button, Layout, Popup, Rect, Sense, Ui, ViewportCommand};
 use serde::{Deserialize, Serialize};
+pub const FRAME_WIDTH: f32 = 5.;
+fn no_caption() -> Rect {
+    Rect::NOTHING
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Tab {
@@ -19,6 +21,8 @@ pub struct TopBar {
     rename: Option<(usize, String)>,
     #[serde(skip)]
     filter: String,
+    #[serde(skip, default = "no_caption")]
+    pub caption: Rect,
 }
 pub fn preset(mode: usize) -> usize {
     match mode {
@@ -41,6 +45,7 @@ impl TopBar {
             active,
             rename: None,
             filter: String::new(),
+            caption: Rect::NOTHING,
         }
     }
     pub fn valid(&self, groups: usize) -> bool {
@@ -122,7 +127,7 @@ impl Editor {
             active
         };
     }
-    fn workspace_tabs(&mut self, ui: &mut Ui) {
+    fn workspace_tabs(&mut self, ui: &mut Ui) -> f32 {
         for (index, tab) in self.topbar.tabs.clone().iter().enumerate() {
             if let Some((editing, value)) = &mut self.topbar.rename
                 && *editing == index
@@ -168,8 +173,12 @@ impl Editor {
             if r.double_clicked() {
                 self.topbar.rename = Some((index, tab.name.clone()));
             }
-            r.dnd_set_drag_payload(("workspace", index));
-            if let Some(payload) = r.dnd_release_payload::<(&'static str, usize)>() {
+            if r.drag_started_by(egui::PointerButton::Primary) {
+                r.dnd_set_drag_payload(("workspace", index));
+            }
+            if ui.input(|i| i.pointer.primary_released())
+                && let Some(payload) = r.dnd_release_payload::<(&'static str, usize)>()
+            {
                 self.reorder_tab(payload.1, index);
                 break;
             }
@@ -221,7 +230,9 @@ impl Editor {
             }
         })
         .response
-        .on_hover_text("Add workspace");
+        .on_hover_text("Add workspace")
+        .rect
+        .right()
     }
 
     fn strip_menu(&mut self, ui: &mut Ui, index: usize) {
@@ -349,21 +360,25 @@ impl Editor {
                 Popup::open_id(ui.ctx(), egui::Id::new(("strip menu", next)));
             }
         }
-        let sibling = ui.input(|i| {
-            if i.modifiers.ctrl && i.key_pressed(egui::Key::PageDown) {
-                1
-            } else if i.modifiers.ctrl && i.key_pressed(egui::Key::PageUp) {
-                -1
-            } else {
-                0
-            }
-        });
+        let sibling = if self.input_blocked(ui) || self.topbar.rename.is_some() {
+            0
+        } else {
+            ui.input(|i| {
+                if i.modifiers.ctrl && i.key_pressed(egui::Key::PageDown) {
+                    1
+                } else if i.modifiers.ctrl && i.key_pressed(egui::Key::PageUp) {
+                    -1
+                } else {
+                    0
+                }
+            })
+        };
         if sibling != 0 {
             let count = self.topbar.tabs.len() as isize;
             self.activate_tab((self.topbar.active as isize + sibling).rem_euclid(count) as usize);
         }
         egui::Panel::top("menus")
-            .exact_size(27.)
+            .exact_size(33.)
             .frame(egui::Frame::new().fill(Color32::from_gray(26)))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 1.;
@@ -375,6 +390,7 @@ impl Editor {
                 let context_start = controls_start - if show_context { 286. } else { 0. };
                 let mut controls = ui.new_child(
                     egui::UiBuilder::new()
+                        .id_salt("window controls")
                         .max_rect(region(controls_start, bar.right()))
                         .layout(Layout::right_to_left(Align::Center)),
                 );
@@ -383,6 +399,7 @@ impl Editor {
                     let rect = region(context_start, controls_start);
                     let mut selectors = ui.new_child(
                         egui::UiBuilder::new()
+                            .id_salt("context selectors")
                             .max_rect(rect)
                             .layout(Layout::left_to_right(Align::Center)),
                     );
@@ -391,6 +408,7 @@ impl Editor {
                 }
                 let mut menus = ui.new_child(
                     egui::UiBuilder::new()
+                        .id_salt("application menus")
                         .max_rect(region(bar.left() + 5., context_start))
                         .layout(Layout::left_to_right(Align::Center)),
                 );
@@ -415,29 +433,34 @@ impl Editor {
                     .map(|t| t.name.chars().count() as f32 * 7. + 19.)
                     .sum::<f32>()
                     + 28.;
-                let end = (start + ideal).min(context_start - 24.).max(start + 10.);
+                let end = (start + ideal).min(context_start - 54.).max(start + 10.);
                 let mut tabs = ui.new_child(
                     egui::UiBuilder::new()
+                        .id_salt("workspace tabs")
                         .max_rect(region(start, end))
                         .layout(Layout::left_to_right(Align::Center)),
                 );
                 tabs.set_clip_rect(region(start, end));
-                egui::ScrollArea::horizontal()
+                let visible_end = egui::ScrollArea::horizontal()
                     .id_salt("workspace tabs")
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .auto_shrink([false, true])
                     .show(&mut tabs, |ui| {
-                        ui.horizontal(|ui| self.workspace_tabs(ui));
+                        ui.horizontal(|ui| self.workspace_tabs(ui)).inner
                     });
-                let drag = ui.interact(
-                    region(end, context_start),
-                    ui.id().with("title drag"),
-                    Sense::click_and_drag(),
-                );
-                if drag.double_clicked() {
-                    maximize(ui);
-                } else if drag.drag_started_by(egui::PointerButton::Primary) {
-                    ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                self.topbar.caption = region(visible_end.inner.min(end), context_start);
+                #[cfg(not(windows))]
+                {
+                    let drag = ui.interact(
+                        self.topbar.caption,
+                        ui.id().with("title drag"),
+                        Sense::click_and_drag(),
+                    );
+                    if drag.double_clicked() {
+                        maximize(ui);
+                    } else if drag.drag_started_by(egui::PointerButton::Primary) {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                    }
                 }
             });
     }
@@ -546,8 +569,9 @@ fn window_buttons(ui: &mut Ui) {
     }
 }
 
+#[cfg(not(windows))]
 pub fn frame_edges(ui: &mut Ui) {
-    use ResizeDirection::*;
+    use egui::{CursorIcon, ResizeDirection::*};
     let bounds = ui.ctx().content_rect();
     if ui.input(|i| i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true)) {
         return;
@@ -589,6 +613,55 @@ pub fn frame_edges(ui: &mut Ui) {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn hover_preserves_bounds_and_modal_clicks_stay_in_the_dialog() {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1200., 720.))
+            .build_ui_state(
+                |ui, app: &mut Option<Editor>| {
+                    app.get_or_insert_with(|| Editor::new(ui.ctx())).render(ui)
+                },
+                None,
+            );
+        h.run();
+        let labels = [
+            "Style",
+            "Workshop",
+            "Component",
+            "Maximize",
+            "Minimize",
+            "Close",
+        ];
+        let bounds = labels.map(|label| h.get_all_by_label(label).next().unwrap().rect());
+        for rect in bounds {
+            h.event(egui::Event::PointerMoved(rect.center()));
+            h.run();
+            assert_eq!(
+                bounds,
+                labels.map(|label| h.get_all_by_label(label).next().unwrap().rect())
+            );
+        }
+        h.state_mut().as_mut().unwrap().prefs = true;
+        h.run();
+        let pos = bounds[0].center();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerMoved(pos));
+            h.event(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+            h.step();
+        }
+        h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::PageDown);
+        h.run();
+        let app = h.state().as_ref().unwrap();
+        assert!(app.prefs);
+        assert_eq!(app.workspace, 0);
+        assert!(app.drag.is_none());
+    }
 
     #[test]
     fn menus_tabs_and_frame_controls() {

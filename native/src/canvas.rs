@@ -209,7 +209,7 @@ impl Editor {
         let mut state = json!({"url":url,"upstream":c.live.upstream,"harness":format!("{}/harness.html",project::origin()),"component":self.workspace==3,"file":self.file.as_ref().filter(|_|self.renderable).map(|f|format!("app:{f}")),"props":self.samples,"width":DEVICES[self.device].1,"height":([790,1112,844][self.device]),"zoom":self.zoom,"interact":self.interact,"selection":self.focus().map(|n|&n.id),"dark":self.studio.dark});
         let reload = std::mem::take(&mut self.reload);
         let visible = self.drag.is_none()
-            && ui.ctx().dragged_id().is_none()
+            && !self.resizing_pane
             && self.pending_split.is_none()
             && !egui::DragAndDrop::has_payload_of_type::<Value>(ui.ctx())
             && self.context.is_none()
@@ -241,7 +241,7 @@ impl Editor {
             }
             if id == 1
                 && self.workspace == 3
-                && ui.input(|i| i.pointer.any_released())
+                && ui.input(|i| i.pointer.primary_released())
                 && let Some(pos) = ui
                     .input(|i| i.pointer.interact_pos())
                     .filter(|p| rect.contains(*p))

@@ -160,6 +160,7 @@ impl Dock {
         ui: &Ui,
         r: Rect,
         pending: &mut Option<bool>,
+        resizing: &mut bool,
         out: &mut Vec<(Rect, Vec<(u64, Panel)>, usize)>,
     ) {
         match self {
@@ -199,7 +200,8 @@ impl Dock {
                     } else {
                         egui::CursorIcon::ResizeVertical
                     });
-                if resp.dragged() {
+                if resp.dragged_by(egui::PointerButton::Primary) {
+                    *resizing = true;
                     let d = resp.drag_delta();
                     *fraction =
                         (*fraction + (if *horizontal { d.x } else { d.y }) / len).clamp(0.08, 0.92);
@@ -230,8 +232,8 @@ impl Dock {
                         ui.close();
                     }
                 });
-                a.panes(ui, ra, pending, out);
-                b.panes(ui, rb, pending, out);
+                a.panes(ui, ra, pending, resizing, out);
+                b.panes(ui, rb, pending, resizing, out);
                 if let Some(kept) = join {
                     *self = kept;
                 }
@@ -433,7 +435,9 @@ mod tests {
             .build_ui_state(
                 |ui, state: &mut (Dock, Option<bool>)| {
                     let mut panes = vec![];
-                    state.0.panes(ui, bounds, &mut state.1, &mut panes);
+                    state
+                        .0
+                        .panes(ui, bounds, &mut state.1, &mut false, &mut panes);
                     for (rect, _, _) in panes {
                         ui.painter()
                             .rect_filled(rect.shrink(2.), 4., egui::Color32::DARK_GRAY);
