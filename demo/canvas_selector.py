@@ -311,7 +311,8 @@ class UAI_OT_select(bpy.types.Operator):
                 type(self).turn_selection = () if self.turn_selection == self.ids else self.ids
             context.area.tag_redraw()
             return {"FINISHED"}
-        if event.type != "MOUSEMOVE":
+        modifier_changed = event.type in {"LEFT_CTRL", "RIGHT_CTRL"}
+        if event.type != "MOUSEMOVE" and not (modifier_changed and self.dragged):
             return {"RUNNING_MODAL"}
         mouse = Vector((event.mouse_region_x, event.mouse_region_y))
         if (
@@ -329,7 +330,7 @@ class UAI_OT_select(bpy.types.Operator):
         settings = context.tool_settings
         uv = context.space_data.uv_editor
         if (
-            settings.use_snap_uv
+            (settings.use_snap_uv != event.ctrl)
             and "GRID" in settings.snap_uv_element
             and uv.show_grid_over_image
             and self.action in {"BODY", "SCALE"}
@@ -403,4 +404,5 @@ def register(keyconfig, outline):
     if keyconfig:
         km = keyconfig.keymaps.new(name="UV Editor", space_type="EMPTY")
         for shift in (False, True):
-            km.keymap_items.new("uai.select_element", "LEFTMOUSE", "PRESS", shift=shift, head=True)
+            for ctrl in (False, True):
+                km.keymap_items.new("uai.select_element", "LEFTMOUSE", "PRESS", shift=shift, ctrl=ctrl, head=True)
