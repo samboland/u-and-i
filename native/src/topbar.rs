@@ -270,11 +270,18 @@ impl Editor {
     fn strip_menu(&mut self, ui: &mut Ui, index: usize) {
         let name = MENUS[index];
         let id = egui::Id::new(("strip menu", index));
+        let is_open = Popup::is_id_open(ui.ctx(), id);
+        let bottom_radius = if is_open { 0 } else { 4 };
         let r = ui.add(
             Button::new(name)
                 .fill(Color32::from_gray(48))
-                .corner_radius(4)
-                .frame_when_inactive(Popup::is_id_open(ui.ctx(), id)),
+                .corner_radius(egui::CornerRadius {
+                    nw: 4,
+                    ne: 4,
+                    sw: bottom_radius,
+                    se: bottom_radius,
+                })
+                .frame_when_inactive(is_open),
         );
         let open = MENUS
             .iter()
@@ -283,10 +290,16 @@ impl Editor {
         if open && r.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
             Popup::open_id(ui.ctx(), id);
         }
-        Popup::menu(&r).id(id).style(menu_style).show(|ui| {
-            ui.set_min_width(190.);
-            self.menu_contents(ui, index);
-        });
+        Popup::menu(&r)
+            .id(id)
+            .style(|style: &mut egui::Style| {
+                menu_style(style);
+                style.visuals.menu_corner_radius.nw = 0;
+            })
+            .show(|ui| {
+                ui.set_min_width(190.);
+                self.menu_contents(ui, index);
+            });
     }
     fn menu_contents(&mut self, ui: &mut Ui, index: usize) {
         match index {
@@ -686,6 +699,14 @@ mod tests {
         h.event(egui::Event::PointerMoved(quit));
         h.run();
         let open = capture(&mut h, "open");
+        let bottom = pixel(file.bottom()) - 2;
+        for x in [pixel(file.left()) + 1, pixel(file.right()) - 2] {
+            assert_ne!(hover.get_pixel(x, bottom), open.get_pixel(x, bottom));
+            assert_eq!(
+                open.get_pixel(x, bottom),
+                open.get_pixel(sample.0, sample.1)
+            );
+        }
         assert_eq!(
             hover.get_pixel(sample.0, sample.1),
             open.get_pixel(sample.0, sample.1)
