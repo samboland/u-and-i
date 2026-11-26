@@ -2,7 +2,6 @@
 
 import blf
 import bpy
-import bmesh
 from mathutils import Vector
 import gpu
 import math
@@ -413,12 +412,6 @@ class UAI_PT_element(bpy.types.Panel):
         layout.use_property_decorate = False
         if obj.get("uai_kind") != "Label":
             layout.prop(obj, "uai_shape")
-            if obj.uai_shape == "ELLIPSE":
-                layout.prop(obj, "uai_closure")
-                if obj.uai_closure != "WHOLE":
-                    col = layout.column(align=True)
-                    col.prop(obj, "uai_start")
-                    col.prop(obj, "uai_end")
         if obj.get("uai_kind") != "Panel":
             layout.prop(obj, "uai_caption", text="Caption" if obj.get("uai_kind") == "Button" else "Text")
 
@@ -440,160 +433,8 @@ def shape_outline(obj, points):
                 angle = (quarter + step / 16) * math.pi / 2
                 outline.append(quad_point(corners, x + rx * math.cos(angle), y + ry * math.sin(angle)))
         return outline
-    start, sweep = ellipse_angles(obj)
-    steps = max(2, math.ceil(64 * sweep / math.tau))
-    outline = [ellipse_point(corners, start + sweep * i / steps) for i in range(steps + 1)]
-    if obj.uai_closure == "SLICE":
-        outline.insert(0, quad_point(corners, 0.5, 0.5))
-    return outline
-
-
-def ellipse_angles(obj):
-    if obj.uai_closure == "WHOLE":
-        return 0, math.tau
-    sweep = (obj.uai_end - obj.uai_start) % math.tau
-    return obj.uai_start, sweep or math.tau
-
-
-def ellipse_point(corners, angle):
-    return quad_point(corners, (1 + math.cos(angle)) / 2, (1 + math.sin(angle)) / 2)
-
-
-def edit_quad(obj, coordinates=None):
-    if not obj or obj.mode != "EDIT":
-        return None
-    bm = bmesh.from_edit_mesh(obj.data)
-    if len(bm.faces) != 1 or not bm.loops.layers.uv.active:
-        return None
-    face = next(iter(bm.faces))
-    if face.hide or len(face.loops) != 4:
-        return None
-    layer = bm.loops.layers.uv.active
-    if coordinates is not None:
-        for loop, value in zip(face.loops, coordinates):
-            loop[layer].uv = value
-        bmesh.update_edit_mesh(obj.data, destructive=False)
-    return [loop[layer].uv.copy() for loop in face.loops]
-
-
-def ellipse_handle_positions(obj):
-    start, sweep = ellipse_angles(obj)
-    positions = {"LEFT": (0, .5), "TOP": (.5, 1)}
-    if obj.uai_closure != "WHOLE":
-        positions["START"] = ((1+math.cos(start))/2, (1+math.sin(start))/2)
-    positions["END"] = ((1+math.cos(start+sweep))/2, (1+math.sin(start+sweep))/2)
-    return positions
-
-
-class UAI_OT_shape_handle(bpy.types.Operator):
-    bl_idname = "uai.shape_handle"
-    bl_label = "Edit Shape"
-    bl_options = {"UNDO", "INTERNAL"}
-    handle: bpy.props.StringProperty()
-
-    @classmethod
-    def poll(cls, context):
-        obj = context.active_object
-        return (context.area is not None and context.area.ui_type == "UV"
-                and context.scene.uai_canvas is not None
-                and context.space_data.image == context.scene.uai_canvas
-                and obj is not None and obj.get("uai_kind") in {"Button", "Panel"}
-                and obj.mode == "EDIT" and obj.uai_shape == "ELLIPSE")
-
-    def invoke(self, context, event):
-        obj = context.active_object
-        self.object_uid = obj.session_uid
-        quad = edit_quad(obj)
-        if not quad:
-            return {"CANCELLED"}
-        self.original = [p.copy() for p in quad]
-        self.arc = (obj.uai_start, obj.uai_end, obj.uai_closure)
-        self.origin = Vector(context.region.view2d.region_to_view(event.mouse_region_x, event.mouse_region_y))
-        context.window_manager.modal_handler_add(self)
-        return {"RUNNING_MODAL"}
-
-    def modal(self, context, event):
-        obj = context.active_object
-        if not self.poll(context) or obj.session_uid != self.object_uid:
-            return {"CANCELLED"}
-        quad = edit_quad(obj)
-        if not quad:
-            return {"CANCELLED"}
-        if event.type in {"ESC", "RIGHTMOUSE"}:
-            edit_quad(obj, self.original)
-            obj.uai_start, obj.uai_end, obj.uai_closure = self.arc
-            return {"CANCELLED"}
-        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            return {"FINISHED"}
-        if event.type != "MOUSEMOVE":
-            return {"RUNNING_MODAL"}
-        corners = self.original
-        x_axis, y_axis = corners[1]-corners[0], corners[3]-corners[0]
-        det = x_axis.cross(y_axis)
-        if abs(det) < 1e-10:
-            return {"RUNNING_MODAL"}
-        mouse = Vector(context.region.view2d.region_to_view(event.mouse_region_x, event.mouse_region_y))
-        if self.handle in {"START", "END"}:
-            offset = mouse - quad_point(corners, .5, .5)
-            x, y = 2*offset.cross(y_axis)/det, 2*x_axis.cross(offset)/det
-            angle = math.atan2(y, x)
-            if event.ctrl:
-                angle = round(angle / (math.pi/12)) * math.pi/12
-            setattr(obj, "uai_" + self.handle.lower(), angle % math.tau)
-            obj.uai_closure = "ARC" if math.hypot(x,y) < 1 else "SLICE"
-        else:
-            horizontal = self.handle == "LEFT"
-            delta = mouse - self.origin
-            t = delta.cross(y_axis)/det if horizontal else x_axis.cross(delta)/det
-            sign = -1 if horizontal else 1
-            t = sign * max(-.49, sign*t)
-            for i, (p, original) in enumerate(zip(quad, corners)):
-                side = (i in (1,2)) if horizontal else (i in (2,3))
-                factor = 1 if side == (sign > 0) else -1
-                p[:] = original + (x_axis if horizontal else y_axis) * (t*factor)
-            edit_quad(obj, quad)
-        context.area.tag_redraw()
-        return {"RUNNING_MODAL"}
-
-
-class UAI_GGT_shape(bpy.types.GizmoGroup):
-    bl_idname = "UAI_GGT_shape"
-    bl_label = "Shape Handles"
-    bl_space_type = "IMAGE_EDITOR"
-    bl_region_type = "WINDOW"
-    bl_options = {"PERSISTENT", "SCALE"}
-
-    @classmethod
-    def poll(cls, context):
-        return UAI_OT_shape_handle.poll(context)
-
-    def setup(self, context):
-        self.handles = {}
-        for key in ("LEFT", "TOP", "START", "END"):
-            gz = self.gizmos.new("GIZMO_GT_button_2d")
-            if key in {"START", "END"}:
-                gz.draw_options = {"BACKDROP", "OUTLINE"}
-            else:
-                # Native button gizmos accept byte coordinates with a repeated final vertex.
-                gz.shape = bytes((1, 1, 254, 1, 254, 254, 1, 254, 1, 254))
-            gz.color = (.9,.9,.9)
-            gz.color_highlight = (1,.65,.2)
-            gz.alpha = gz.alpha_highlight = 1
-            gz.backdrop_fill_alpha = .9
-            gz.scale_basis = 5
-            gz.target_set_operator("uai.shape_handle").handle = key
-            self.handles[key] = gz
-
-    def draw_prepare(self, context):
-        obj = context.active_object
-        corners = edit_quad(obj)
-        locations = ellipse_handle_positions(obj) if corners else {}
-        for key, gz in self.handles.items():
-            gz.hide = key not in locations
-            if not gz.hide:
-                point = quad_point(corners, *locations[key])
-                gx, gy = context.region.view2d.view_to_region(*point, clip=False)
-                gz.matrix_basis[0][3], gz.matrix_basis[1][3] = gx, gy
+    return [quad_point(corners, (1 + math.cos(angle)) / 2, (1 + math.sin(angle)) / 2)
+            for angle in (math.tau * i / 64 for i in range(64))]
 
 
 def draw_assets():
@@ -626,18 +467,10 @@ def draw_assets():
                 indices = [tuple(i - face.loop_start for i in tri) for tri in triangles]
                 kind = obj.get("uai_kind")
                 if kind in {"Panel", "Button"} and len(points) == 4 and obj.uai_shape != "RECTANGLE":
-                    if obj.uai_shape == "ELLIPSE" and obj.uai_closure == "ARC":
-                        outline = shape_outline(obj, points)
-                        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-                        shader.bind()
-                        shader.uniform_float("color", (0.45, 0.65, 0.82, 1))
-                        batch_for_shader(shader, "LINE_STRIP", {"pos": outline}).draw(shader)
-                        kind = "Label"
-                    else:
-                        outline = shape_outline(obj, points)
-                        indices = [(0, i, i + 1) for i in range(1, len(outline) - 1)]
-                        draw_face(outline, indices, "", kind)
-                        kind = "Label"
+                    outline = shape_outline(obj, points)
+                    triangles = [(0, i, i + 1) for i in range(1, len(outline) - 1)]
+                    draw_face(outline, triangles, "", kind)
+                    kind = "Label"
                 label = ""
                 if obj.get("uai_kind") in {"Button", "Label"}:
                     label = obj.uai_caption
@@ -708,14 +541,7 @@ def setup():
     bpy.types.Object.uai_shape = bpy.props.EnumProperty(name="Shape", items=[
         ("RECTANGLE", "Rectangle", ""), ("PILL", "Pill", ""), ("ELLIPSE", "Ellipse", "")],
         update=redraw_canvas)
-    bpy.types.Object.uai_closure = bpy.props.EnumProperty(name="Closure", items=[
-        ("WHOLE", "Whole", ""), ("ARC", "Arc", ""), ("CHORD", "Chord", ""), ("SLICE", "Slice", "")],
-        update=redraw_canvas)
-    for prop, name, default in (("uai_start", "Start", 0), ("uai_end", "End", math.tau)):
-        setattr(bpy.types.Object, prop, bpy.props.FloatProperty(name=name, subtype="ANGLE",
-                default=default, min=0, max=math.tau, update=redraw_canvas))
-    for cls in (UAI_PT_element, UAI_OT_shape_handle, UAI_GGT_shape):
-        bpy.utils.register_class(cls)
+    bpy.utils.register_class(UAI_PT_element)
     bpy.utils.register_class(UAI_OT_add_asset)
     bpy.utils.register_class(UAI_MT_add_asset)
     bpy.utils.register_class(UAI_MT_canvas_menus)
