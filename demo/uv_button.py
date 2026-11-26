@@ -10,8 +10,24 @@ CANVAS_WIDTH = 640
 CANVAS_HEIGHT = 400
 
 
-def spacing_choices(size):
-    return [(str(n), f"{n} px", "") for n in range(1, size + 1) if size % n == 0]
+def pixel_spacing(label, key, size):
+    steps = tuple(n for n in range(1, size + 1) if size % n == 0)
+
+    def get(grid):
+        return grid.get(key, 8)
+
+    def set_value(grid, value):
+        previous = get(grid)
+        if value == previous + 1:
+            grid[key] = next(n for n in steps if n >= value)
+        elif value == previous - 1:
+            grid[key] = next(n for n in reversed(steps) if n <= value)
+        else:
+            grid[key] = min(steps, key=lambda n: abs(n - value))
+
+    return bpy.props.IntProperty(name=label, subtype="PIXEL", min=1, max=size,
+                                 get=get, set=set_value, update=grid_changed,
+                                 description="Cell spacing in whole pixels that divide the canvas")
 
 
 def sync_grid(image, context):
@@ -37,10 +53,8 @@ def grid_changed(self, context):
 class UAI_Grid(bpy.types.PropertyGroup):
     expanded: bpy.props.BoolProperty(default=True)
     visible: bpy.props.BoolProperty(name="Visible", default=True, update=grid_changed)
-    x: bpy.props.EnumProperty(name="Spacing X", items=spacing_choices(CANVAS_WIDTH),
-                              default="8", update=grid_changed)
-    y: bpy.props.EnumProperty(name="Spacing Y", items=spacing_choices(CANVAS_HEIGHT),
-                              default="8", update=grid_changed)
+    x: pixel_spacing("Spacing X", "spacing_x", CANVAS_WIDTH)
+    y: pixel_spacing("Spacing Y", "spacing_y", CANVAS_HEIGHT)
 
 
 class UAI_OT_add_grid(bpy.types.Operator):
@@ -79,6 +93,36 @@ class UAI_OT_remove_grid(bpy.types.Operator):
 stock_guides = IMAGE_PT_overlay_guides.draw
 
 
+class UAI_OT_move_grid(bpy.types.Operator):
+    bl_idname = "uai.move_grid"
+    bl_label = "Move Grid"
+    bl_options = {"UNDO"}
+    index: bpy.props.IntProperty()
+    offset: bpy.props.IntProperty()
+
+    def execute(self, context):
+        image = context.space_data.image
+        target = self.index + self.offset
+        if not all(0 <= i < len(image.uai_grids) for i in (self.index, target)):
+            return {"CANCELLED"}
+        image.uai_grids.move(self.index, target)
+        sync_grid(image, context)
+        return {"FINISHED"}
+
+
+class UAI_MT_grid_actions(bpy.types.Menu):
+    bl_label = "Grid Actions"
+
+    def draw(self, context):
+        grids = context.space_data.image.uai_grids
+        index = next(i for i, grid in enumerate(grids) if grid == context.uai_grid)
+        for offset, label, icon in ((-1, "Move Up", "TRIA_UP"), (1, "Move Down", "TRIA_DOWN")):
+            row = self.layout.row()
+            row.enabled = 0 <= index + offset < len(grids)
+            op = row.operator("uai.move_grid", text=label, icon=icon)
+            op.index, op.offset = index, offset
+
+
 def draw_guides(self, context):
     space = context.space_data
     image = space.image
@@ -89,17 +133,18 @@ def draw_guides(self, context):
     layout.prop(space.overlay, "show_grid_background", text="Grids")
     layout.operator("uai.add_grid", icon="ADD")
     for index, grid in enumerate(image.uai_grids):
-        layout.separator(factor=0.5)
         box = layout.box()
         header = box.row(align=True)
         header.prop(grid, "expanded", text="", emboss=False,
                     icon="DOWNARROW_HLT" if grid.expanded else "RIGHTARROW")
-        header.prop(grid, "name", text="")
-        header.prop(grid, "visible", text="", emboss=False,
-                    icon="HIDE_OFF" if grid.visible else "HIDE_ON")
+        header.label(text="", icon="MESH_GRID")
+        controls = header.row(align=True)
+        controls.context_pointer_set("uai_grid", grid)
+        controls.prop(grid, "name", text="")
+        controls.prop(grid, "visible", text="", icon="RESTRICT_VIEW_OFF", toggle=True)
+        controls.menu("UAI_MT_grid_actions", text="", icon="DOWNARROW_HLT")
         header.operator("uai.remove_grid", text="", icon="X", emboss=False).index = index
         if grid.expanded:
-            box.separator(factor=0.5)
             fields = box.column(align=True)
             fields.use_property_split = True
             fields.use_property_decorate = False
@@ -171,7 +216,7 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 
 def setup():
-    for cls in (UAI_Grid, UAI_OT_add_grid, UAI_OT_remove_grid):
+    for cls in (UAI_Grid, UAI_OT_add_grid, UAI_OT_remove_grid, UAI_OT_move_grid, UAI_MT_grid_actions):
         bpy.utils.register_class(cls)
     bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
     IMAGE_PT_overlay_guides.draw = draw_guides
@@ -184,6 +229,10 @@ def setup():
             for modifiers in ({}, {"shift": True}, {"ctrl": True}):
                 keymap.keymap_items.new("uai.canvas_wheel", wheel, "PRESS", **modifiers)
     bpy.context.preferences.inputs.use_zoom_to_mouse = True
+    # This standalone demo uses the modifier surface for its boxed layouts.
+    bpy.context.preferences.use_preferences_save = False
+    theme = bpy.context.preferences.themes[0].user_interface
+    theme.wcol_box.inner = theme.panel_back
     bpy.context.preferences.view.show_splash = False
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
