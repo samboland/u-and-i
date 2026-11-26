@@ -399,38 +399,29 @@ impl Editor {
     pub fn pane_button(&mut self, ui: &mut egui::Ui, id: u64, p: Panel) {
         let handle = egui::Button::new(format!("{}\u{e5c5}", p.glyph()))
             .sense(egui::Sense::click_and_drag());
-        let (response, _) = egui::containers::menu::MenuButton::from_button(handle)
-            .config(topbar::menu_config())
-            .ui(ui, |ui| {
-                let mut action = None;
-                for kind in dock::PANELS {
-                    if ui
-                        .selectable_label(kind == p, format!("{kind:?}"))
-                        .clicked()
-                    {
-                        action = Some(Action::Change(kind));
+        let (response, _) = topbar::instant_menus(ui.ctx().clone(), || {
+            egui::containers::menu::MenuButton::from_button(handle)
+                .config(topbar::menu_config())
+                .ui(ui, |ui| {
+                    let mut action = None;
+                    for kind in dock::PANELS {
+                        if ui
+                            .selectable_label(kind == p, format!("{kind:?}"))
+                            .clicked()
+                        {
+                            action = Some(Action::Change(kind));
+                        }
                     }
-                }
-                ui.separator();
-                for (title, act) in [
-                    ("Split horizontally", Action::Split(true)),
-                    ("Split vertically", Action::Split(false)),
-                    ("Duplicate tab", Action::Tab(p)),
-                    ("Close panel", Action::Close),
-                ] {
-                    if ui.button(title).clicked() {
-                        action = Some(act);
+                    if let Some(act) = action {
+                        let group = self.group();
+                        self.docks[group].apply(id, act, &mut self.next_id);
+                        if matches!(act, Action::Change(Panel::Style)) {
+                            let _ = self.requests.send(Request::Api("tokens", None));
+                        }
+                        ui.close();
                     }
-                }
-                if let Some(act) = action {
-                    let group = self.group();
-                    self.docks[group].apply(id, act, &mut self.next_id);
-                    if matches!(act, Action::Change(Panel::Style)) {
-                        let _ = self.requests.send(Request::Api("tokens", None));
-                    }
-                    ui.close();
-                }
-            });
+                })
+        });
         let response = response.on_hover_text(format!("{p:?}"));
         if response.drag_started_by(egui::PointerButton::Primary) {
             self.drag = Some(id);
@@ -459,13 +450,16 @@ impl Editor {
         let mut panes = vec![];
         let root = ui.available_rect_before_wrap().shrink(2.);
         self.resizing_pane = false;
-        self.docks[g].panes(
-            ui,
-            root,
-            &mut self.pending_split,
-            &mut self.resizing_pane,
-            &mut panes,
-        );
+        ui.painter().rect_filled(root, 0., Color32::from_gray(22));
+        topbar::instant_menus(ui.ctx().clone(), || {
+            self.docks[g].panes(
+                ui,
+                root,
+                &mut self.pending_split,
+                &mut self.resizing_pane,
+                &mut panes,
+            )
+        });
         let key_position = ui
             .memory(|m| m.focused())
             .and_then(|id| ui.ctx().read_response(id))
@@ -521,52 +515,61 @@ impl Editor {
             );
             u.set_clip_rect(ui.clip_rect().intersect(rect));
             let frame = chrome::pane(if p == Panel::Canvas { VOID } else { PANEL });
-            frame.show(&mut u, |ui| {
-                ui.set_min_size(ui.available_size());
-                if tabs.len() > 1 {
-                    ui.horizontal_wrapped(|ui| {
-                        for (n, (tab_id, kind)) in tabs.iter().enumerate() {
-                            let button = egui::Button::selectable(n == active, format!("{kind:?}"))
-                                .sense(egui::Sense::click_and_drag());
-                            let response = ui.add(button);
-                            if response.clicked() {
-                                self.docks[g].apply(id, Action::Select(n), &mut self.next_id);
+            let active_outline = !self.resizing_pane
+                && !self.input_blocked(ui)
+                && ui.rect_contains_pointer(rect.shrink(1.));
+            let outline = Color32::from_white_alpha(if active_outline { 42 } else { 21 });
+            frame
+                .outer_margin(0)
+                .corner_radius(4)
+                .stroke((1., outline))
+                .show(&mut u, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    if tabs.len() > 1 {
+                        ui.horizontal_wrapped(|ui| {
+                            for (n, (tab_id, kind)) in tabs.iter().enumerate() {
+                                let button =
+                                    egui::Button::selectable(n == active, format!("{kind:?}"))
+                                        .sense(egui::Sense::click_and_drag());
+                                let response = ui.add(button);
+                                if response.clicked() {
+                                    self.docks[g].apply(id, Action::Select(n), &mut self.next_id);
+                                }
+                                if response.drag_started_by(egui::PointerButton::Primary) {
+                                    self.drag = Some(*tab_id);
+                                }
+                                if self.dock_preview.is_none()
+                                    && response.contains_pointer()
+                                    && ui.input(|i| i.pointer.primary_released())
+                                    && let Some(source) = self.drag.take()
+                                {
+                                    self.docks[g].place_tab(source, *tab_id);
+                                }
                             }
-                            if response.drag_started_by(egui::PointerButton::Primary) {
-                                self.drag = Some(*tab_id);
+                        });
+                    }
+                    let state = self
+                        .states
+                        .entry(id)
+                        .or_insert_with(|| (String::new(), self.file.is_none()));
+                    self.search = state.0.clone();
+                    self.routes = state.1;
+                    match p {
+                        Panel::Insert => self.insert_body(ui, id),
+                        Panel::Outliner => self.outliner(ui, id),
+                        Panel::Properties => self.properties(ui, id),
+                        Panel::Canvas => self.canvas_body(ui, id),
+                        Panel::Style | Panel::Workshop => {
+                            self.pane_button(ui, id, p);
+                            if p == Panel::Style {
+                                self.studio.style(ui, &self.requests)
+                            } else {
+                                self.studio.workshop(ui)
                             }
-                            if self.dock_preview.is_none()
-                                && response.contains_pointer()
-                                && ui.input(|i| i.pointer.primary_released())
-                                && let Some(source) = self.drag.take()
-                            {
-                                self.docks[g].place_tab(source, *tab_id);
-                            }
-                        }
-                    });
-                }
-                let state = self
-                    .states
-                    .entry(id)
-                    .or_insert_with(|| (String::new(), self.file.is_none()));
-                self.search = state.0.clone();
-                self.routes = state.1;
-                match p {
-                    Panel::Insert => self.insert_body(ui, id),
-                    Panel::Outliner => self.outliner(ui, id),
-                    Panel::Properties => self.properties(ui, id),
-                    Panel::Canvas => self.canvas_body(ui, id),
-                    Panel::Style | Panel::Workshop => {
-                        self.pane_button(ui, id, p);
-                        if p == Panel::Style {
-                            self.studio.style(ui, &self.requests)
-                        } else {
-                            self.studio.workshop(ui)
                         }
                     }
-                }
-                self.states.insert(id, (self.search.clone(), self.routes));
-            });
+                    self.states.insert(id, (self.search.clone(), self.routes));
+                });
             if let Some(horizontal) = self.pending_split
                 && let Some(pos) = ui
                     .input(|i| i.pointer.hover_pos())
@@ -657,7 +660,9 @@ impl Editor {
                 }
             }
         }
-        dock::outer_borders(ui, root.expand(2.), &mut self.pending_split);
+        topbar::instant_menus(ui.ctx().clone(), || {
+            dock::outer_borders(ui, root.expand(2.), &mut self.pending_split)
+        });
         if ui.input(|i| i.pointer.primary_released()) {
             self.drag = None;
         }

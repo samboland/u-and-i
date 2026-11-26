@@ -45,7 +45,6 @@ pub enum Dock {
 #[derive(Clone, Copy)]
 pub enum Action {
     Change(Panel),
-    Split(bool),
     Close,
     Tab(Panel),
     Select(usize),
@@ -80,9 +79,41 @@ pub fn preview_rect(mut rect: Rect, edge: Option<(bool, bool)>) -> Rect {
     rect
 }
 
+// Area commands share the same icon gutter as application menus.
+fn area_command(ui: &mut Ui, name: &str, axis: egui::Vec2, split: bool) -> bool {
+    let response = ui.button(name);
+    let c = response.rect.left_center() + egui::vec2(10., 0.);
+    let stroke = egui::Stroke::new(1., ui.visuals().text_color());
+    let normal = egui::vec2(-axis.y, axis.x);
+    let painter = ui.painter();
+    let bounds = Rect::from_center_size(c, egui::vec2(12., 10.));
+    if split {
+        painter.rect_stroke(bounds, 1., stroke, egui::StrokeKind::Inside);
+        let half = if axis.x == 0. { 6. } else { 5. };
+        painter.line_segment([c - normal * half, c + normal * half], stroke);
+    } else if name == "Swap Areas" {
+        for sign in [-1., 1.] {
+            painter.arrow(
+                c - axis * (4. * sign) + normal * (2. * sign),
+                axis * (8. * sign),
+                stroke,
+            );
+        }
+    } else {
+        painter.rect_stroke(bounds, 1., stroke, egui::StrokeKind::Inside);
+        painter.arrow(c - axis * 3.5, axis * 7., stroke);
+    }
+    response.clicked()
+}
+
 fn split_menu(ui: &mut Ui, pending: &mut Option<bool>) {
     for (name, horizontal) in [("Vertical Split", true), ("Horizontal Split", false)] {
-        if ui.button(name).clicked() {
+        let axis = if horizontal {
+            egui::Vec2::X
+        } else {
+            egui::Vec2::Y
+        };
+        if area_command(ui, name, axis, true) {
             *pending = Some(horizontal);
             ui.close();
         }
@@ -107,7 +138,9 @@ pub fn outer_borders(ui: &mut Ui, rect: Rect, pending: &mut Option<bool>) {
         egui::Popup::context_menu(&border)
             .style(super::topbar::menu_style)
             .show(|ui| {
+                ui.set_min_width(160.);
                 ui.weak("Area Options");
+                ui.separator();
                 split_menu(ui, pending);
             });
     }
@@ -203,6 +236,21 @@ impl Dock {
                     } else {
                         egui::CursorIcon::ResizeVertical
                     });
+                let dragging = resp.dragged_by(egui::PointerButton::Primary);
+                let glow = ui.ctx().animate_bool_with_time_and_easing(
+                    resp.id.with("resize glow"),
+                    dragging,
+                    if dragging { 0.10 } else { 0.15 },
+                    egui::emath::easing::quadratic_in,
+                );
+                let alpha = if resp.hovered() { 45. } else { 0. };
+                if glow > 0. || resp.hovered() {
+                    ui.painter().rect_filled(
+                        line,
+                        2.,
+                        egui::Color32::from_white_alpha((102. * glow).max(alpha) as u8),
+                    );
+                }
                 if resp.dragged_by(egui::PointerButton::Primary) {
                     *resizing = true;
                     let d = resp.drag_delta();
@@ -213,7 +261,9 @@ impl Dock {
                 egui::Popup::context_menu(&resp)
                     .style(super::topbar::menu_style)
                     .show(|ui| {
+                        ui.set_min_width(160.);
                         ui.weak("Area Options");
+                        ui.separator();
                         split_menu(ui, pending);
                         ui.separator();
                         let directions = if *horizontal {
@@ -222,7 +272,13 @@ impl Dock {
                             [("Join Up", false), ("Join Down", true)]
                         };
                         for (label, keep_first) in directions {
-                            if ui.button(label).clicked() {
+                            let axis = if *horizontal {
+                                egui::Vec2::X
+                            } else {
+                                egui::Vec2::Y
+                            };
+                            let direction = if keep_first { axis } else { -axis };
+                            if area_command(ui, label, direction, false) {
                                 join = Some(if keep_first {
                                     (**a).clone()
                                 } else {
@@ -232,7 +288,7 @@ impl Dock {
                             }
                         }
                         ui.separator();
-                        if ui.button("Swap Areas").clicked() {
+                        if area_command(ui, "Swap Areas", egui::Vec2::X, false) {
                             std::mem::swap(a, b);
                             ui.close();
                         }
@@ -283,9 +339,6 @@ impl Dock {
                 tabs.push((*next, p));
                 *next += 1;
                 *active = tabs.len() - 1;
-            }
-            Action::Split(h) => {
-                self.split_at(id, h, 0.5, next);
             }
             Action::Close if !single => {
                 tabs.remove(*active);

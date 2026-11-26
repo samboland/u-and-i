@@ -3,6 +3,15 @@ use egui::containers::menu::{MenuButton, MenuConfig};
 use egui::{Align, Button, Layout, Popup, Rect, Sense, Ui, ViewportCommand};
 use serde::{Deserialize, Serialize};
 
+// egui reads the animation duration from its context before it builds a popup.
+pub(super) fn instant_menus<R>(ctx: egui::Context, draw: impl FnOnce() -> R) -> R {
+    let duration = ctx.global_style().animation_time;
+    ctx.global_style_mut(|style| style.animation_time = 0.);
+    let result = draw();
+    ctx.global_style_mut(|style| style.animation_time = duration);
+    result
+}
+
 pub(super) fn menu_style(style: &mut egui::Style) {
     egui::containers::menu::menu_style(style);
     style.spacing.menu_margin = egui::Margin::symmetric(5, 4);
@@ -31,6 +40,52 @@ fn command(ui: &mut Ui, label: &str, icon: &str) -> egui::Response {
         ui.visuals().text_color(),
     );
     response
+}
+
+fn workspace_button(ui: &mut Ui, label: Option<&str>, selected: bool) -> egui::Response {
+    const HEIGHT: f32 = 20.;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text = label.map(|name| {
+        ui.painter()
+            .layout_no_wrap(name.to_owned(), font, Color32::WHITE)
+    });
+    let width = text.as_ref().map_or(HEIGHT, |t| t.size().x + 16.);
+    let sense = if label.is_some() {
+        Sense::click_and_drag()
+    } else {
+        Sense::click()
+    };
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(width, HEIGHT), sense);
+    r.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            selected,
+            label.unwrap_or("+"),
+        )
+    });
+    // Blender's dark tab theme scales the inactive fill by 1.2 and text by 1.25 on hover.
+    let (fill, ink) = if selected {
+        (48, 255)
+    } else if r.hovered() || r.is_pointer_button_down_on() {
+        (35, 190)
+    } else {
+        (29, 152)
+    };
+    ui.painter().rect_filled(rect, 4., Color32::from_gray(fill));
+    let ink = Color32::from_gray(ink);
+    if let Some(text) = text {
+        ui.painter()
+            .galley_with_override_text_color(rect.center() - text.size() * 0.5, text, ink);
+    } else {
+        let center = rect.center();
+        let stroke = egui::Stroke::new(1.3, ink);
+        for axis in [egui::vec2(4., 0.), egui::vec2(0., 4.)] {
+            ui.painter()
+                .line_segment([center - axis, center + axis], stroke);
+        }
+    }
+    r
 }
 
 fn no_caption() -> Rect {
@@ -180,19 +235,7 @@ impl Editor {
                 continue;
             }
             let selected = self.topbar.active == index;
-            let button = Button::new(
-                RichText::new(&tab.name).color(Color32::from_gray(if selected {
-                    240
-                } else {
-                    174
-                })),
-            )
-            .fill(Color32::from_gray(if selected { 49 } else { 32 }))
-            .stroke(egui::Stroke::NONE)
-            .corner_radius(4)
-            .min_size(egui::vec2(0., 20.))
-            .sense(Sense::click_and_drag());
-            let r = ui.add(button);
+            let r = workspace_button(ui, Some(&tab.name), selected);
             if r.clicked() {
                 self.activate_tab(index);
             }
@@ -246,13 +289,8 @@ impl Editor {
                 break;
             }
         }
-        MenuButton::from_button(
-            Button::new("+")
-                .fill(Color32::from_gray(32))
-                .corner_radius(4),
-        )
-        .config(menu_config())
-        .ui(ui, |ui| {
+        let add = workspace_button(ui, None, false);
+        Popup::menu(&add).style(menu_style).show(|ui| {
             ui.weak("Add Workspace");
             for (mode, name) in workspace::TABS.iter().enumerate() {
                 if ui.button(*name).clicked() {
@@ -260,11 +298,8 @@ impl Editor {
                     ui.close();
                 }
             }
-        })
-        .0
-        .on_hover_text("Add workspace")
-        .rect
-        .right()
+        });
+        add.on_hover_text("Add workspace").rect.right()
     }
 
     fn strip_menu(&mut self, ui: &mut Ui, index: usize) {
@@ -423,94 +458,91 @@ impl Editor {
             let count = self.topbar.tabs.len() as isize;
             self.activate_tab((self.topbar.active as isize + sibling).rem_euclid(count) as usize);
         }
-        // Popup areas read the context animation time before applying their local style.
-        let animation_time = ui.ctx().global_style().animation_time;
-        ui.ctx().global_style_mut(|s| s.animation_time = 0.);
-        egui::Panel::top("menus")
-            .exact_size(26.)
-            .frame(egui::Frame::new().fill(Color32::from_gray(26)))
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 1.;
-                ui.spacing_mut().button_padding = egui::vec2(6., 2.);
-                let bar = ui.available_rect_before_wrap();
-                let region =
-                    |start: f32, end: f32| Rect::from_x_y_ranges(start..=end, bar.y_range());
-                let controls_start = bar.right() - 116.;
-                let context_start = controls_start - if show_context { 286. } else { 0. };
-                let mut controls = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("window controls")
-                        .max_rect(region(controls_start, bar.right()))
-                        .layout(Layout::right_to_left(Align::Center)),
-                );
-                window_buttons(&mut controls);
-                if show_context {
-                    let rect = region(context_start, controls_start);
-                    let mut selectors = ui.new_child(
+        instant_menus(ui.ctx().clone(), || {
+            egui::Panel::top("menus")
+                .exact_size(26.)
+                .frame(egui::Frame::new().fill(Color32::from_gray(26)))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 1.;
+                    ui.spacing_mut().button_padding = egui::vec2(6., 2.);
+                    let bar = ui.available_rect_before_wrap();
+                    let region =
+                        |start: f32, end: f32| Rect::from_x_y_ranges(start..=end, bar.y_range());
+                    let controls_start = bar.right() - 116.;
+                    let context_start = controls_start - if show_context { 286. } else { 0. };
+                    let mut controls = ui.new_child(
                         egui::UiBuilder::new()
-                            .id_salt("context selectors")
-                            .max_rect(rect)
+                            .id_salt("window controls")
+                            .max_rect(region(controls_start, bar.right()))
+                            .layout(Layout::right_to_left(Align::Center)),
+                    );
+                    window_buttons(&mut controls);
+                    if show_context {
+                        let rect = region(context_start, controls_start);
+                        let mut selectors = ui.new_child(
+                            egui::UiBuilder::new()
+                                .id_salt("context selectors")
+                                .max_rect(rect)
+                                .layout(Layout::left_to_right(Align::Center)),
+                        );
+                        selectors.set_clip_rect(rect);
+                        self.context_selectors(&mut selectors);
+                    }
+                    let mut menus = ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt("application menus")
+                            .max_rect(region(bar.left() + 5., context_start))
                             .layout(Layout::left_to_right(Align::Center)),
                     );
-                    selectors.set_clip_rect(rect);
-                    self.context_selectors(&mut selectors);
-                }
-                let mut menus = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("application menus")
-                        .max_rect(region(bar.left() + 5., context_start))
-                        .layout(Layout::left_to_right(Align::Center)),
-                );
-                menus.spacing_mut().item_spacing.x = 1.;
-                if compact {
-                    MenuButton::new("u—i")
-                        .config(menu_config())
-                        .ui(&mut menus, |ui| {
-                            for (i, name) in MENUS.iter().enumerate().skip(1) {
-                                ui.menu_button(*name, |ui| self.menu_contents(ui, i));
-                            }
-                        });
-                } else {
-                    for i in 0..MENUS.len() {
-                        self.strip_menu(&mut menus, i);
+                    menus.spacing_mut().item_spacing.x = 1.;
+                    if compact {
+                        MenuButton::new("u—i")
+                            .config(menu_config())
+                            .ui(&mut menus, |ui| {
+                                for (i, name) in MENUS.iter().enumerate().skip(1) {
+                                    ui.menu_button(*name, |ui| self.menu_contents(ui, i));
+                                }
+                            });
+                    } else {
+                        for i in 0..MENUS.len() {
+                            self.strip_menu(&mut menus, i);
+                        }
                     }
-                }
-                menus.separator();
-                let start = menus.cursor().left();
-                // Keep a small caption grip even when extra workspaces fill the strip.
-                let end = (context_start - 20.).max(start);
-                let mut tabs = ui.new_child(
-                    egui::UiBuilder::new()
-                        .id_salt("workspace tabs")
-                        .max_rect(region(start, end))
-                        .layout(Layout::left_to_right(Align::Center)),
-                );
-                tabs.set_clip_rect(region(start, end));
-                let visible_end = egui::ScrollArea::horizontal()
-                    .id_salt("workspace tabs")
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .auto_shrink([false, true])
-                    .show(&mut tabs, |ui| {
-                        ui.set_height(bar.height());
-                        ui.horizontal_centered(|ui| self.workspace_tabs(ui)).inner
-                    });
-                self.topbar.caption = region(visible_end.inner.min(end), context_start);
-                #[cfg(not(windows))]
-                {
-                    let drag = ui.interact(
-                        self.topbar.caption,
-                        ui.id().with("title drag"),
-                        Sense::click_and_drag(),
+                    menus.separator();
+                    let start = menus.cursor().left();
+                    // Keep a small caption grip even when extra workspaces fill the strip.
+                    let end = (context_start - 20.).max(start);
+                    let mut tabs = ui.new_child(
+                        egui::UiBuilder::new()
+                            .id_salt("workspace tabs")
+                            .max_rect(region(start, end))
+                            .layout(Layout::left_to_right(Align::Center)),
                     );
-                    if drag.double_clicked() {
-                        maximize(ui);
-                    } else if drag.drag_started_by(egui::PointerButton::Primary) {
-                        ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                    tabs.set_clip_rect(region(start, end));
+                    let visible_end = egui::ScrollArea::horizontal()
+                        .id_salt("workspace tabs")
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .auto_shrink([false, true])
+                        .show(&mut tabs, |ui| {
+                            ui.set_height(bar.height());
+                            ui.horizontal_centered(|ui| self.workspace_tabs(ui)).inner
+                        });
+                    self.topbar.caption = region(visible_end.inner.min(end), context_start);
+                    #[cfg(not(windows))]
+                    {
+                        let drag = ui.interact(
+                            self.topbar.caption,
+                            ui.id().with("title drag"),
+                            Sense::click_and_drag(),
+                        );
+                        if drag.double_clicked() {
+                            maximize(ui);
+                        } else if drag.drag_started_by(egui::PointerButton::Primary) {
+                            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                        }
                     }
-                }
-            });
-        ui.ctx()
-            .global_style_mut(|s| s.animation_time = animation_time);
+                });
+        });
     }
 }
 
@@ -686,6 +718,51 @@ mod tests {
             image
         };
         let idle = capture(&mut h, "idle");
+        let tab = h.get_all_by_label("Style").next().unwrap().rect();
+        let add = h.get_all_by_label("+").next().unwrap().rect();
+        assert_eq!(tab.y_range(), add.y_range());
+        h.event(egui::Event::PointerMoved(tab.center()));
+        h.run();
+        let tab_hover = capture(&mut h, "workspace-hover");
+        let x = pixel(tab.left() + 3.);
+        let y = pixel(tab.center().y);
+        assert!(tab_hover.get_pixel(x, y)[0] > idle.get_pixel(x, y)[0]);
+        let canvas = h.state().as_ref().unwrap().canvas_rect;
+        h.event(egui::Event::PointerMoved(canvas.center()));
+        h.run();
+        let active = capture(&mut h, "active-pane");
+        let y = pixel(canvas.center().y);
+        assert!(
+            (pixel(canvas.left() - 15.)..pixel(canvas.left()))
+                .any(|x| active.get_pixel(x, y)[0] > idle.get_pixel(x, y)[0])
+        );
+        let picker = format!("{}\u{e5c5}", Panel::Canvas.glyph());
+        h.get_by_label(picker.as_str()).click();
+        h.run();
+        h.get_by_label("Canvas");
+        assert!(h.query_by_label("Split horizontally").is_none());
+        capture(&mut h, "pane-picker");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        let divider = egui::pos2(canvas.left() - 12., canvas.center().y);
+        h.event(egui::Event::PointerMoved(divider));
+        h.run();
+        let seam = capture(&mut h, "divider");
+        assert!(seam.get_pixel(pixel(divider.x), y)[0] > idle.get_pixel(pixel(divider.x), y)[0]);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: divider,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Default::default(),
+            });
+            h.step();
+        }
+        h.run();
+        h.get_by_label("Area Options");
+        capture(&mut h, "area-options");
+        h.key_press(egui::Key::Escape);
+        h.run();
         h.event(egui::Event::PointerMoved(file.center()));
         h.run();
         let hover = capture(&mut h, "hover");
