@@ -472,20 +472,17 @@ def draw_assets():
                     draw_face(outline, triangles, "", kind)
                     kind = "Label"
                 label = ""
-                font_size = 16 * context.preferences.system.ui_scale
                 if len(mesh.polygons) == 1 and obj.get("uai_kind") in {"Button", "Label"}:
                     if "uai_text" in obj:
                         label = obj.uai_caption
-                        if obj.get("uai_kind") == "Label":
-                            font_size = 16 * context.space_data.zoom[1]
                     elif obj.get("uai_kind") == "Button":
                         label = obj.name
-                draw_face(points, indices, label, kind, font_size)
+                draw_face(points, indices, label, kind)
         finally:
             evaluated.to_mesh_clear()
 
 
-def draw_face(points, indices, label, kind, font_size=None):
+def draw_face(points, indices, label, kind):
     cx = sum(x for x, _ in points) / len(points)
     cy = sum(y for _, y in points) / len(points)
     # Leave Blender's selected edges and vertex handles visible.
@@ -512,7 +509,7 @@ def draw_face(points, indices, label, kind, font_size=None):
         batch.draw(shader)
     if not label:
         return
-    blf.size(0, font_size)
+    blf.size(0, 16 * bpy.context.space_data.zoom[1])
     width, height = blf.dimensions(0, label)
     if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
         blf.position(0, cx - width / 2, cy - height / 2, 0)
