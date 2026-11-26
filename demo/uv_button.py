@@ -5,6 +5,83 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+CANVAS_WIDTH = 640
+CANVAS_HEIGHT = 400
+
+
+def spacing_choices(size):
+    # Blender's fixed UV grid divides each image axis into whole cells.
+    return [(str(n), f"{n} px", "") for n in range(1, size + 1) if size % n == 0]
+
+
+def sync_grid(settings, context):
+    for area in context.screen.areas:
+        if area.ui_type == "UV" and area.spaces.active.image == settings.canvas:
+            uv = area.spaces.active.uv_editor
+            uv.grid_shape_source = "FIXED"
+            uv.custom_grid_subdivisions = (
+                CANVAS_WIDTH // int(settings.spacing_x),
+                CANVAS_HEIGHT // int(settings.spacing_y),
+            )
+            area.tag_redraw()
+
+
+class CanvasGrid(bpy.types.PropertyGroup):
+    canvas: bpy.props.PointerProperty(type=bpy.types.Image)
+    visible: bpy.props.BoolProperty(name="Show Grid", default=True, update=sync_grid)
+    spacing_x: bpy.props.EnumProperty(name="Spacing X", items=spacing_choices(CANVAS_WIDTH),
+                                      default="8", update=sync_grid)
+    spacing_y: bpy.props.EnumProperty(name="Spacing Y", items=spacing_choices(CANVAS_HEIGHT),
+                                      default="8", update=sync_grid)
+    major_every: bpy.props.IntProperty(name="Major Line Every", min=1, max=100,
+                                       default=4, update=sync_grid)
+
+
+class UAI_PT_canvas_grid(bpy.types.Panel):
+    bl_label = "Grid"
+    bl_space_type = "IMAGE_EDITOR"
+    bl_region_type = "HEADER"
+
+    def draw(self, context):
+        grid = context.scene.uai_grid
+        self.layout.prop(grid, "visible")
+        self.layout.prop(grid, "spacing_x")
+        self.layout.prop(grid, "spacing_y")
+        self.layout.prop(grid, "major_every")
+        self.layout.prop(context.tool_settings, "use_snap_uv", text="Snap")
+
+
+def grid_header(self, context):
+    if context.area.ui_type == "UV" and context.space_data.image == context.scene.uai_grid.canvas:
+        self.layout.popover(panel="UAI_PT_canvas_grid", text="Grid", icon="GRID")
+
+
+def draw_grid():
+    context = bpy.context
+    grid = context.scene.uai_grid
+    if not grid.visible or context.area.ui_type != "UV" or context.space_data.image != grid.canvas:
+        return
+    view = context.region.view2d
+    x0, y0 = view.view_to_region(0, 0, clip=False)
+    x1, y1 = view.view_to_region(1, 1, clip=False)
+    minor, major = [], []
+    for axis, count in enumerate((CANVAS_WIDTH // int(grid.spacing_x),
+                                  CANVAS_HEIGHT // int(grid.spacing_y))):
+        for index in range(count + 1):
+            is_major = index % grid.major_every == 0
+            span = (x1 - x0, y1 - y0)[axis]
+            if span * (grid.major_every if is_major else 1) < 4 * count:
+                continue
+            pos = index / count
+            line = ((0, pos), (1, pos)) if axis else ((pos, 0), (pos, 1))
+            (major if is_major else minor).extend(line)
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    for points, color in ((minor, (0.18, 0.19, 0.21, 1)), (major, (0.24, 0.25, 0.27, 1))):
+        if points:
+            shader.bind()
+            shader.uniform_float("color", color)
+            batch_for_shader(shader, "LINES", {"pos": points}).draw(shader)
+
 
 def button_corners(mesh):
     if not mesh.polygons or mesh.uv_layers.active is None:
@@ -50,6 +127,10 @@ def draw_button():
 
 
 def setup():
+    bpy.utils.register_class(CanvasGrid)
+    bpy.types.Scene.uai_grid = bpy.props.PointerProperty(type=CanvasGrid)
+    bpy.utils.register_class(UAI_PT_canvas_grid)
+    bpy.types.IMAGE_HT_header.prepend(grid_header)
     bpy.context.preferences.view.show_splash = False
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
@@ -62,17 +143,22 @@ def setup():
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
     layer = mesh.uv_layers.new()
-    for index, uv in enumerate([(0.35, 0.45), (0.65, 0.45),
-                                (0.65, 0.55), (0.35, 0.55)]):
+    for index, uv in enumerate([(0.35, 0.44), (0.65, 0.44),
+                                (0.65, 0.56), (0.35, 0.56)]):
         layer.uv[index].vector = uv
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
     area = next(a for a in bpy.context.screen.areas if a.type == "VIEW_3D")
     area.type = "IMAGE_EDITOR"
     area.ui_type = "UV"
-    image = bpy.data.images.new("Canvas", width=640, height=400)
+    image = bpy.data.images.new("Canvas", width=CANVAS_WIDTH, height=CANVAS_HEIGHT)
     image.generated_color = (0.14, 0.15, 0.17, 1)
     area.spaces.active.image = image
+    grid = bpy.context.scene.uai_grid
+    grid.canvas = image
+    sync_grid(grid, bpy.context)
+    bpy.context.scene.tool_settings.snap_uv_element = {"GRID"}
+    bpy.context.scene.tool_settings.use_snap_uv = False
     bpy.context.scene.tool_settings.use_uv_select_sync = False
     bpy.context.scene.tool_settings.uv_select_mode = "EDGE"
     region = next(r for r in area.regions if r.type == "WINDOW")
@@ -80,6 +166,7 @@ def setup():
         bpy.ops.uv.select_all(action="DESELECT")
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
+    bpy.types.SpaceImageEditor.draw_handler_add(draw_grid, (), "WINDOW", "POST_VIEW")
     bpy.types.SpaceImageEditor.draw_handler_add(draw_button, (), "WINDOW", "POST_PIXEL")
     bpy.ops.ed.undo_push(message="Button canvas")
 
