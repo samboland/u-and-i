@@ -93,7 +93,7 @@ def draw_guides(self, context):
         box = layout.box()
         header = box.row(align=True)
         header.prop(grid, "expanded", text="", emboss=False,
-                    icon="TRIA_DOWN" if grid.expanded else "TRIA_RIGHT")
+                    icon="DOWNARROW_HLT" if grid.expanded else "RIGHTARROW")
         header.prop(grid, "name", text="")
         header.prop(grid, "visible", text="", emboss=False,
                     icon="HIDE_OFF" if grid.visible else "HIDE_ON")
