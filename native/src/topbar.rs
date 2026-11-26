@@ -1,7 +1,6 @@
 use super::*;
 use egui::{Align, Button, Layout, Popup, Rect, Sense, Ui, ViewportCommand};
 use serde::{Deserialize, Serialize};
-pub const FRAME_WIDTH: f32 = 5.;
 fn no_caption() -> Rect {
     Rect::NOTHING
 }

@@ -85,7 +85,7 @@ unsafe extern "system" fn hit_test(
             let pos = egui::pos2(p.x as f32 / r.scale, p.y as f32 / r.scale);
             if p.x >= 0 && p.y >= 0 && p.x < bounds.right && p.y < bounds.bottom {
                 let size = egui::vec2(bounds.right as f32, bounds.bottom as f32) / r.scale;
-                let b = super::topbar::FRAME_WIDTH;
+                let b = 5.; // Invisible resize area, in egui points.
                 let edge = match (
                     pos.x < b,
                     pos.x >= size.x - b,

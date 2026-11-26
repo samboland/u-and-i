@@ -263,23 +263,10 @@ impl Editor {
         }
         self.canvas_views.clear();
         let full = ui.available_rect_before_wrap();
-        let inset = if ui.input(|i| {
-            i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true)
-        }) {
-            0.
-        } else {
-            topbar::FRAME_WIDTH
-        };
-        ui.painter().rect_stroke(
-            full,
-            0.,
-            (inset, Color32::from_gray(52)),
-            egui::StrokeKind::Inside,
-        );
         let mut client = ui.new_child(
             egui::UiBuilder::new()
                 .id_salt("editor client")
-                .max_rect(full.shrink(inset)),
+                .max_rect(full),
         );
         if self.pending_split.is_some()
             || self.finishing_split
