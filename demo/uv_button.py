@@ -16,6 +16,8 @@ CANVAS_HEIGHT = 400
 GRID_TYPES = (("RECTANGULAR", "Rectangular", ""), ("AXONOMETRIC", "Axonometric", ""),
               ("MODULAR", "Modular", ""))
 CANVAS_COLOR = (0.14, 0.15, 0.17, 1)
+DRAWING_ELEMENTS = ("Rectangle", "Ellipse", "Divider")
+CANVAS_ELEMENTS = ("Button", "Label", *DRAWING_ELEMENTS)
 
 
 def draw_grid_image(image, grid):
@@ -230,10 +232,17 @@ def select_image_uid(_, uid):
 
 def create_canvas_asset(collection, kind, center):
     x, y = center
-    corners = [(x - 0.15, y - 0.06), (x + 0.15, y - 0.06),
-               (x + 0.15, y + 0.06), (x - 0.15, y + 0.06)]
+    half_width = 0.15
+    half_height = {"Rectangle": 0.12, "Ellipse": 0.12, "Divider": 1 / CANVAS_HEIGHT}.get(kind, 0.06)
+    if kind == "Ellipse":
+        angles = (math.tau * i / 64 for i in range(64))
+        corners = [(x + half_width * math.cos(angle), y + half_height * math.sin(angle))
+                   for angle in angles]
+    else:
+        corners = [(x + dx * half_width, y + dy * half_height)
+                   for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
     mesh = bpy.data.meshes.new(kind)
-    mesh.from_pydata([(u, v, 0) for u, v in corners], [], [(0, 1, 2, 3)])
+    mesh.from_pydata([(u, v, 0) for u, v in corners], [], [tuple(range(len(corners)))])
     mesh.update()
     layer = mesh.uv_layers.new()
     for index, uv in enumerate(corners):
@@ -248,7 +257,7 @@ class UAI_OT_add_asset(bpy.types.Operator):
     bl_idname = "uai.add_asset"
     bl_label = "Add Canvas Element"
     bl_options = {"UNDO"}
-    kind: bpy.props.EnumProperty(items=[("Button", "Button", ""), ("Label", "Label", "")])
+    kind: bpy.props.EnumProperty(items=[(kind, kind, "") for kind in CANVAS_ELEMENTS])
 
     @classmethod
     def poll(cls, context):
@@ -278,6 +287,9 @@ class UAI_MT_add_asset(bpy.types.Menu):
 
     def draw(self, context):
         for kind in ("Button", "Label"):
+            self.layout.operator("uai.add_asset", text=kind).kind = kind
+        self.layout.separator()
+        for kind in DRAWING_ELEMENTS:
             self.layout.operator("uai.add_asset", text=kind).kind = kind
 
 
@@ -409,13 +421,14 @@ def draw_assets():
                 points = [view.view_to_region(*layer.uv[i].vector, clip=False)
                           for i in face.loop_indices]
                 indices = [tuple(i - face.loop_start for i in tri) for tri in triangles]
-                draw_face(points, indices, obj.name if len(mesh.polygons) == 1 else "",
-                          filled=obj.get("uai_kind") != "Label")
+                kind = obj.get("uai_kind")
+                label = obj.name if len(mesh.polygons) == 1 and kind not in DRAWING_ELEMENTS else ""
+                draw_face(points, indices, label, kind)
         finally:
             evaluated.to_mesh_clear()
 
 
-def draw_face(points, indices, label, filled):
+def draw_face(points, indices, label, kind):
     cx = sum(x for x, _ in points) / len(points)
     cy = sum(y for _, y in points) / len(points)
     # Leave Blender's selected edges and vertex handles visible.
@@ -423,12 +436,25 @@ def draw_face(points, indices, label, filled):
     radius = max(1, max(abs(y - cy) for _, y in points))
     scale = max(0, 1 - 2 / radius)
     inset = [(cx + (x - cx) * scale, cy + (y - cy) * scale) for x, y in points]
-    if filled:
+    if kind == "Divider" and len(points) == 4:
+        # Inset along each edge independently so a thin divider retains its length.
+        inset = []
+        for i, (x, y) in enumerate(points):
+            px, py = x, y
+            for neighbor in (points[i - 1], points[(i + 1) % 4]):
+                dx, dy = neighbor[0] - x, neighbor[1] - y
+                fraction = min(0.2, 1 / max(1, math.hypot(dx, dy)))
+                px += dx * fraction
+                py += dy * fraction
+            inset.append((px, py))
+    if kind != "Label":
         shader = gpu.shader.from_builtin("UNIFORM_COLOR")
         batch = batch_for_shader(shader, "TRIS", {"pos": inset}, indices=indices)
         shader.bind()
         shader.uniform_float("color", (0.19, 0.32, 0.43, 1))
         batch.draw(shader)
+    if not label:
+        return
     blf.size(0, 16 * bpy.context.preferences.system.ui_scale)
     width, height = blf.dimensions(0, label)
     if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
