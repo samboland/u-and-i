@@ -5,7 +5,8 @@ import bpy
 import gpu
 import math
 import numpy as np
-from bl_ui.space_image import IMAGE_PT_overlay_guides
+from types import SimpleNamespace
+from bl_ui.space_image import IMAGE_HT_header, IMAGE_PT_overlay_guides
 from gpu_extras.batch import batch_for_shader
 
 CANVAS_WIDTH = 640
@@ -211,30 +212,70 @@ def draw_guides(self, context):
                 fields.prop(grid, prop)
 
 
-def button_corners(mesh):
-    if not mesh.polygons or mesh.uv_layers.active is None:
-        return []
-    coords = mesh.uv_layers.active.uv
-    return [tuple(coords[i].vector) for i in mesh.polygons[0].loop_indices]
+stock_header = IMAGE_HT_header.draw
 
 
-def draw_button():
-    obj = bpy.context.edit_object
-    if obj is None or obj.name != "Button" or bpy.context.area.ui_type != "UV":
+class CanvasHeaderLayout:
+    def __init__(self, layout):
+        self.layout = layout
+
+    def __getattr__(self, name):
+        return getattr(self.layout, name)
+
+    def prop(self, data, property_name, **options):
+        if property_name != "use_uv_select_sync":
+            return self.layout.prop(data, property_name, **options)
+
+
+def draw_header(self, context):
+    if (context.area.ui_type == "UV" and context.scene.uai_canvas
+            and context.space_data.image == context.scene.uai_canvas):
+        return stock_header(SimpleNamespace(layout=CanvasHeaderLayout(self.layout)), context)
+    return stock_header(self, context)
+
+
+def enforce_canvas_sync(*_):
+    scene = bpy.context.scene
+    if scene and scene.uai_canvas and not scene.tool_settings.use_uv_select_sync:
+        scene.tool_settings.use_uv_select_sync = True
+
+
+def draw_assets():
+    context = bpy.context
+    if (context.area.ui_type != "UV" or not context.scene.uai_canvas
+            or context.space_data.image != context.scene.uai_canvas):
         return
-    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
-    # Read a snapshot while Blender's modal transform owns the edit mesh.
-    mesh = evaluated.to_mesh()
-    try:
-        corners = button_corners(mesh)
-    finally:
-        evaluated.to_mesh_clear()
-    if len(corners) != 4:
-        return
-    view = bpy.context.region.view2d
-    points = [view.view_to_region(x, y, clip=False) for x, y in corners]
-    cx = sum(x for x, _ in points) / 4
-    cy = sum(y for _, y in points) / 4
+    depsgraph = context.evaluated_depsgraph_get()
+    view = context.region.view2d
+    for obj in context.visible_objects:
+        if obj.type != "MESH" or not obj.data.uv_layers.active:
+            continue
+        evaluated = obj.evaluated_get(depsgraph)
+        # Read a snapshot while Blender's modal transform owns the edit mesh.
+        mesh = evaluated.to_mesh()
+        try:
+            layer = mesh.uv_layers.active
+            if layer is None:
+                continue
+            mesh.calc_loop_triangles()
+            faces = {}
+            for tri in mesh.loop_triangles:
+                faces.setdefault(tri.polygon_index, []).append(tuple(tri.loops))
+            for face_index, triangles in faces.items():
+                face = mesh.polygons[face_index]
+                if face.hide:
+                    continue
+                points = [view.view_to_region(*layer.uv[i].vector, clip=False)
+                          for i in face.loop_indices]
+                indices = [tuple(i - face.loop_start for i in tri) for tri in triangles]
+                draw_face(points, indices, obj.name if len(mesh.polygons) == 1 else "")
+        finally:
+            evaluated.to_mesh_clear()
+
+
+def draw_face(points, indices, label):
+    cx = sum(x for x, _ in points) / len(points)
+    cy = sum(y for _, y in points) / len(points)
     # Leave Blender's selected edges and vertex handles visible.
     # Use a uniform scale so rotated and skewed edges stay parallel.
     radius = max(1, max(abs(y - cy) for _, y in points))
@@ -242,16 +283,16 @@ def draw_button():
     inset = [(cx + (x - cx) * scale, cy + (y - cy) * scale) for x, y in points]
     shader = gpu.shader.from_builtin("UNIFORM_COLOR")
     batch = batch_for_shader(shader, "TRIS", {"pos": inset},
-                             indices=((0, 1, 2), (0, 2, 3)))
+                             indices=indices)
     shader.bind()
     shader.uniform_float("color", (0.19, 0.32, 0.43, 1))
     batch.draw(shader)
     blf.size(0, 16 * bpy.context.preferences.system.ui_scale)
-    width, height = blf.dimensions(0, "Button")
+    width, height = blf.dimensions(0, label)
     if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
         blf.position(0, cx - width / 2, cy - height / 2, 0)
         blf.color(0, 1, 1, 1, 1)
-        blf.draw(0, "Button")
+        blf.draw(0, label)
 
 
 class UAI_OT_canvas_wheel(bpy.types.Operator):
@@ -295,20 +336,20 @@ def setup():
     bpy.context.preferences.view.show_splash = False
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
-    mesh = bpy.data.meshes.new("Button")
-    mesh.from_pydata([(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)],
-                     [], [(0, 1, 2, 3)])
-    mesh.update()
-    obj = bpy.data.objects.new("Button", mesh)
-    bpy.context.collection.objects.link(obj)
-    bpy.context.view_layer.objects.active = obj
-    obj.select_set(True)
-    layer = mesh.uv_layers.new()
-    for index, uv in enumerate([(0.35, 0.44), (0.65, 0.44),
-                                (0.65, 0.56), (0.35, 0.56)]):
-        layer.uv[index].vector = uv
+    for name, cy in (("Button", 0.5), ("Label", 0.72)):
+        mesh = bpy.data.meshes.new(name)
+        corners = [(0.35, cy - 0.06), (0.65, cy - 0.06),
+                   (0.65, cy + 0.06), (0.35, cy + 0.06)]
+        mesh.from_pydata([(x, y, 0) for x, y in corners], [], [(0, 1, 2, 3)])
+        mesh.update()
+        obj = bpy.data.objects.new(name, mesh)
+        bpy.context.collection.objects.link(obj)
+        layer = mesh.uv_layers.new()
+        for index, uv in enumerate(corners):
+            layer.uv[index].vector = uv
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = bpy.data.objects["Button"]
     bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
     area = next(a for a in bpy.context.screen.areas if a.type == "VIEW_3D")
     area.type = "IMAGE_EDITOR"
     area.ui_type = "UV"
@@ -317,6 +358,7 @@ def setup():
     area.spaces.active.image = image
     bpy.context.scene.uai_canvas = image
     space = area.spaces.active
+    space.use_image_pin = True
     space.overlay.show_grid_background = True
     image.uai_grids.add().name = "Rectangular"
     sync_grid(image, bpy.context)
@@ -327,14 +369,19 @@ def setup():
     bpy.app.handlers.redo_post.append(refresh_canvas)
     bpy.context.scene.tool_settings.snap_uv_element = {"GRID"}
     bpy.context.scene.tool_settings.use_snap_uv = False
-    bpy.context.scene.tool_settings.use_uv_select_sync = False
-    bpy.context.scene.tool_settings.uv_select_mode = "EDGE"
+    enforce_canvas_sync()
+    bpy.context.scene.tool_settings.mesh_select_mode = (False, True, False)
+    IMAGE_HT_header.draw = draw_header
+    bpy.msgbus.subscribe_rna(key=(bpy.types.ToolSettings, "use_uv_select_sync"),
+                             owner=enforce_canvas_sync, args=(), notify=enforce_canvas_sync)
+    bpy.app.handlers.undo_post.append(enforce_canvas_sync)
+    bpy.app.handlers.redo_post.append(enforce_canvas_sync)
     region = next(r for r in area.regions if r.type == "WINDOW")
     with bpy.context.temp_override(area=area, region=region):
         bpy.ops.uv.select_all(action="DESELECT")
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
-    bpy.types.SpaceImageEditor.draw_handler_add(draw_button, (), "WINDOW", "POST_PIXEL")
+    bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (), "WINDOW", "POST_PIXEL")
     bpy.ops.ed.undo_push(message="Button canvas")
 
 
