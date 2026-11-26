@@ -1,0 +1,4 @@
+[submodule "blender"]
+	path = blender
+	url = https://github.com/samboland/u-and-i-blender.git
+	branch = main
