@@ -4,6 +4,8 @@ import blf
 import bpy
 import gpu
 import math
+import os
+from pathlib import Path
 import numpy as np
 from types import SimpleNamespace
 from bl_ui.space_image import IMAGE_HT_header, IMAGE_PT_overlay_guides
@@ -330,7 +332,9 @@ def setup():
                 keymap.keymap_items.new("uai.canvas_wheel", wheel, "PRESS", **modifiers)
     bpy.context.preferences.inputs.use_zoom_to_mouse = True
     # This standalone demo uses the modifier surface for its boxed layouts.
-    bpy.context.preferences.use_preferences_save = False
+    profile = os.environ.get("UAI_BLENDER_CONFIG")
+    bpy.context.preferences.use_preferences_save = bool(
+        profile and Path(profile).resolve() == Path(bpy.utils.user_resource("CONFIG")).resolve())
     theme = bpy.context.preferences.themes[0].user_interface
     theme.wcol_box.inner = theme.panel_back
     bpy.context.preferences.view.show_splash = False
