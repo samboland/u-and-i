@@ -217,31 +217,26 @@ def draw_guides(self, context):
 stock_header = IMAGE_HT_header.draw
 
 
-class UAI_OT_pick_image(bpy.types.Operator):
-    bl_idname = "uai.pick_image"
-    bl_label = "Browse Images"
-    bl_options = {"UNDO", "INTERNAL"}
+def selected_image_uid(_):
+    image = getattr(bpy.context.space_data, "image", None)
+    return image.session_uid if image else 0
 
-    # Blender borrows the strings from a dynamic enum while its menu is open.
-    _items = []
 
-    def image_items(self, context):
-        items = [(str(image.session_uid), image.name, "",
-                  image.preview.icon_id if image.preview else "IMAGE_DATA", image.session_uid)
-                 for image in bpy.data.images]
-        if items != UAI_OT_pick_image._items:
-            UAI_OT_pick_image._items = items
-        return UAI_OT_pick_image._items
+def select_image_uid(_, uid):
+    space = bpy.context.space_data
+    if isinstance(space, bpy.types.SpaceImageEditor):
+        space.image = next((image for image in bpy.data.images if image.session_uid == uid), None)
 
-    image: bpy.props.EnumProperty(items=image_items)
 
-    def execute(self, context):
-        uid = self.properties.get("image")
-        image = next((item for item in bpy.data.images if item.session_uid == uid), None)
-        if image is None:
-            return {"CANCELLED"}
-        context.space_data.image = image
-        return {"FINISHED"}
+class UAI_MT_canvas_menus(bpy.types.Menu):
+    bl_label = ""
+
+    def draw(self, context):
+        self.layout.menu("IMAGE_MT_view")
+        if context.space_data.show_uvedit:
+            self.layout.menu("IMAGE_MT_select")
+        image = context.space_data.image
+        self.layout.menu("IMAGE_MT_image", text="* Image" if image and image.is_dirty else "Image")
 
 
 class CanvasHeaderLayout:
@@ -251,22 +246,44 @@ class CanvasHeaderLayout:
     def __getattr__(self, name):
         return getattr(self.layout, name)
 
+    def row(self, **options):
+        return CanvasHeaderLayout(self.layout.row(**options))
+
+    @property
+    def active(self):
+        return self.layout.active
+
+    @active.setter
+    def active(self, value):
+        self.layout.active = value
+
+    def menu_contents(self, name):
+        return self.layout.menu_contents("UAI_MT_canvas_menus" if name == "IMAGE_MT_editor_menus" else name)
+
+    def menu(self, name, **options):
+        return self.layout.menu("UAI_MT_canvas_menus" if name == "IMAGE_MT_editor_menus" else name, **options)
+
     def prop(self, data, property_name, **options):
-        if property_name != "use_uv_select_sync":
-            return self.layout.prop(data, property_name, **options)
+        if property_name in {"use_uv_select_sync", "use_uv_select_island", "uv_sticky_select_mode",
+                             "use_proportional_edit", "display_channels"}:
+            return
+        if property_name == "show_overlays":
+            options["icon"] = "GRID"
+        return self.layout.prop(data, property_name, **options)
+
+    def prop_with_popover(self, data, property_name, **options):
+        if property_name != "proportional_edit_falloff":
+            return self.layout.prop_with_popover(data, property_name, **options)
 
     def template_ID(self, data, property_name, **options):
         if property_name != "image":
             return self.layout.template_ID(data, property_name, **options)
         row = self.layout.row(align=True)
         browse = row.row(align=True)
-        # Match Blender's ID browse width. A blank label selects its left-inset
-        # icon layout; an empty label centers the icon beside the dropdown arrow.
         browse.ui_units_x = 1.6
-        picker = browse.operator_menu_enum("uai.pick_image", "image", text=" ", icon="IMAGE_DATA")
+        browse.template_ID_session_uid(bpy.context.window_manager, "uai_image_uid", "IMAGE")
         image = data.image
         if image:
-            picker.image = str(image.session_uid)
             field = row.row(align=True)
             prefs = bpy.context.preferences
             blf.size(0, prefs.ui_styles[0].widget.points)
@@ -386,7 +403,9 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 
 def setup():
-    bpy.utils.register_class(UAI_OT_pick_image)
+    bpy.utils.register_class(UAI_MT_canvas_menus)
+    bpy.types.WindowManager.uai_image_uid = bpy.props.IntProperty(
+        get=selected_image_uid, set=select_image_uid, options={"SKIP_SAVE"})
     for cls in (UAI_Grid, UAI_OT_add_grid, UAI_MT_add_grid, UAI_OT_remove_grid, UAI_OT_move_grid, UAI_MT_grid_actions):
         bpy.utils.register_class(cls)
     bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
