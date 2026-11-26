@@ -257,37 +257,36 @@ impl Editor {
         }
     }
     pub fn edit_menu(&mut self, ui: &mut egui::Ui) {
+        let shortcut_item = |ui: &mut egui::Ui, enabled, label: &str, shortcut: &str| {
+            let row = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
+            ui.ctx().accesskit_node_builder(row.id, |node| {
+                node.set_label(label);
+                node.set_keyboard_shortcut(shortcut);
+            });
+            row.clicked()
+        };
         if ui.button("Preferences…").clicked() {
             self.prefs = true;
             ui.close();
         }
         for (redo, label) in [(false, "Undo"), (true, "Redo")] {
-            if ui
-                .add_enabled(self.can_restore(redo), egui::Button::new(label))
-                .clicked()
-            {
+            let shortcut = if redo { "Ctrl+Shift+Z" } else { "Ctrl+Z" };
+            if shortcut_item(ui, self.can_restore(redo), label, shortcut) {
                 self.restore(redo);
                 ui.close();
             }
         }
-        if ui
-            .add_enabled(
-                self.focus().is_some_and(|n| n.can.text),
-                egui::Button::new("Edit text"),
-            )
-            .clicked()
-        {
+        if shortcut_item(ui, self.focus().is_some_and(|n| n.can.text), "Edit text", "F2") {
             self.begin_text();
             ui.close();
         }
-        for label in ["Duplicate", "Delete", "Move up", "Move down"] {
-            if ui
-                .add_enabled(
-                    self.focus().is_some_and(|n| n.can.structural),
-                    egui::Button::new(label),
-                )
-                .clicked()
-            {
+        for (label, shortcut) in [
+            ("Duplicate", "Ctrl+D"),
+            ("Delete", "Del"),
+            ("Move up", "Alt+↑"),
+            ("Move down", "Alt+↓"),
+        ] {
+            if shortcut_item(ui, self.focus().is_some_and(|n| n.can.structural), label, shortcut) {
                 self.structural(label);
                 ui.close();
             }
@@ -378,36 +377,38 @@ impl Editor {
     pub fn pane_button(&mut self, ui: &mut egui::Ui, id: u64, p: Panel) {
         let handle = egui::Button::new(format!("{}\u{e5c5}", p.glyph()))
             .sense(egui::Sense::click_and_drag());
-        let (response, _) = egui::containers::menu::MenuButton::from_button(handle).ui(ui, |ui| {
-            let mut action = None;
-            for kind in dock::PANELS {
-                if ui
-                    .selectable_label(kind == p, format!("{kind:?}"))
-                    .clicked()
-                {
-                    action = Some(Action::Change(kind));
+        let (response, _) = egui::containers::menu::MenuButton::from_button(handle)
+            .config(topbar::menu_config())
+            .ui(ui, |ui| {
+                let mut action = None;
+                for kind in dock::PANELS {
+                    if ui
+                        .selectable_label(kind == p, format!("{kind:?}"))
+                        .clicked()
+                    {
+                        action = Some(Action::Change(kind));
+                    }
                 }
-            }
-            ui.separator();
-            for (title, act) in [
-                ("Split horizontally", Action::Split(true)),
-                ("Split vertically", Action::Split(false)),
-                ("Duplicate tab", Action::Tab(p)),
-                ("Close panel", Action::Close),
-            ] {
-                if ui.button(title).clicked() {
-                    action = Some(act);
+                ui.separator();
+                for (title, act) in [
+                    ("Split horizontally", Action::Split(true)),
+                    ("Split vertically", Action::Split(false)),
+                    ("Duplicate tab", Action::Tab(p)),
+                    ("Close panel", Action::Close),
+                ] {
+                    if ui.button(title).clicked() {
+                        action = Some(act);
+                    }
                 }
-            }
-            if let Some(act) = action {
-                let group = self.group();
-                self.docks[group].apply(id, act, &mut self.next_id);
-                if matches!(act, Action::Change(Panel::Style)) {
-                    let _ = self.requests.send(Request::Api("tokens", None));
+                if let Some(act) = action {
+                    let group = self.group();
+                    self.docks[group].apply(id, act, &mut self.next_id);
+                    if matches!(act, Action::Change(Panel::Style)) {
+                        let _ = self.requests.send(Request::Api("tokens", None));
+                    }
+                    ui.close();
                 }
-                ui.close();
-            }
-        });
+            });
         let response = response.on_hover_text(format!("{p:?}"));
         if response.drag_started_by(egui::PointerButton::Primary) {
             self.drag = Some(id);

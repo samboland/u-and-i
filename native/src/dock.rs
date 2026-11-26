@@ -97,16 +97,19 @@ pub fn outer_borders(ui: &mut Ui, rect: Rect, pending: &mut Option<bool>) {
     sides[2].max.y = rect.top() + reach;
     sides[3].min.y = rect.bottom() - reach;
     for (index, side) in sides.into_iter().enumerate() {
-        ui.interact(
-            side,
-            ui.id().with(("outer border", index)),
-            egui::Sense::click(),
-        )
-        .on_hover_cursor(egui::CursorIcon::ContextMenu)
-        .context_menu(|ui| {
-            ui.weak("Area Options");
-            split_menu(ui, pending);
-        });
+        let border = ui
+            .interact(
+                side,
+                ui.id().with(("outer border", index)),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::ContextMenu);
+        egui::Popup::context_menu(&border)
+            .style(super::topbar::menu_style)
+            .show(|ui| {
+                ui.weak("Area Options");
+                split_menu(ui, pending);
+            });
     }
 }
 
@@ -207,31 +210,33 @@ impl Dock {
                         (*fraction + (if *horizontal { d.x } else { d.y }) / len).clamp(0.08, 0.92);
                 }
                 let mut join = None;
-                resp.context_menu(|ui| {
-                    ui.weak("Area Options");
-                    split_menu(ui, pending);
-                    ui.separator();
-                    let directions = if *horizontal {
-                        [("Join Right", true), ("Join Left", false)]
-                    } else {
-                        [("Join Up", false), ("Join Down", true)]
-                    };
-                    for (label, keep_first) in directions {
-                        if ui.button(label).clicked() {
-                            join = Some(if keep_first {
-                                (**a).clone()
-                            } else {
-                                (**b).clone()
-                            });
+                egui::Popup::context_menu(&resp)
+                    .style(super::topbar::menu_style)
+                    .show(|ui| {
+                        ui.weak("Area Options");
+                        split_menu(ui, pending);
+                        ui.separator();
+                        let directions = if *horizontal {
+                            [("Join Right", true), ("Join Left", false)]
+                        } else {
+                            [("Join Up", false), ("Join Down", true)]
+                        };
+                        for (label, keep_first) in directions {
+                            if ui.button(label).clicked() {
+                                join = Some(if keep_first {
+                                    (**a).clone()
+                                } else {
+                                    (**b).clone()
+                                });
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Swap Areas").clicked() {
+                            std::mem::swap(a, b);
                             ui.close();
                         }
-                    }
-                    ui.separator();
-                    if ui.button("Swap Areas").clicked() {
-                        std::mem::swap(a, b);
-                        ui.close();
-                    }
-                });
+                    });
                 a.panes(ui, ra, pending, resizing, out);
                 b.panes(ui, rb, pending, resizing, out);
                 if let Some(kept) = join {

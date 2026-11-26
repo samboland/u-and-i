@@ -1,6 +1,38 @@
 use super::*;
+use egui::containers::menu::{MenuButton, MenuConfig};
 use egui::{Align, Button, Layout, Popup, Rect, Sense, Ui, ViewportCommand};
 use serde::{Deserialize, Serialize};
+
+pub(super) fn menu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.menu_margin = egui::Margin::symmetric(5, 4);
+    style.spacing.item_spacing.y = 1.;
+    style.spacing.button_padding = egui::vec2(20., 1.);
+    style.spacing.interact_size.y = 18.;
+    style.visuals.menu_corner_radius = 4.into();
+    style.visuals.window_fill = Color32::from_gray(24);
+    style.visuals.window_stroke = egui::Stroke::new(1., Color32::from_gray(38));
+    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_gray(63);
+    style.visuals.widgets.active.weak_bg_fill = Color32::from_gray(63);
+    style.visuals.widgets.noninteractive.bg_stroke.color = Color32::from_gray(48);
+}
+
+pub(super) fn menu_config() -> MenuConfig {
+    MenuConfig::new().style(menu_style)
+}
+
+fn command(ui: &mut Ui, label: &str, icon: &str) -> egui::Response {
+    let response = ui.button(label);
+    ui.painter().text(
+        response.rect.left_center() + egui::vec2(9., 0.),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(13.),
+        ui.visuals().text_color(),
+    );
+    response
+}
+
 fn no_caption() -> Rect {
     Rect::NOTHING
 }
@@ -157,13 +189,8 @@ impl Editor {
             )
             .fill(Color32::from_gray(if selected { 49 } else { 32 }))
             .stroke(egui::Stroke::NONE)
-            .corner_radius(egui::CornerRadius {
-                nw: 4,
-                ne: 4,
-                sw: 0,
-                se: 0,
-            })
-            .min_size(egui::vec2(0., 22.))
+            .corner_radius(4)
+            .min_size(egui::vec2(0., 20.))
             .sense(Sense::click_and_drag());
             let r = ui.add(button);
             if r.clicked() {
@@ -182,7 +209,7 @@ impl Editor {
                 break;
             }
             let mut changed = false;
-            r.context_menu(|ui| {
+            Popup::context_menu(&r).style(menu_style).show(|ui| {
                 if ui.button("Duplicate").clicked() {
                     self.add_tab(tab.mode, Some(index));
                     changed = true;
@@ -219,7 +246,13 @@ impl Editor {
                 break;
             }
         }
-        ui.menu_button("+", |ui| {
+        MenuButton::from_button(
+            Button::new("+")
+                .fill(Color32::from_gray(32))
+                .corner_radius(4),
+        )
+        .config(menu_config())
+        .ui(ui, |ui| {
             ui.weak("Add Workspace");
             for (mode, name) in workspace::TABS.iter().enumerate() {
                 if ui.button(*name).clicked() {
@@ -228,7 +261,7 @@ impl Editor {
                 }
             }
         })
-        .response
+        .0
         .on_hover_text("Add workspace")
         .rect
         .right()
@@ -239,8 +272,9 @@ impl Editor {
         let id = egui::Id::new(("strip menu", index));
         let r = ui.add(
             Button::new(name)
-                .selected(Popup::is_id_open(ui.ctx(), id))
-                .frame(false),
+                .fill(Color32::from_gray(48))
+                .corner_radius(4)
+                .frame_when_inactive(Popup::is_id_open(ui.ctx(), id)),
         );
         let open = MENUS
             .iter()
@@ -249,8 +283,8 @@ impl Editor {
         if open && r.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
             Popup::open_id(ui.ctx(), id);
         }
-        Popup::menu(&r).id(id).show(|ui| {
-            ui.set_min_width(175.);
+        Popup::menu(&r).id(id).style(menu_style).show(|ui| {
+            ui.set_min_width(190.);
             self.menu_contents(ui, index);
         });
     }
@@ -262,12 +296,12 @@ impl Editor {
                 ui.monospace(env!("CARGO_PKG_VERSION"));
             }
             1 => {
-                if ui.button("Reload project").clicked() {
+                if command(ui, "Reload project", "↻").clicked() {
                     let _ = self.requests.send(Request::Reload);
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if command(ui, "Quit", "×").clicked() {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                     ui.close();
                 }
@@ -275,7 +309,7 @@ impl Editor {
             2 => self.edit_menu(ui),
             3 => self.render_menu(ui),
             4 => {
-                if ui.button("Toggle Window Fullscreen").clicked() {
+                if command(ui, "Toggle Window Fullscreen", "\u{e30c}").clicked() {
                     fullscreen(ui);
                     ui.close();
                 }
@@ -283,7 +317,7 @@ impl Editor {
                 self.window_menu(ui);
             }
             _ => {
-                if ui.button("Keyboard shortcuts").clicked() {
+                if command(ui, "Keyboard shortcuts", "?").clicked() {
                     self.help = true;
                     ui.close();
                 }
@@ -376,8 +410,11 @@ impl Editor {
             let count = self.topbar.tabs.len() as isize;
             self.activate_tab((self.topbar.active as isize + sibling).rem_euclid(count) as usize);
         }
+        // Popup areas read the context animation time before applying their local style.
+        let animation_time = ui.ctx().global_style().animation_time;
+        ui.ctx().global_style_mut(|s| s.animation_time = 0.);
         egui::Panel::top("menus")
-            .exact_size(33.)
+            .exact_size(26.)
             .frame(egui::Frame::new().fill(Color32::from_gray(26)))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.x = 1.;
@@ -411,13 +448,15 @@ impl Editor {
                         .max_rect(region(bar.left() + 5., context_start))
                         .layout(Layout::left_to_right(Align::Center)),
                 );
-                menus.spacing_mut().item_spacing.x = 10.;
+                menus.spacing_mut().item_spacing.x = 1.;
                 if compact {
-                    menus.menu_button("u—i", |ui| {
-                        for (i, name) in MENUS.iter().enumerate().skip(1) {
-                            ui.menu_button(*name, |ui| self.menu_contents(ui, i));
-                        }
-                    });
+                    MenuButton::new("u—i")
+                        .config(menu_config())
+                        .ui(&mut menus, |ui| {
+                            for (i, name) in MENUS.iter().enumerate().skip(1) {
+                                ui.menu_button(*name, |ui| self.menu_contents(ui, i));
+                            }
+                        });
                 } else {
                     for i in 0..MENUS.len() {
                         self.strip_menu(&mut menus, i);
@@ -425,14 +464,8 @@ impl Editor {
                 }
                 menus.separator();
                 let start = menus.cursor().left();
-                let ideal = self
-                    .topbar
-                    .tabs
-                    .iter()
-                    .map(|t| t.name.chars().count() as f32 * 7. + 19.)
-                    .sum::<f32>()
-                    + 28.;
-                let end = (start + ideal).min(context_start - 54.).max(start + 10.);
+                // Keep a small caption grip even when extra workspaces fill the strip.
+                let end = (context_start - 20.).max(start);
                 let mut tabs = ui.new_child(
                     egui::UiBuilder::new()
                         .id_salt("workspace tabs")
@@ -445,7 +478,8 @@ impl Editor {
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .auto_shrink([false, true])
                     .show(&mut tabs, |ui| {
-                        ui.horizontal(|ui| self.workspace_tabs(ui)).inner
+                        ui.set_height(bar.height());
+                        ui.horizontal_centered(|ui| self.workspace_tabs(ui)).inner
                     });
                 self.topbar.caption = region(visible_end.inner.min(end), context_start);
                 #[cfg(not(windows))]
@@ -462,6 +496,8 @@ impl Editor {
                     }
                 }
             });
+        ui.ctx()
+            .global_style_mut(|s| s.animation_time = animation_time);
     }
 }
 
@@ -500,7 +536,7 @@ fn selector(ui: &mut Ui, label: &str, icon: &str, name: &str, contents: impl FnO
         egui::FontId::proportional(12.),
         Color32::LIGHT_GRAY,
     );
-    Popup::menu(&response).show(contents);
+    Popup::menu(&response).style(menu_style).show(contents);
 }
 fn window_buttons(ui: &mut Ui) {
     let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
@@ -612,6 +648,55 @@ pub fn frame_edges(ui: &mut Ui) {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn menu_hover_and_open_colors() {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1000., 640.))
+            .with_pixels_per_point(1.5)
+            .wgpu()
+            .build_ui_state(
+                |ui, app: &mut Option<Editor>| {
+                    app.get_or_insert_with(|| Editor::new(ui.ctx())).render(ui)
+                },
+                None,
+            );
+        h.run();
+        let file = h.get_all_by_label("File").next().unwrap().rect();
+        let pixel = |x: f32| (x * 1.5).round() as u32;
+        let sample = (pixel(file.left() + 3.), pixel(file.center().y));
+        let capture = |h: &mut Harness<'_, Option<Editor>>, name: &str| {
+            let image = h.render().unwrap();
+            image
+                .save(format!("target/native-menu-{name}.png"))
+                .unwrap();
+            image
+        };
+        let idle = capture(&mut h, "idle");
+        h.event(egui::Event::PointerMoved(file.center()));
+        h.run();
+        let hover = capture(&mut h, "hover");
+        assert_ne!(
+            idle.get_pixel(sample.0, sample.1),
+            hover.get_pixel(sample.0, sample.1)
+        );
+        h.get_all_by_label("File").next().unwrap().click();
+        h.run();
+        let quit = h.get_by_label("Quit").rect().center();
+        h.event(egui::Event::PointerMoved(quit));
+        h.run();
+        let open = capture(&mut h, "open");
+        assert_eq!(
+            hover.get_pixel(sample.0, sample.1),
+            open.get_pixel(sample.0, sample.1)
+        );
+        assert!(h.state().as_ref().unwrap().topbar.caption.width() > 0.);
+        let edit = h.get_all_by_label("Edit").next().unwrap().rect().center();
+        h.event(egui::Event::PointerMoved(edit));
+        h.run();
+        h.get_by_label("Preferences…");
+        capture(&mut h, "edit");
+    }
 
     #[test]
     fn hover_preserves_bounds_and_modal_clicks_stay_in_the_dialog() {
