@@ -232,10 +232,8 @@ class CanvasHeaderLayout:
         if property_name != "image":
             return self.layout.template_ID(data, property_name, **options)
         row = self.layout.row(align=True)
-        row.prop(data, "image", text="", icon="IMAGE_DATA", icon_only=True)
+        row.template_search(data, "image", bpy.data, "images")
         image = data.image
-        if image:
-            row.prop(image, "name", text="")
         row.operator("image.new", text="" if image else "New", icon="DUPLICATE" if image else "ADD")
         if image and image.packed_file:
             unpack = row.operator("file.unpack_item", text="", icon="PACKAGE")
