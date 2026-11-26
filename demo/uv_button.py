@@ -3,6 +3,7 @@
 import blf
 import bpy
 import gpu
+import numpy as np
 from gpu_extras.batch import batch_for_shader
 
 CANVAS_WIDTH = 640
@@ -15,6 +16,25 @@ def spacing_choices(size):
 
 
 def sync_grid(settings, context):
+    # The image pass runs before Blender draws UV faces, edges, and vertices.
+    image = settings.canvas
+    if image is None:
+        return
+    width, height = image.size
+    pixels = np.empty((height, width, 4), dtype=np.float32)
+    pixels[:] = image.generated_color
+    if settings.visible:
+        dx, dy = int(settings.spacing_x), int(settings.spacing_y)
+        major = settings.major_every
+        minor_color = (0.18, 0.19, 0.21, 1)
+        major_color = (0.24, 0.25, 0.27, 1)
+        pixels[:, ::dx] = minor_color
+        pixels[::dy] = minor_color
+        pixels[:, ::dx * major] = major_color
+        pixels[::dy * major] = major_color
+    image.pixels.foreach_set(pixels.ravel())
+    image.update()
+
     for area in context.screen.areas:
         if area.ui_type == "UV" and area.spaces.active.image == settings.canvas:
             uv = area.spaces.active.uv_editor
@@ -54,33 +74,6 @@ class UAI_PT_canvas_grid(bpy.types.Panel):
 def grid_header(self, context):
     if context.area.ui_type == "UV" and context.space_data.image == context.scene.uai_grid.canvas:
         self.layout.popover(panel="UAI_PT_canvas_grid", text="Grid", icon="GRID")
-
-
-def draw_grid():
-    context = bpy.context
-    grid = context.scene.uai_grid
-    if not grid.visible or context.area.ui_type != "UV" or context.space_data.image != grid.canvas:
-        return
-    view = context.region.view2d
-    x0, y0 = view.view_to_region(0, 0, clip=False)
-    x1, y1 = view.view_to_region(1, 1, clip=False)
-    minor, major = [], []
-    for axis, count in enumerate((CANVAS_WIDTH // int(grid.spacing_x),
-                                  CANVAS_HEIGHT // int(grid.spacing_y))):
-        for index in range(count + 1):
-            is_major = index % grid.major_every == 0
-            span = (x1 - x0, y1 - y0)[axis]
-            if span * (grid.major_every if is_major else 1) < 4 * count:
-                continue
-            pos = index / count
-            line = ((0, pos), (1, pos)) if axis else ((pos, 0), (pos, 1))
-            (major if is_major else minor).extend(line)
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    for points, color in ((minor, (0.18, 0.19, 0.21, 1)), (major, (0.24, 0.25, 0.27, 1))):
-        if points:
-            shader.bind()
-            shader.uniform_float("color", color)
-            batch_for_shader(shader, "LINES", {"pos": points}).draw(shader)
 
 
 def button_corners(mesh):
@@ -193,7 +186,6 @@ def setup():
         bpy.ops.uv.select_all(action="DESELECT")
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
-    bpy.types.SpaceImageEditor.draw_handler_add(draw_grid, (), "WINDOW", "POST_VIEW")
     bpy.types.SpaceImageEditor.draw_handler_add(draw_button, (), "WINDOW", "POST_PIXEL")
     bpy.ops.ed.undo_push(message="Button canvas")
 
