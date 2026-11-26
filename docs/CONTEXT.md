@@ -11,6 +11,11 @@ Each element has an internal grid that responds to the space its parent gives it
 When a row narrows, its children can shrink within their sizing rules or overflow.
 Moving children into a vertical stack requires an explicit layout rule.
 
+### Canvas text
+
+Double-click a caption or label to edit the displayed text in place.
+Set the caret at the character boundary nearest the click.
+
 ### Source editing
 
 A visual frontend studio where **real code is the source of truth**. Panels are

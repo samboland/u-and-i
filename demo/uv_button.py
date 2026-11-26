@@ -2,7 +2,7 @@
 
 import blf
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Vector
 import gpu
 import math
 import os
@@ -445,7 +445,7 @@ def shape_outline(obj, points):
             for angle in (math.tau * i / 64 for i in range(64))]
 
 
-def draw_assets():
+def draw_assets(draw_canvas_text):
     context = bpy.context
     if (context.area.ui_type != "UV" or not context.scene.uai_canvas
             or context.space_data.image != context.scene.uai_canvas):
@@ -477,20 +477,16 @@ def draw_assets():
                 if kind in {"Panel", "Button"} and len(points) == 4 and obj.uai_shape != "RECTANGLE":
                     outline = shape_outline(obj, points)
                     triangles = [(0, i, i + 1) for i in range(1, len(outline) - 1)]
-                    draw_face(outline, triangles, "", kind)
+                    draw_face(outline, triangles, kind)
                     kind = "Label"
-                label = ""
-                if len(mesh.polygons) == 1 and obj.get("uai_kind") in {"Button", "Label"}:
-                    if "uai_text" in obj:
-                        label = obj.uai_caption
-                    elif obj.get("uai_kind") == "Button":
-                        label = obj.name
-                draw_face(points, indices, label, kind)
+                draw_face(points, indices, kind)
+                if len(points) == 4 and len(mesh.polygons) == 1 and obj.get("uai_kind") in {"Button", "Label"}:
+                    draw_canvas_text(context, obj, points, obj.get("uai_text", obj.name))
         finally:
             evaluated.to_mesh_clear()
 
 
-def draw_face(points, indices, label, kind):
+def draw_face(points, indices, kind):
     cx = sum(x for x, _ in points) / len(points)
     cy = sum(y for _, y in points) / len(points)
     # Leave Blender's selected edges and vertex handles visible.
@@ -515,24 +511,6 @@ def draw_face(points, indices, label, kind):
         shader.bind()
         shader.uniform_float("color", (0.19, 0.32, 0.43, 1))
         batch.draw(shader)
-    if not label:
-        return
-    blf.size(0, 16 * bpy.context.space_data.zoom[1])
-    width, height = blf.dimensions(0, label)
-    if len(points) == 4:
-        axis_x = Vector(points[1]) - Vector(points[0])
-        axis_y = Vector(points[3]) - Vector(points[0])
-        if axis_x.length <= width + 8 or axis_y.length < 1:
-            return
-        axis_x.normalize()
-        axis_y.normalize()
-        basis = Matrix(((axis_x.x, axis_y.x, 0, cx), (axis_x.y, axis_y.y, 0, cy),
-                        (0, 0, 1, 0), (0, 0, 0, 1)))
-        with gpu.matrix.push_pop():
-            gpu.matrix.multiply_matrix(basis)
-            blf.position(0, -width / 2, -height / 2, 0)
-            blf.color(0, 1, 1, 1, 1)
-            blf.draw(0, label)
 
 
 class UAI_OT_canvas_wheel(bpy.types.Operator):
@@ -630,8 +608,8 @@ def setup():
         bpy.ops.uv.select_all(action="DESELECT")
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
-    bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (), "WINDOW", "POST_PIXEL")
     selector = runpy.run_path(str(Path(__file__).with_name("canvas_selector.py")), run_name="uai_canvas_selector")
+    bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (selector["draw_canvas_text"],), "WINDOW", "POST_PIXEL")
     selector["register"](keyconfig, shape_outline)
     bpy.ops.ed.undo_push(message="Button canvas")
 

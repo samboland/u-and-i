@@ -5,11 +5,12 @@ import math
 import sys
 import time
 
+import blf
 import bmesh
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
-from mathutils import Vector
+from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_point_tri_2d, tessellate_polygon
 
 
@@ -109,6 +110,9 @@ def contains(context, entry, point):
 def draw_bounds():
     ctx = bpy.context
     if not is_canvas(ctx) or not ctx.space_data.show_gizmo:
+        return
+    edit = UAI_OT_edit_text.active
+    if edit and edit.region_id == ctx.region.as_pointer():
         return
     entries = selection(ctx)
     if not entries:
@@ -250,31 +254,196 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
             context.region.tag_redraw()
 
 
+class TextLayout:
+    """The same screen-space transform serves glyph drawing and pointer hit testing."""
+
+    def __init__(self, context, corners, text):
+        corners = [Vector(p) for p in corners]
+        center = sum(corners, Vector((0, 0))) / 4
+        x = corners[1] - corners[0]
+        y = corners[3] - corners[0]
+        self.available = x.length
+        x.normalize()
+        y.normalize()
+        self.basis = Matrix(((x.x, y.x, 0, center.x), (x.y, y.y, 0, center.y),
+                             (0, 0, 1, 0), (0, 0, 0, 1)))
+        self.text = text
+        blf.size(0, 16 * context.space_data.zoom[1])
+        self.width, height = blf.dimensions(0, text)
+        self.height = max(1, blf.dimensions(0, "Mg")[1])
+        self.baseline = -(height if height else self.height) / 2
+
+    def offset(self, index):
+        return blf.dimensions(0, self.text[:index])[0] - self.width / 2
+
+    def index_at(self, mouse):
+        x = (self.basis.inverted_safe() @ Vector((*mouse, 0))).x
+        lo, hi = 0, len(self.text)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if x < (self.offset(mid) + self.offset(mid + 1)) / 2:
+                hi = mid
+            else:
+                lo = mid + 1
+        return lo
+
+
+def text_rect(x0, y0, x1, y1, color):
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    batch = batch_for_shader(shader, "TRI_FAN", {"pos": [(x0,y0),(x1,y0),(x1,y1),(x0,y1)]})
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
+def draw_canvas_text(context, obj, corners, label):
+    edit = UAI_OT_edit_text.active
+    if edit and (edit.region_id != context.region.as_pointer() or edit.element != obj):
+        edit = None
+    text = edit.draft if edit else label
+    if not (edit or text):
+        return
+    layout = TextLayout(context, corners, text)
+    if not edit and layout.width + 8 >= layout.available:
+        return
+    with gpu.matrix.push_pop():
+        gpu.matrix.multiply_matrix(layout.basis)
+        bottom = layout.baseline - layout.height * .2
+        top = bottom + layout.height * 1.15
+        if edit and edit.anchor != edit.caret:
+            left, right = sorted((layout.offset(edit.anchor), layout.offset(edit.caret)))
+            color = context.preferences.themes[0].user_interface.wcol_text.item
+            text_rect(left, bottom, right, top, (*color[:3], 1))
+        blf.position(0, -layout.width / 2, layout.baseline, 0)
+        blf.color(0, 1, 1, 1, 1)
+        blf.draw(0, text)
+        if edit and (time.monotonic() - edit.blink_start) % 1 < .6:
+            x = layout.offset(edit.caret)
+            text_rect(x-.8, bottom, x+.8, top, (1,1,1,1))
+
+
 class UAI_OT_edit_text(bpy.types.Operator):
     bl_idname = "uai.edit_text"
     bl_label = "Edit Text"
-    bl_options = {"UNDO"}
-
-    text: bpy.props.StringProperty(name="Text", options={"SKIP_SAVE"})
+    bl_options = {"UNDO", "BLOCKING"}
+    active = None
 
     @classmethod
     def poll(cls, context):
         obj = context.view_layer.objects.active
-        return is_canvas(context) and obj and obj.get("uai_kind") in {"Button", "Label"}
+        return cls.active is None and is_canvas(context) and obj and obj.get("uai_kind") in {"Button", "Label"}
 
     def invoke(self, context, event):
         self.element = context.view_layer.objects.active
-        self.text = self.element.get("uai_text", self.element.name)
-        return context.window_manager.invoke_props_dialog(self, width=240)
+        self.region_id = context.region.as_pointer()
+        self.draft = self.original = self.element.get("uai_text", self.element.name)
+        self.anchor = self.caret = self.pointer_index(context, event)
+        self.dragging = False
+        self.history = []
+        self.future = []
+        self.blink_start = time.monotonic()
+        self.timer = context.window_manager.event_timer_add(.2, window=context.window)
+        type(self).active = self
+        context.window_manager.modal_handler_add(self)
+        context.area.tag_redraw()
+        return {"RUNNING_MODAL"}
 
-    def draw(self, context):
-        row = self.layout.row()
-        row.activate_init = True
-        row.prop(self, "text", text="")
+    def pointer_index(self, context, event):
+        bm = bmesh.from_edit_mesh(self.element.data)
+        face = next(iter(bm.faces))
+        uv = bm.loops.layers.uv.active
+        view = context.region.view2d
+        corners = [view.view_to_region(*p, clip=False) for p in points(face, uv)]
+        return TextLayout(context, corners, self.draft).index_at((event.mouse_region_x,event.mouse_region_y))
 
-    def execute(self, context):
-        self.element.uai_caption = self.text
+    def cancel(self, context):
+        type(self).active = None
+        context.window_manager.event_timer_remove(self.timer)
+        if context.area:
+            context.area.tag_redraw()
+
+    def finish(self, context):
+        if self.draft != self.original:
+            self.element.uai_caption = self.draft
+        self.cancel(context)
         return {"FINISHED"}
+
+    def replace(self, text, start, end):
+        self.history.append((self.draft, self.caret, self.anchor))
+        self.future.clear()
+        self.draft = self.draft[:start] + text + self.draft[end:]
+        self.caret = self.anchor = start + len(text)
+
+    def modal(self, context, event):
+        if event.type in {"ESC", "WINDOW_DEACTIVATE"} or not is_canvas(context):
+            self.cancel(context)
+            return {"CANCELLED"}
+        if event.type == "TIMER":
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE":
+            if event.value == "RELEASE":
+                self.dragging = False
+            elif event.value in {"PRESS", "DOUBLE_CLICK"}:
+                mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+                entry = next((e for e in elements(context) if e[0] == self.element), None)
+                if not entry or not contains(context, entry, mouse):
+                    return self.finish(context) | {"PASS_THROUGH"}
+                self.caret = self.pointer_index(context, event)
+                if not event.shift:
+                    self.anchor = self.caret
+                self.dragging = True
+        elif self.dragging and event.type == "MOUSEMOVE":
+            self.caret = self.pointer_index(context, event)
+        elif event.value != "PRESS":
+            return {"RUNNING_MODAL"}
+        elif event.type in {"RET", "NUMPAD_ENTER", "TAB"}:
+            return self.finish(context)
+        else:
+            lo, hi = sorted((self.anchor, self.caret))
+            shortcut = event.ctrl or event.oskey
+            if shortcut and event.type == "A":
+                self.anchor, self.caret = 0, len(self.draft)
+            elif shortcut and event.type in {"C", "X"}:
+                if lo != hi:
+                    context.window_manager.clipboard = self.draft[lo:hi]
+                    if event.type == "X":
+                        self.replace("", lo, hi)
+            elif shortcut and event.type == "V":
+                self.replace(" ".join(context.window_manager.clipboard.splitlines()), lo, hi)
+            elif shortcut and event.type in {"Y", "Z"}:
+                undo = event.type == "Z" and not event.shift
+                source, dest = (self.history, self.future) if undo else (self.future, self.history)
+                if source:
+                    dest.append((self.draft, self.caret, self.anchor))
+                    self.draft, self.caret, self.anchor = source.pop()
+            elif event.type in {"BACK_SPACE", "DEL"}:
+                if lo == hi:
+                    if event.type == "BACK_SPACE":
+                        lo = max(0, lo - 1)
+                    else:
+                        hi = min(len(self.draft), hi + 1)
+                if lo != hi:
+                    self.replace("", lo, hi)
+            elif event.type in {"HOME", "END", "LEFT_ARROW", "RIGHT_ARROW"}:
+                if event.type == "HOME":
+                    self.caret = 0
+                elif event.type == "END":
+                    self.caret = len(self.draft)
+                elif lo != hi and not event.shift:
+                    self.caret = lo if event.type == "LEFT_ARROW" else hi
+                else:
+                    step = -1 if event.type == "LEFT_ARROW" else 1
+                    self.caret = max(0, min(len(self.draft), self.caret + step))
+                if not event.shift:
+                    self.anchor = self.caret
+            elif event.unicode and event.unicode.isprintable():
+                self.replace(event.unicode, lo, hi)
+            else:
+                return {"RUNNING_MODAL"}
+        self.blink_start = time.monotonic()
+        context.area.tag_redraw()
+        return {"RUNNING_MODAL"}
 
 
 def is_second_press(event, previous, target, pressed_at, position):
