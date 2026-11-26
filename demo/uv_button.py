@@ -15,26 +15,6 @@ GRID_TYPES = (("RECTANGULAR", "Rectangular", ""), ("AXONOMETRIC", "Axonometric",
 CANVAS_COLOR = (0.14, 0.15, 0.17, 1)
 
 
-def pixel_spacing(label, key, size):
-    steps = tuple(n for n in range(1, size + 1) if size % n == 0)
-
-    def get(grid):
-        return grid.get(key, 8)
-
-    def set_value(grid, value):
-        previous = get(grid)
-        if value == previous + 1:
-            grid[key] = next(n for n in steps if n >= value)
-        elif value == previous - 1:
-            grid[key] = next(n for n in reversed(steps) if n <= value)
-        else:
-            grid[key] = min(steps, key=lambda n: abs(n - value))
-
-    return bpy.props.IntProperty(name=label, subtype="PIXEL", min=1, max=size,
-                                 get=get, set=set_value, update=grid_changed,
-                                 description="Cell spacing in whole pixels that divide the canvas")
-
-
 def draw_grid_image(image, grid):
     # Bake guides into the disposable canvas so UV edges always draw above them.
     custom = grid is not None and grid.kind != "RECTANGULAR"
@@ -83,7 +63,7 @@ def sync_grid(image, context):
                 if native:
                     width, height = image.size
                     uv.grid_shape_source = "FIXED"
-                    uv.custom_grid_subdivisions = (width // int(grid.x), height // int(grid.y))
+                    uv.custom_grid_subdivisions = (max(1, round(width / grid.x)), max(1, round(height / grid.y)))
                 area.tag_redraw()
     draw_grid_image(image, grid if show_custom else None)
 
@@ -98,6 +78,13 @@ def grid_changed(self, context):
     sync_grid(self.id_data, context)
 
 
+def pixel_spacing(label):
+    return bpy.props.IntProperty(
+        name=label, subtype="PIXEL", default=8, min=1, max=max(CANVAS_WIDTH, CANVAS_HEIGHT),
+        description="Target cell spacing in pixels, fitted to whole UV subdivisions",
+        update=grid_changed)
+
+
 class UAI_Grid(bpy.types.PropertyGroup):
     kind: bpy.props.EnumProperty(items=GRID_TYPES, default="RECTANGULAR")
     line_spacing: bpy.props.IntProperty(name="Spacing", subtype="PIXEL", default=16, min=1, max=400, update=grid_changed)
@@ -109,8 +96,8 @@ class UAI_Grid(bpy.types.PropertyGroup):
     gutter_y: bpy.props.IntProperty(name="Gutter Y", subtype="PIXEL", default=8, min=0, max=400, update=grid_changed)
     expanded: bpy.props.BoolProperty(default=True)
     visible: bpy.props.BoolProperty(name="Visible", default=True, update=grid_changed)
-    x: pixel_spacing("Spacing X", "spacing_x", CANVAS_WIDTH)
-    y: pixel_spacing("Spacing Y", "spacing_y", CANVAS_HEIGHT)
+    x: pixel_spacing("Spacing X")
+    y: pixel_spacing("Spacing Y")
 
 
 class UAI_OT_add_grid(bpy.types.Operator):
