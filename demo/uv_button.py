@@ -243,7 +243,7 @@ def create_canvas_asset(collection, kind, center):
         layer.uv[index].vector = uv
     obj = bpy.data.objects.new(kind, mesh)
     obj["uai_kind"] = kind
-    if kind in {"Button", "Label"}:
+    if kind == "Label":
         obj.uai_caption = kind
     collection.objects.link(obj)
     return obj
@@ -472,14 +472,19 @@ def draw_assets():
                     draw_face(outline, triangles, "", kind)
                     kind = "Label"
                 label = ""
-                if obj.get("uai_kind") in {"Button", "Label"}:
-                    label = obj.uai_caption
-                draw_face(points, indices, label if len(mesh.polygons) == 1 else "", kind)
+                font_size = 16 * context.preferences.system.ui_scale
+                if len(mesh.polygons) == 1 and obj.get("uai_kind") in {"Button", "Label"}:
+                    if "uai_text" in obj:
+                        label = obj.uai_caption
+                        font_size = 16 * context.space_data.zoom[1]
+                    elif obj.get("uai_kind") == "Button":
+                        label = obj.name
+                draw_face(points, indices, label, kind, font_size)
         finally:
             evaluated.to_mesh_clear()
 
 
-def draw_face(points, indices, label, kind):
+def draw_face(points, indices, label, kind, font_size=None):
     cx = sum(x for x, _ in points) / len(points)
     cy = sum(y for _, y in points) / len(points)
     # Leave Blender's selected edges and vertex handles visible.
@@ -506,7 +511,7 @@ def draw_face(points, indices, label, kind):
         batch.draw(shader)
     if not label:
         return
-    blf.size(0, 16 * bpy.context.preferences.system.ui_scale)
+    blf.size(0, font_size)
     width, height = blf.dimensions(0, label)
     if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
         blf.position(0, cx - width / 2, cy - height / 2, 0)
@@ -536,7 +541,7 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 def setup():
     bpy.types.Object.uai_caption = bpy.props.StringProperty(
-        name="Text", get=lambda obj: obj.get("uai_text", obj.name),
+        name="Text", get=lambda obj: obj.get("uai_text", ""),
         set=lambda obj, text: obj.__setitem__("uai_text", text), update=redraw_canvas)
     bpy.types.Object.uai_shape = bpy.props.EnumProperty(name="Shape", items=[
         ("RECTANGLE", "Rectangle", ""), ("PILL", "Pill", ""), ("ELLIPSE", "Ellipse", "")],
