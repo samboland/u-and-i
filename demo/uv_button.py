@@ -71,11 +71,6 @@ class UAI_PT_canvas_grid(bpy.types.Panel):
         self.layout.prop(context.tool_settings, "use_snap_uv", text="Snap")
 
 
-def grid_header(self, context):
-    if context.area.ui_type == "UV" and context.space_data.image == context.scene.uai_grid.canvas:
-        self.layout.popover(panel="UAI_PT_canvas_grid", text="Grid", icon="GRID")
-
-
 def button_corners(mesh):
     if not mesh.polygons or mesh.uv_layers.active is None:
         return []
@@ -150,7 +145,6 @@ def setup():
         for wheel in ("WHEELUPMOUSE", "WHEELDOWNMOUSE"):
             for modifiers in ({}, {"shift": True}, {"ctrl": True}):
                 keymap.keymap_items.new("uai.canvas_wheel", wheel, "PRESS", **modifiers)
-    bpy.types.IMAGE_HT_header.prepend(grid_header)
     bpy.context.preferences.view.show_splash = False
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
