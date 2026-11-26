@@ -607,7 +607,7 @@ class UAI_OT_select(bpy.types.Operator):
         settings = context.tool_settings
         uv = context.space_data.uv_editor
         if (
-            (settings.use_snap_uv != event.ctrl)
+            (settings.use_snap_uv != (self.action == "BODY" and event.ctrl))
             and "GRID" in settings.snap_uv_element
             and uv.show_grid_over_image
             and self.action in {"BODY", "SCALE"}
