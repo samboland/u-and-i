@@ -476,13 +476,7 @@ def edit_quad(obj, coordinates=None):
     return [loop[layer].uv.copy() for loop in face.loops]
 
 
-def handle_positions(obj, corners, image):
-    if obj.uai_shape == "PILL":
-        def length(edge):
-            return math.hypot(edge.x * image.size[0], edge.y * image.size[1])
-        if length(corners[1]-corners[0]) >= length(corners[3]-corners[0]):
-            return {"LEFT": (0, .5), "RIGHT": (1, .5)}
-        return {"TOP": (.5, 1), "BOTTOM": (.5, 0)}
+def ellipse_handle_positions(obj):
     start, sweep = ellipse_angles(obj)
     positions = {"LEFT": (0, .5), "TOP": (.5, 1)}
     if obj.uai_closure != "WHOLE":
@@ -497,24 +491,37 @@ class UAI_OT_shape_handle(bpy.types.Operator):
     bl_options = {"UNDO", "INTERNAL"}
     handle: bpy.props.StringProperty()
 
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return (context.area is not None and context.area.ui_type == "UV"
+                and context.scene.uai_canvas is not None
+                and context.space_data.image == context.scene.uai_canvas
+                and obj is not None and obj.get("uai_kind") in {"Button", "Panel"}
+                and obj.mode == "EDIT" and obj.uai_shape == "ELLIPSE")
+
     def invoke(self, context, event):
-        self.obj = context.active_object
-        quad = edit_quad(self.obj)
+        obj = context.active_object
+        self.object_uid = obj.session_uid
+        quad = edit_quad(obj)
         if not quad:
             return {"CANCELLED"}
         self.original = [p.copy() for p in quad]
-        self.arc = (self.obj.uai_start, self.obj.uai_end, self.obj.uai_closure)
+        self.arc = (obj.uai_start, obj.uai_end, obj.uai_closure)
         self.origin = Vector(context.region.view2d.region_to_view(event.mouse_region_x, event.mouse_region_y))
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-        quad = edit_quad(self.obj)
+        obj = context.active_object
+        if not self.poll(context) or obj.session_uid != self.object_uid:
+            return {"CANCELLED"}
+        quad = edit_quad(obj)
         if not quad:
             return {"CANCELLED"}
         if event.type in {"ESC", "RIGHTMOUSE"}:
-            edit_quad(self.obj, self.original)
-            self.obj.uai_start, self.obj.uai_end, self.obj.uai_closure = self.arc
+            edit_quad(obj, self.original)
+            obj.uai_start, obj.uai_end, obj.uai_closure = self.arc
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
             return {"FINISHED"}
@@ -532,20 +539,19 @@ class UAI_OT_shape_handle(bpy.types.Operator):
             angle = math.atan2(y, x)
             if event.ctrl:
                 angle = round(angle / (math.pi/12)) * math.pi/12
-            setattr(self.obj, "uai_" + self.handle.lower(), angle % math.tau)
-            self.obj.uai_closure = "ARC" if math.hypot(x,y) < 1 else "SLICE"
+            setattr(obj, "uai_" + self.handle.lower(), angle % math.tau)
+            obj.uai_closure = "ARC" if math.hypot(x,y) < 1 else "SLICE"
         else:
-            horizontal = self.handle in {"LEFT", "RIGHT"}
+            horizontal = self.handle == "LEFT"
             delta = mouse - self.origin
             t = delta.cross(y_axis)/det if horizontal else x_axis.cross(delta)/det
-            sign = -1 if self.handle in {"LEFT", "BOTTOM"} else 1
-            symmetric = self.obj.uai_shape == "ELLIPSE"
-            t = sign * max(-.49 if symmetric else -.99, sign*t)
+            sign = -1 if horizontal else 1
+            t = sign * max(-.49, sign*t)
             for i, (p, original) in enumerate(zip(quad, corners)):
                 side = (i in (1,2)) if horizontal else (i in (2,3))
-                factor = 1 if side == (sign > 0) else (-1 if symmetric else 0)
+                factor = 1 if side == (sign > 0) else -1
                 p[:] = original + (x_axis if horizontal else y_axis) * (t*factor)
-            edit_quad(self.obj, quad)
+            edit_quad(obj, quad)
         context.area.tag_redraw()
         return {"RUNNING_MODAL"}
 
@@ -559,14 +565,11 @@ class UAI_GGT_shape(bpy.types.GizmoGroup):
 
     @classmethod
     def poll(cls, context):
-        obj = context.active_object
-        return (context.area.ui_type == "UV" and context.space_data.image == context.scene.uai_canvas
-                and obj and obj.get("uai_kind") in {"Button","Panel"} and obj.mode == "EDIT"
-                and obj.uai_shape != "RECTANGLE")
+        return UAI_OT_shape_handle.poll(context)
 
     def setup(self, context):
         self.handles = {}
-        for key in ("LEFT","RIGHT","TOP","BOTTOM","START","END"):
+        for key in ("LEFT", "TOP", "START", "END"):
             gz = self.gizmos.new("GIZMO_GT_button_2d")
             if key in {"START", "END"}:
                 gz.draw_options = {"BACKDROP", "OUTLINE"}
@@ -584,7 +587,7 @@ class UAI_GGT_shape(bpy.types.GizmoGroup):
     def draw_prepare(self, context):
         obj = context.active_object
         corners = edit_quad(obj)
-        locations = handle_positions(obj, corners, context.space_data.image) if corners else {}
+        locations = ellipse_handle_positions(obj) if corners else {}
         for key, gz in self.handles.items():
             gz.hide = key not in locations
             if not gz.hide:
