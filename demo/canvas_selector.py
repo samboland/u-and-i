@@ -133,10 +133,9 @@ def draw_bounds():
         poly, indices = handle_shape(*key)
         verts = [pos + v * size for v in poly]
         alpha = 1 if highlighted.get(ctx.region.as_pointer()) == key else 0.6
-        is_pivot = key[0] == "PIVOT"
         shader.bind()
-        shader.uniform_float("lineWidth", 2.5 if is_pivot else 1)
-        shader.uniform_float("color", (0, 0, 0, 1) if is_pivot else (*theme.gizmo_view_align, alpha * 0.45))
+        shader.uniform_float("lineWidth", 1)
+        shader.uniform_float("color", (*theme.gizmo_view_align, alpha * 0.45))
         batch_for_shader(shader, "LINE_STRIP", {"pos": verts + verts[:1]}).draw(shader)
         fill.bind()
         fill.uniform_float("color", (*theme.gizmo_view_align, alpha))
@@ -147,22 +146,7 @@ def draw_bounds():
 # Closed silhouettes based on Inkscape's draw_darrow and draw_carrow.
 @lru_cache(maxsize=32)
 def handle_shape(action, dx, dy):
-    if action == "PIVOT":
-        poly = [
-            (-1, -0.18),
-            (-0.18, -0.18),
-            (-0.18, -1),
-            (0.18, -1),
-            (0.18, -0.18),
-            (1, -0.18),
-            (1, 0.18),
-            (0.18, 0.18),
-            (0.18, 1),
-            (-0.18, 1),
-            (-0.18, 0.18),
-            (-1, 0.18),
-        ]
-    elif action == "ROTATE":
+    if action == "ROTATE":
 
         def arc(radius, start, end):
             return [
@@ -202,6 +186,7 @@ def handle_shape(action, dx, dy):
 
 
 highlighted = {}
+HANDLE_DIRECTIONS = tuple((x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y)
 
 
 def handle_positions(context, entries):
@@ -211,17 +196,11 @@ def handle_positions(context, entries):
     mid, half = (lo + hi) / 2, (hi - lo) / 2
     turn = turn_mode(entries)
     gap = 10 * context.preferences.system.ui_scale
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            if dx or dy:
-                action = ("ROTATE" if dx and dy else "SHEAR") if turn else "SCALE"
-                pos = mid + Vector((dx * half.x, dy * half.y))
-            elif turn and len(entries) == 1:
-                action, pos = "PIVOT", pivot(entries)
-            else:
-                continue
-            x, y = context.region.view2d.view_to_region(*pos, clip=False)
-            yield (action, dx, dy), Vector((x + dx * gap, y + dy * gap))
+    for dx, dy in HANDLE_DIRECTIONS:
+        action = ("ROTATE" if dx and dy else "SHEAR") if turn else "SCALE"
+        pos = mid + Vector((dx * half.x, dy * half.y))
+        x, y = context.region.view2d.view_to_region(*pos, clip=False)
+        yield (action, dx, dy), Vector((x + dx * gap, y + dy * gap))
 
 
 class UAI_GGT_selector(bpy.types.GizmoGroup):
@@ -237,12 +216,12 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
 
     def setup(self, context):
         self.handles = []
-        for dx, dy in [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1)]:
-            actions = ("SCALE", "ROTATE" if dx and dy else "SHEAR") if dx or dy else ("PIVOT",)
+        for dx, dy in HANDLE_DIRECTIONS:
+            actions = ("SCALE", "ROTATE" if dx and dy else "SHEAR")
             for action in actions:
                 g = self.gizmos.new("GIZMO_GT_button_2d")
                 # Native gizmos handle hover and input. The canvas paints the
-                # glyphs after the assets so the pivot also appears above text.
+                # glyphs after the assets.
                 g.draw_options = set()
                 g.scale_basis = 7
                 g.use_draw_modal = True
@@ -353,9 +332,9 @@ class UAI_OT_select(bpy.types.Operator):
             settings.use_snap_uv
             and "GRID" in settings.snap_uv_element
             and uv.show_grid_over_image
-            and self.action in {"BODY", "SCALE", "PIVOT"}
+            and self.action in {"BODY", "SCALE"}
         ):
-            anchor = {"BODY": self.lo, "SCALE": edge, "PIVOT": self.center}[self.action]
+            anchor = self.lo if self.action == "BODY" else edge
             divisions = uv.custom_grid_subdivisions
             for i in range(2):
                 delta[i] = round((anchor[i] + delta[i]) * divisions[i]) / divisions[i] - anchor[i]
@@ -396,11 +375,8 @@ class UAI_OT_select(bpy.types.Operator):
 
         for obj, coords, saved in self.original:
             initial = Vector(saved) if saved else sum(coords, Vector((0, 0))) / len(coords)
-            if self.action == "PIVOT":
-                write_pivot(obj, initial + delta)
-            else:
-                self.write(obj, [transform(p) for p in coords])
-                write_pivot(obj, initial if self.action == "SCALE" else transform(initial))
+            self.write(obj, [transform(p) for p in coords])
+            write_pivot(obj, initial if self.action == "SCALE" else transform(initial))
         context.area.tag_redraw()
         return {"RUNNING_MODAL"}
 
