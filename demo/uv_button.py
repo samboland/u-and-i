@@ -259,7 +259,11 @@ class CanvasHeaderLayout:
         if property_name != "image":
             return self.layout.template_ID(data, property_name, **options)
         row = self.layout.row(align=True)
-        picker = row.operator_menu_enum("uai.pick_image", "image", text="", icon="IMAGE_DATA")
+        browse = row.row(align=True)
+        # Match Blender's ID browse width. A blank label selects its left-inset
+        # icon layout; an empty label centers the icon beside the dropdown arrow.
+        browse.ui_units_x = 1.6
+        picker = browse.operator_menu_enum("uai.pick_image", "image", text=" ", icon="IMAGE_DATA")
         image = data.image
         if image:
             picker.image = str(image.session_uid)
