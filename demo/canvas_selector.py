@@ -40,7 +40,7 @@ def elements(context):
 
 
 def selection(context):
-    return [entry for entry in elements(context) if entry[1].select]
+    return [entry for entry in elements(context) if entry[0].select_get()]
 
 
 def points(face, uv):
@@ -95,6 +95,7 @@ def refresh(obj):
 
 def set_selected(entry, state):
     obj, face, _, _ = entry
+    obj.select_set(state)
     face.select_set(state)
     refresh(obj)
 
@@ -541,7 +542,7 @@ class UAI_OT_select(bpy.types.Operator):
             if hit and not (event.ctrl or event.shift):
                 obj = hit[0]
                 self.body_target = (context.region.as_pointer(), obj.session_uid)
-                if hit[1].select and is_second_press(event, previous_click, self.body_target,
+                if hit[0].select_get() and is_second_press(event, previous_click, self.body_target,
                                                       self.pressed_at, self.press):
                     type(self).turn_selection = previous_click[3]
                     context.view_layer.objects.active = obj
@@ -550,15 +551,15 @@ class UAI_OT_select(bpy.types.Operator):
                     else:
                         bpy.ops.wm.call_panel(name="UAI_PT_element", keep_open=True)
                     return {"FINISHED"}
-            self.toggle = bool(hit and hit[1].select and not event.shift)
+            self.toggle = bool(hit and hit[0].select_get() and not event.shift)
             if not self.toggle:
                 type(self).turn_selection = ()
                 for item in items:
                     if hit and item[0] == hit[0]:
-                        set_selected(item, not item[1].select if event.shift else True)
+                        set_selected(item, not item[0].select_get() if event.shift else True)
                     elif not event.shift:
                         set_selected(item, False)
-            if hit and hit[1].select:
+            if hit and hit[0].select_get():
                 context.view_layer.objects.active = hit[0]
             else:
                 context.area.tag_redraw()

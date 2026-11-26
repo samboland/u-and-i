@@ -264,7 +264,9 @@ class UAI_OT_add_asset(bpy.types.Operator):
 
     def execute(self, context):
         center = tuple(context.space_data.cursor_location)
-        editing = list(context.objects_in_mode) if context.mode == "EDIT_MESH" else []
+        editing = [member for member in context.view_layer.objects
+                   if member.type == "MESH" and member.data.is_editmode]
+        hidden = [member for member in editing if member.hide_get()]
         if editing:
             bpy.ops.mesh.select_all(action="DESELECT")
             bpy.ops.object.mode_set(mode="OBJECT")
@@ -272,11 +274,19 @@ class UAI_OT_add_asset(bpy.types.Operator):
         obj = create_canvas_asset(context.collection, self.kind, center)
         for polygon in obj.data.polygons:
             polygon.select = True
-        for member in editing:
-            member.select_set(True)
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode="EDIT")
+        try:
+            for member in hidden:
+                member.hide_set(False)
+            for member in editing:
+                member.select_set(True)
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
+            bpy.ops.object.mode_set(mode="EDIT")
+        finally:
+            for member in editing:
+                member.select_set(False)
+            for member in hidden:
+                member.hide_set(True)
         return {"FINISHED"}
 
 
@@ -407,11 +417,11 @@ class UAI_PT_element(bpy.types.Panel):
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
     bl_context = "object"
-    bl_order = -10
+    bl_order = 1
 
     @classmethod
     def poll(cls, context):
-        return context.object and context.object.get("uai_kind") in CANVAS_ELEMENTS
+        return context.object and context.object.select_get() and context.object.get("uai_kind") in CANVAS_ELEMENTS
 
     def draw(self, context):
         obj = context.object
@@ -569,6 +579,8 @@ def setup():
     bpy.context.preferences.view.show_splash = False
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
+    bpy.context.view_layer.name = "Canvas"
+    bpy.context.scene.tool_settings.lock_object_mode = False
     for name, cy in (("Button", 0.5), ("Label", 0.72)):
         obj = create_canvas_asset(bpy.context.collection, name, (0.5, cy))
         obj.select_set(True)
@@ -606,11 +618,15 @@ def setup():
     region = next(r for r in area.regions if r.type == "WINDOW")
     with bpy.context.temp_override(area=area, region=region):
         bpy.ops.uv.select_all(action="DESELECT")
+        for member in bpy.context.objects_in_mode:
+            member.select_set(member == bpy.context.view_layer.objects.active)
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
     selector = runpy.run_path(str(Path(__file__).with_name("canvas_selector.py")), run_name="uai_canvas_selector")
     bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (selector["draw_canvas_text"],), "WINDOW", "POST_PIXEL")
     selector["register"](keyconfig, shape_outline)
+    sidebar = runpy.run_path(str(Path(__file__).with_name("canvas_sidebar.py")), run_name="uai_canvas_sidebar")
+    sidebar["configure"](bpy.context)
     bpy.ops.ed.undo_push(message="Button canvas")
 
 

@@ -16,6 +16,12 @@ Moving children into a vertical stack requires an explicit layout rule.
 Double-click a caption or label to edit the displayed text in place.
 Set the caret at the character boundary nearest the click.
 
+### Canvas sidebar
+
+The Blender demo uses its view layer as the Canvas root in the native Outliner.
+Show element parents and children, search, and visibility. Canvas and Outliner share selection.
+Object is the only Properties tab. Its Transform fields use canvas pixels, measured from the top left.
+
 ### Source editing
 
 A visual frontend studio where **real code is the source of truth**. Panels are
