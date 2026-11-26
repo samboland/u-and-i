@@ -4,6 +4,7 @@ from functools import lru_cache
 import math
 import sys
 import time
+import unicodedata
 
 import blf
 import bmesh
@@ -313,13 +314,35 @@ def draw_canvas_text(context, obj, corners, label):
         if edit and edit.anchor != edit.caret:
             left, right = sorted((layout.offset(edit.anchor), layout.offset(edit.caret)))
             color = context.preferences.themes[0].user_interface.wcol_text.item
-            text_rect(left, bottom, right, top, (*color[:3], 1))
+            previous_blend = gpu.state.blend_get()
+            gpu.state.blend_set("ALPHA")
+            text_rect(left, bottom, right, top, color)
+            gpu.state.blend_set(previous_blend)
         blf.position(0, -layout.width / 2, layout.baseline, 0)
         blf.color(0, 1, 1, 1, 1)
         blf.draw(0, text)
         if edit and (time.monotonic() - edit.blink_start) % 1 < .6:
             x = layout.offset(edit.caret)
             text_rect(x-.8, bottom, x+.8, top, (1,1,1,1))
+
+
+def word_bounds(text, index):
+    # Inkscape expands the caret to the previous word start and next word end.
+    starts, ends = [], []
+    inside = False
+    for i, char in enumerate(text):
+        category = unicodedata.category(char)
+        if char.isalnum():
+            if not inside:
+                starts.append(i)
+            inside = True
+        elif inside and not (category.startswith("M") or category == "Cf"):
+            ends.append(i)
+            inside = False
+    if inside:
+        ends.append(len(text))
+    return (next((i for i in reversed(starts) if i <= index), 0),
+            next((i for i in ends if i >= index), len(text)))
 
 
 class UAI_OT_edit_text(bpy.types.Operator):
@@ -339,6 +362,8 @@ class UAI_OT_edit_text(bpy.types.Operator):
         self.draft = self.original = self.element.get("uai_text", self.element.name)
         self.anchor = self.caret = self.pointer_index(context, event)
         self.dragging = False
+        self.last_click = None
+        self.drag_word = None
         self.history = []
         self.future = []
         self.blink_start = time.monotonic()
@@ -390,16 +415,33 @@ class UAI_OT_edit_text(bpy.types.Operator):
                 if not entry or not contains(context, entry, mouse):
                     return self.finish(context) | {"PASS_THROUGH"}
                 self.caret = self.pointer_index(context, event)
-                if not event.shift:
+                now = time.monotonic()
+                double = not event.shift and is_second_press(event, self.last_click, self.region_id, now, mouse)
+                self.last_click = None if double or event.shift else (self.region_id, now, mouse)
+                self.drag_word = word_bounds(self.draft, self.caret) if double else None
+                if self.drag_word is not None:
+                    self.anchor, self.caret = self.drag_word
+                elif not event.shift:
                     self.anchor = self.caret
                 self.dragging = True
         elif self.dragging and event.type == "MOUSEMOVE":
-            self.caret = self.pointer_index(context, event)
+            index = self.pointer_index(context, event)
+            if self.drag_word is None:
+                self.caret = index
+                if index != self.anchor:
+                    self.last_click = None
+            else:
+                start, end = self.drag_word
+                if index < start:
+                    self.anchor, self.caret = end, word_bounds(self.draft, index)[0]
+                else:
+                    self.anchor, self.caret = start, max(end, word_bounds(self.draft, index)[1])
         elif event.value != "PRESS":
             return {"RUNNING_MODAL"}
         elif event.type in {"RET", "NUMPAD_ENTER", "TAB"}:
             return self.finish(context)
         else:
+            self.last_click = None
             lo, hi = sorted((self.anchor, self.caret))
             shortcut = event.ctrl or event.oskey
             if shortcut and event.type == "A":
@@ -450,7 +492,10 @@ def is_second_press(event, previous, target, pressed_at, position):
     if previous is None or previous[0] != target:
         return False
     if sys.platform != "win32":
-        return event.value == "DOUBLE_CLICK"
+        prefs = bpy.context.preferences.inputs
+        return (event.value == "DOUBLE_CLICK" or
+                ((pressed_at - previous[1]) * 1000 < prefs.mouse_double_click_time
+                 and (position - previous[2]).length <= prefs.drag_threshold_mouse))
     # GTK's Windows backend reads these settings for the Inkscape Selector.
     from ctypes import windll
     user32 = windll.user32
