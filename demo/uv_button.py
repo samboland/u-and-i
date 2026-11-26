@@ -228,6 +228,59 @@ def select_image_uid(_, uid):
         space.image = next((image for image in bpy.data.images if image.session_uid == uid), None)
 
 
+def create_canvas_asset(collection, kind, center):
+    x, y = center
+    corners = [(x - 0.15, y - 0.06), (x + 0.15, y - 0.06),
+               (x + 0.15, y + 0.06), (x - 0.15, y + 0.06)]
+    mesh = bpy.data.meshes.new(kind)
+    mesh.from_pydata([(u, v, 0) for u, v in corners], [], [(0, 1, 2, 3)])
+    mesh.update()
+    layer = mesh.uv_layers.new()
+    for index, uv in enumerate(corners):
+        layer.uv[index].vector = uv
+    obj = bpy.data.objects.new(kind, mesh)
+    obj["uai_kind"] = kind
+    collection.objects.link(obj)
+    return obj
+
+
+class UAI_OT_add_asset(bpy.types.Operator):
+    bl_idname = "uai.add_asset"
+    bl_label = "Add Canvas Element"
+    bl_options = {"UNDO"}
+    kind: bpy.props.EnumProperty(items=[("Button", "Button", ""), ("Label", "Label", "")])
+
+    @classmethod
+    def poll(cls, context):
+        return (context.area and context.area.ui_type == "UV"
+                and context.scene.uai_canvas and context.space_data.image == context.scene.uai_canvas
+                and context.mode in {"OBJECT", "EDIT_MESH"})
+
+    def execute(self, context):
+        center = tuple(context.space_data.cursor_location)
+        editing = list(context.objects_in_mode) if context.mode == "EDIT_MESH" else []
+        if editing:
+            bpy.ops.mesh.select_all(action="DESELECT")
+            bpy.ops.object.mode_set(mode="OBJECT")
+        bpy.ops.object.select_all(action="DESELECT")
+        obj = create_canvas_asset(context.collection, self.kind, center)
+        for member in editing:
+            member.select_set(True)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        return {"FINISHED"}
+
+
+class UAI_MT_add_asset(bpy.types.Menu):
+    bl_label = "Add"
+    bl_options = {"SEARCH_ON_KEY_PRESS"}
+
+    def draw(self, context):
+        for kind in ("Button", "Label"):
+            self.layout.operator("uai.add_asset", text=kind).kind = kind
+
+
 class UAI_MT_canvas_menus(bpy.types.Menu):
     bl_label = ""
 
@@ -237,6 +290,7 @@ class UAI_MT_canvas_menus(bpy.types.Menu):
             self.layout.menu("IMAGE_MT_select")
         image = context.space_data.image
         self.layout.menu("IMAGE_MT_image", text="* Image" if image and image.is_dirty else "Image")
+        self.layout.menu("UAI_MT_add_asset")
 
 
 class CanvasHeaderLayout:
@@ -355,12 +409,13 @@ def draw_assets():
                 points = [view.view_to_region(*layer.uv[i].vector, clip=False)
                           for i in face.loop_indices]
                 indices = [tuple(i - face.loop_start for i in tri) for tri in triangles]
-                draw_face(points, indices, obj.name if len(mesh.polygons) == 1 else "")
+                draw_face(points, indices, obj.name if len(mesh.polygons) == 1 else "",
+                          filled=obj.get("uai_kind") != "Label")
         finally:
             evaluated.to_mesh_clear()
 
 
-def draw_face(points, indices, label):
+def draw_face(points, indices, label, filled):
     cx = sum(x for x, _ in points) / len(points)
     cy = sum(y for _, y in points) / len(points)
     # Leave Blender's selected edges and vertex handles visible.
@@ -368,12 +423,12 @@ def draw_face(points, indices, label):
     radius = max(1, max(abs(y - cy) for _, y in points))
     scale = max(0, 1 - 2 / radius)
     inset = [(cx + (x - cx) * scale, cy + (y - cy) * scale) for x, y in points]
-    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-    batch = batch_for_shader(shader, "TRIS", {"pos": inset},
-                             indices=indices)
-    shader.bind()
-    shader.uniform_float("color", (0.19, 0.32, 0.43, 1))
-    batch.draw(shader)
+    if filled:
+        shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+        batch = batch_for_shader(shader, "TRIS", {"pos": inset}, indices=indices)
+        shader.bind()
+        shader.uniform_float("color", (0.19, 0.32, 0.43, 1))
+        batch.draw(shader)
     blf.size(0, 16 * bpy.context.preferences.system.ui_scale)
     width, height = blf.dimensions(0, label)
     if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
@@ -403,6 +458,8 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 
 def setup():
+    bpy.utils.register_class(UAI_OT_add_asset)
+    bpy.utils.register_class(UAI_MT_add_asset)
     bpy.utils.register_class(UAI_MT_canvas_menus)
     bpy.types.WindowManager.uai_image_uid = bpy.props.IntProperty(
         get=selected_image_uid, set=select_image_uid, options={"SKIP_SAVE"})
@@ -430,16 +487,7 @@ def setup():
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete()
     for name, cy in (("Button", 0.5), ("Label", 0.72)):
-        mesh = bpy.data.meshes.new(name)
-        corners = [(0.35, cy - 0.06), (0.65, cy - 0.06),
-                   (0.65, cy + 0.06), (0.35, cy + 0.06)]
-        mesh.from_pydata([(x, y, 0) for x, y in corners], [], [(0, 1, 2, 3)])
-        mesh.update()
-        obj = bpy.data.objects.new(name, mesh)
-        bpy.context.collection.objects.link(obj)
-        layer = mesh.uv_layers.new()
-        for index, uv in enumerate(corners):
-            layer.uv[index].vector = uv
+        obj = create_canvas_asset(bpy.context.collection, name, (0.5, cy))
         obj.select_set(True)
     bpy.context.view_layer.objects.active = bpy.data.objects["Button"]
     bpy.ops.object.mode_set(mode="EDIT")
@@ -451,6 +499,7 @@ def setup():
     area.spaces.active.image = image
     bpy.context.scene.uai_canvas = image
     space = area.spaces.active
+    space.cursor_location = (0.5, 0.28)
     space.use_image_pin = True
     space.overlay.show_grid_background = True
     image.uai_grids.add().name = "Rectangular"
