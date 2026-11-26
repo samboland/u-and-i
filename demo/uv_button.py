@@ -126,10 +126,37 @@ def draw_button():
         blf.draw(0, "Button")
 
 
+class UAI_OT_canvas_wheel(bpy.types.Operator):
+    bl_idname = "uai.canvas_wheel"
+    bl_label = "Navigate Canvas"
+
+    @classmethod
+    def poll(cls, context):
+        return (context.area.ui_type == "UV" and context.scene.uai_grid.canvas is not None
+                and context.space_data.image == context.scene.uai_grid.canvas)
+
+    def invoke(self, context, event):
+        up = event.type == "WHEELUPMOUSE"
+        if event.ctrl:
+            zoom = bpy.ops.image.view_zoom_in if up else bpy.ops.image.view_zoom_out
+            return zoom("INVOKE_DEFAULT")
+        step = (40 if up else -40) * context.preferences.system.ui_scale
+        zoom_x, zoom_y = context.space_data.zoom
+        offset = (-step / zoom_x, 0) if event.shift else (0, step / zoom_y)
+        return bpy.ops.image.view_pan(offset=offset)
+
+
 def setup():
     bpy.utils.register_class(CanvasGrid)
     bpy.types.Scene.uai_grid = bpy.props.PointerProperty(type=CanvasGrid)
     bpy.utils.register_class(UAI_PT_canvas_grid)
+    bpy.utils.register_class(UAI_OT_canvas_wheel)
+    keyconfig = bpy.context.window_manager.keyconfigs.addon
+    if keyconfig:
+        keymap = keyconfig.keymaps.new(name="Image", space_type="IMAGE_EDITOR")
+        for wheel in ("WHEELUPMOUSE", "WHEELDOWNMOUSE"):
+            for modifiers in ({}, {"shift": True}, {"ctrl": True}):
+                keymap.keymap_items.new("uai.canvas_wheel", wheel, "PRESS", **modifiers)
     bpy.types.IMAGE_HT_header.prepend(grid_header)
     bpy.context.preferences.view.show_splash = False
     bpy.ops.object.select_all(action="SELECT")
