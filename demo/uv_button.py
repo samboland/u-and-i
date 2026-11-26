@@ -1,20 +1,12 @@
 """Open a disposable button in Blender's native UV editor."""
 
 import blf
-import bmesh
 import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 
 
 def button_corners(mesh):
-    if mesh.is_editmode:
-        edit_mesh = bmesh.from_edit_mesh(mesh)
-        layer = edit_mesh.loops.layers.uv.active
-        face = next(iter(edit_mesh.faces), None)
-        if face is None or layer is None:
-            return []
-        return [tuple(loop[layer].uv) for loop in face.loops]
     if not mesh.polygons or mesh.uv_layers.active is None:
         return []
     coords = mesh.uv_layers.active.uv
@@ -25,7 +17,13 @@ def draw_button():
     obj = bpy.context.edit_object
     if obj is None or obj.name != "Button" or bpy.context.area.ui_type != "UV":
         return
-    corners = button_corners(obj.data)
+    evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    # Read a snapshot while Blender's modal transform owns the edit mesh.
+    mesh = evaluated.to_mesh()
+    try:
+        corners = button_corners(mesh)
+    finally:
+        evaluated.to_mesh_clear()
     if len(corners) != 4:
         return
     view = bpy.context.region.view2d
@@ -83,6 +81,7 @@ def setup():
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
     bpy.types.SpaceImageEditor.draw_handler_add(draw_button, (), "WINDOW", "POST_PIXEL")
+    bpy.ops.ed.undo_push(message="Button canvas")
 
 
 setup()
