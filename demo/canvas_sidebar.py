@@ -94,6 +94,18 @@ def search_header(self, space, prop):
     layout.separator_spacer()
 
 
+def draw_object_tab(self, context):
+    # Match Blender's Properties navigation rail, including its tab padding.
+    layout = self.layout
+    layout.scale_x = layout.scale_y = 1.4
+    space = context.space_data
+    if space.search_filter:
+        layout.prop_tabs_enum(space, "context", icon_only=True,
+                              data_highlight=space, property_highlight="tab_search_results")
+    else:
+        layout.prop_tabs_enum(space, "context", icon_only=True)
+
+
 def sync_selection(scene, depsgraph):
     # Native Outliner actions change object selection. Native UV commands use faces.
     if not scene.uai_canvas or bpy.context.mode != "EDIT_MESH":
@@ -160,8 +172,7 @@ def configure(context):
     canvas_draw(properties_object.OBJECT_PT_transform, draw_transform)
     canvas_draw(OUTLINER_HT_header, lambda panel, ctx: search_header(panel, ctx.space_data, "filter_text"))
     canvas_draw(PROPERTIES_HT_header, lambda panel, ctx: search_header(panel, ctx.space_data, "search_filter"))
-    canvas_draw(PROPERTIES_PT_navigation_bar,
-                lambda panel, ctx: panel.layout.prop_tabs_enum(ctx.space_data, "context", icon_only=True))
+    canvas_draw(PROPERTIES_PT_navigation_bar, draw_object_tab)
     bpy.app.handlers.depsgraph_update_post.append(sync_selection)
     sync_selection(context.scene, None)
     configure_spaces()
