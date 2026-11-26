@@ -2,6 +2,8 @@
 
 from functools import lru_cache
 import math
+import sys
+import time
 
 import bmesh
 import bpy
@@ -248,17 +250,63 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
             context.region.tag_redraw()
 
 
+class UAI_OT_edit_text(bpy.types.Operator):
+    bl_idname = "uai.edit_text"
+    bl_label = "Edit Text"
+    bl_options = {"UNDO"}
+
+    text: bpy.props.StringProperty(name="Text", options={"SKIP_SAVE"})
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.view_layer.objects.active
+        return is_canvas(context) and obj and obj.get("uai_kind") in {"Button", "Label"}
+
+    def invoke(self, context, event):
+        self.element = context.view_layer.objects.active
+        self.text = self.element.get("uai_text", self.element.name)
+        return context.window_manager.invoke_props_dialog(self, width=240)
+
+    def draw(self, context):
+        row = self.layout.row()
+        row.activate_init = True
+        row.prop(self, "text", text="")
+
+    def execute(self, context):
+        self.element.uai_caption = self.text
+        return {"FINISHED"}
+
+
+def is_second_press(event, previous, target, pressed_at, position):
+    if previous is None or previous[0] != target:
+        return False
+    if sys.platform != "win32":
+        return event.value == "DOUBLE_CLICK"
+    # GTK's Windows backend reads these settings for the Inkscape Selector.
+    from ctypes import windll
+    user32 = windll.user32
+    distance = max(user32.GetSystemMetrics(36), user32.GetSystemMetrics(37))
+    offset = position - previous[2]
+    return ((pressed_at - previous[1]) * 1000 < user32.GetDoubleClickTime()
+            and max(abs(offset.x), abs(offset.y)) <= distance)
+
+
 class UAI_OT_select(bpy.types.Operator):
     bl_idname = "uai.select_element"
     bl_label = "Transform Canvas Selection"
     bl_options = {"UNDO", "BLOCKING"}
     turn_selection = ()
+    last_body_click = None
 
     @classmethod
     def poll(cls, context):
         return is_canvas(context)
 
     def invoke(self, context, event):
+        previous_click = type(self).last_body_click
+        type(self).last_body_click = None
+        self.body_target = None
+        self.pressed_at = time.monotonic()
         self.press = Vector((event.mouse_region_x, event.mouse_region_y))
         # Blender can dispatch to the previous hover target before the next redraw.
         targets = handle_positions(context, selection(context))
@@ -276,6 +324,18 @@ class UAI_OT_select(bpy.types.Operator):
             order = {obj.session_uid: i for i, obj in enumerate(context.visible_objects)}
             items.sort(key=lambda item: order[item[0].session_uid], reverse=True)
             hit = next((item for item in items if contains(context, item, self.press)), None)
+            if hit and not (event.ctrl or event.shift):
+                obj = hit[0]
+                self.body_target = (context.region.as_pointer(), obj.session_uid)
+                if hit[1].select and is_second_press(event, previous_click, self.body_target,
+                                                      self.pressed_at, self.press):
+                    type(self).turn_selection = previous_click[3]
+                    context.view_layer.objects.active = obj
+                    if obj.get("uai_kind") in {"Button", "Label"}:
+                        bpy.ops.uai.edit_text("INVOKE_DEFAULT")
+                    else:
+                        bpy.ops.wm.call_panel(name="UAI_PT_element", keep_open=True)
+                    return {"FINISHED"}
             self.toggle = bool(hit and hit[1].select and not event.shift)
             if not self.toggle:
                 type(self).turn_selection = ()
@@ -307,6 +367,9 @@ class UAI_OT_select(bpy.types.Operator):
             context.area.tag_redraw()
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            if self.body_target and not self.dragged:
+                type(self).last_body_click = (self.body_target, self.pressed_at, self.press,
+                                              self.turn_selection)
             if self.toggle and not self.dragged:
                 type(self).turn_selection = () if self.turn_selection == self.ids else self.ids
             context.area.tag_redraw()
@@ -398,6 +461,7 @@ class UAI_OT_select(bpy.types.Operator):
 def register(keyconfig, outline):
     global canvas_outline
     canvas_outline = outline
+    bpy.utils.register_class(UAI_OT_edit_text)
     bpy.utils.register_class(UAI_OT_select)
     bpy.utils.register_class(UAI_GGT_selector)
     bpy.types.SpaceImageEditor.draw_handler_add(draw_bounds, (), "WINDOW", "POST_PIXEL")
@@ -406,3 +470,4 @@ def register(keyconfig, outline):
         for shift in (False, True):
             for ctrl in (False, True):
                 km.keymap_items.new("uai.select_element", "LEFTMOUSE", "PRESS", shift=shift, ctrl=ctrl, head=True)
+        km.keymap_items.new("uai.select_element", "LEFTMOUSE", "DOUBLE_CLICK", head=True)
