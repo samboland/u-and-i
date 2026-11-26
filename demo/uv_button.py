@@ -217,6 +217,33 @@ def draw_guides(self, context):
 stock_header = IMAGE_HT_header.draw
 
 
+class UAI_OT_pick_image(bpy.types.Operator):
+    bl_idname = "uai.pick_image"
+    bl_label = "Browse Images"
+    bl_options = {"UNDO", "INTERNAL"}
+
+    # Blender borrows the strings from a dynamic enum while its menu is open.
+    _items = []
+
+    def image_items(self, context):
+        items = [(str(image.session_uid), image.name, "",
+                  image.preview.icon_id if image.preview else "IMAGE_DATA", image.session_uid)
+                 for image in bpy.data.images]
+        if items != UAI_OT_pick_image._items:
+            UAI_OT_pick_image._items = items
+        return UAI_OT_pick_image._items
+
+    image: bpy.props.EnumProperty(items=image_items)
+
+    def execute(self, context):
+        uid = self.properties.get("image")
+        image = next((item for item in bpy.data.images if item.session_uid == uid), None)
+        if image is None:
+            return {"CANCELLED"}
+        context.space_data.image = image
+        return {"FINISHED"}
+
+
 class CanvasHeaderLayout:
     def __init__(self, layout):
         self.layout = layout
@@ -232,8 +259,16 @@ class CanvasHeaderLayout:
         if property_name != "image":
             return self.layout.template_ID(data, property_name, **options)
         row = self.layout.row(align=True)
-        row.template_search(data, "image", bpy.data, "images")
+        picker = row.operator_menu_enum("uai.pick_image", "image", text="", icon="IMAGE_DATA")
         image = data.image
+        if image:
+            picker.image = str(image.session_uid)
+            field = row.row(align=True)
+            prefs = bpy.context.preferences
+            blf.size(0, prefs.ui_styles[0].widget.points)
+            width, _ = blf.dimensions(0, image.name)
+            field.ui_units_x = min(16, max(4, width / 20 + 0.75))
+            field.prop(image, "name", text="")
         row.operator("image.new", text="" if image else "New", icon="DUPLICATE" if image else "ADD")
         if image and image.packed_file:
             unpack = row.operator("file.unpack_item", text="", icon="PACKAGE")
@@ -347,6 +382,7 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 
 def setup():
+    bpy.utils.register_class(UAI_OT_pick_image)
     for cls in (UAI_Grid, UAI_OT_add_grid, UAI_MT_add_grid, UAI_OT_remove_grid, UAI_OT_move_grid, UAI_MT_grid_actions):
         bpy.utils.register_class(cls)
     bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
