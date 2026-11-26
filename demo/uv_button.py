@@ -476,7 +476,8 @@ def draw_assets():
                 if len(mesh.polygons) == 1 and obj.get("uai_kind") in {"Button", "Label"}:
                     if "uai_text" in obj:
                         label = obj.uai_caption
-                        font_size = 16 * context.space_data.zoom[1]
+                        if obj.get("uai_kind") == "Label":
+                            font_size = 16 * context.space_data.zoom[1]
                     elif obj.get("uai_kind") == "Button":
                         label = obj.name
                 draw_face(points, indices, label, kind, font_size)
