@@ -2,10 +2,11 @@
 
 import blf
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 import gpu
 import math
 import os
+import runpy
 from pathlib import Path
 import numpy as np
 from types import SimpleNamespace
@@ -269,6 +270,8 @@ class UAI_OT_add_asset(bpy.types.Operator):
             bpy.ops.object.mode_set(mode="OBJECT")
         bpy.ops.object.select_all(action="DESELECT")
         obj = create_canvas_asset(context.collection, self.kind, center)
+        for polygon in obj.data.polygons:
+            polygon.select = True
         for member in editing:
             member.select_set(True)
         obj.select_set(True)
@@ -305,6 +308,10 @@ class CanvasHeaderLayout:
 
     def __getattr__(self, name):
         return getattr(self.layout, name)
+
+    def template_edit_mode_selection(self):
+        # The canvas selects whole elements.
+        pass
 
     def row(self, **options):
         return CanvasHeaderLayout(self.layout.row(**options))
@@ -364,7 +371,8 @@ class CanvasHeaderLayout:
 
 
 def draw_header(self, context):
-    if context.area.ui_type == "UV" and context.scene.uai_canvas:
+    if (context.area.ui_type == "UV" and context.scene.uai_canvas
+            and context.space_data.image == context.scene.uai_canvas):
         return stock_header(SimpleNamespace(layout=CanvasHeaderLayout(self.layout)), context)
     return stock_header(self, context)
 
@@ -511,10 +519,20 @@ def draw_face(points, indices, label, kind):
         return
     blf.size(0, 16 * bpy.context.space_data.zoom[1])
     width, height = blf.dimensions(0, label)
-    if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
-        blf.position(0, cx - width / 2, cy - height / 2, 0)
-        blf.color(0, 1, 1, 1, 1)
-        blf.draw(0, label)
+    if len(points) == 4:
+        axis_x = Vector(points[1]) - Vector(points[0])
+        axis_y = Vector(points[3]) - Vector(points[0])
+        if axis_x.length <= width + 8 or axis_y.length < 1:
+            return
+        axis_x.normalize()
+        axis_y.normalize()
+        basis = Matrix(((axis_x.x, axis_y.x, 0, cx), (axis_x.y, axis_y.y, 0, cy),
+                        (0, 0, 1, 0), (0, 0, 0, 1)))
+        with gpu.matrix.push_pop():
+            gpu.matrix.multiply_matrix(basis)
+            blf.position(0, -width / 2, -height / 2, 0)
+            blf.color(0, 1, 1, 1, 1)
+            blf.draw(0, label)
 
 
 class UAI_OT_canvas_wheel(bpy.types.Operator):
@@ -589,6 +607,7 @@ def setup():
     space.cursor_location = (0.5, 0.28)
     space.use_image_pin = True
     space.uv_editor.show_faces = False
+    space.uv_editor.show_uv = False
     space.overlay.show_grid_background = True
     image.uai_grids.add().name = "Rectangular"
     sync_grid(image, bpy.context)
@@ -600,7 +619,7 @@ def setup():
     bpy.context.scene.tool_settings.snap_uv_element = {"GRID"}
     bpy.context.scene.tool_settings.use_snap_uv = False
     enforce_canvas_sync()
-    bpy.context.scene.tool_settings.mesh_select_mode = (False, True, False)
+    bpy.context.scene.tool_settings.mesh_select_mode = (False, False, True)
     IMAGE_HT_header.draw = draw_header
     bpy.msgbus.subscribe_rna(key=(bpy.types.ToolSettings, "use_uv_select_sync"),
                              owner=enforce_canvas_sync, args=(), notify=enforce_canvas_sync)
@@ -612,6 +631,8 @@ def setup():
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
     bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (), "WINDOW", "POST_PIXEL")
+    selector = runpy.run_path(str(Path(__file__).with_name("canvas_selector.py")), run_name="uai_canvas_selector")
+    selector["register"](keyconfig, shape_outline)
     bpy.ops.ed.undo_push(message="Button canvas")
 
 
