@@ -3,10 +3,108 @@
 import blf
 import bpy
 import gpu
+from bl_ui.space_image import IMAGE_PT_overlay_guides
 from gpu_extras.batch import batch_for_shader
 
 CANVAS_WIDTH = 640
 CANVAS_HEIGHT = 400
+
+
+def spacing_choices(size):
+    return [(str(n), f"{n} px", "") for n in range(1, size + 1) if size % n == 0]
+
+
+def sync_grid(image, context):
+    # The native UV viewport has one fixed grid. Preview the last visible entry.
+    grid = next((item for item in reversed(list(image.uai_grids)) if item.visible), None)
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            space = area.spaces.active
+            if area.ui_type == "UV" and space.image == image:
+                uv = space.uv_editor
+                uv.show_grid_over_image = grid is not None
+                if grid:
+                    width, height = image.size
+                    uv.grid_shape_source = "FIXED"
+                    uv.custom_grid_subdivisions = (width // int(grid.x), height // int(grid.y))
+                area.tag_redraw()
+
+
+def grid_changed(self, context):
+    sync_grid(self.id_data, context)
+
+
+class UAI_Grid(bpy.types.PropertyGroup):
+    expanded: bpy.props.BoolProperty(default=True)
+    visible: bpy.props.BoolProperty(name="Visible", default=True, update=grid_changed)
+    x: bpy.props.EnumProperty(name="Spacing X", items=spacing_choices(CANVAS_WIDTH),
+                              default="8", update=grid_changed)
+    y: bpy.props.EnumProperty(name="Spacing Y", items=spacing_choices(CANVAS_HEIGHT),
+                              default="8", update=grid_changed)
+
+
+class UAI_OT_add_grid(bpy.types.Operator):
+    bl_idname = "uai.add_grid"
+    bl_label = "Add Grid"
+    bl_options = {"UNDO"}
+
+    def execute(self, context):
+        image = context.space_data.image
+        grids = image.uai_grids
+        number = 2
+        name = "Rectangular"
+        while name in grids:
+            name = f"Rectangular {number}"
+            number += 1
+        grids.add().name = name
+        sync_grid(image, context)
+        return {"FINISHED"}
+
+
+class UAI_OT_remove_grid(bpy.types.Operator):
+    bl_idname = "uai.remove_grid"
+    bl_label = "Remove Grid"
+    bl_options = {"UNDO"}
+    index: bpy.props.IntProperty()
+
+    def execute(self, context):
+        image = context.space_data.image
+        if not 0 <= self.index < len(image.uai_grids):
+            return {"CANCELLED"}
+        image.uai_grids.remove(self.index)
+        sync_grid(image, context)
+        return {"FINISHED"}
+
+
+stock_guides = IMAGE_PT_overlay_guides.draw
+
+
+def draw_guides(self, context):
+    space = context.space_data
+    image = space.image
+    if image is None or image != context.scene.uai_canvas or context.area.ui_type != "UV":
+        return stock_guides(self, context)
+    layout = self.layout
+    layout.active = space.overlay.show_overlays
+    layout.prop(space.overlay, "show_grid_background", text="Grids")
+    layout.operator("uai.add_grid", icon="ADD")
+    for index, grid in enumerate(image.uai_grids):
+        layout.separator(factor=0.5)
+        box = layout.box()
+        header = box.row(align=True)
+        header.prop(grid, "expanded", text="", emboss=False,
+                    icon="TRIA_DOWN" if grid.expanded else "TRIA_RIGHT")
+        header.prop(grid, "name", text="")
+        header.prop(grid, "visible", text="", emboss=False,
+                    icon="HIDE_OFF" if grid.visible else "HIDE_ON")
+        header.operator("uai.remove_grid", text="", icon="X", emboss=False).index = index
+        if grid.expanded:
+            box.separator(factor=0.5)
+            fields = box.column(align=True)
+            fields.use_property_split = True
+            fields.use_property_decorate = False
+            fields.prop(grid, "x")
+            fields.prop(grid, "y")
 
 
 def button_corners(mesh):
@@ -73,6 +171,10 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 
 def setup():
+    for cls in (UAI_Grid, UAI_OT_add_grid, UAI_OT_remove_grid):
+        bpy.utils.register_class(cls)
+    bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
+    IMAGE_PT_overlay_guides.draw = draw_guides
     bpy.types.Scene.uai_canvas = bpy.props.PointerProperty(type=bpy.types.Image)
     bpy.utils.register_class(UAI_OT_canvas_wheel)
     keyconfig = bpy.context.window_manager.keyconfigs.addon
@@ -108,9 +210,8 @@ def setup():
     bpy.context.scene.uai_canvas = image
     space = area.spaces.active
     space.overlay.show_grid_background = True
-    space.uv_editor.show_grid_over_image = True
-    space.uv_editor.grid_shape_source = "FIXED"
-    space.uv_editor.custom_grid_subdivisions = (CANVAS_WIDTH // 8, CANVAS_HEIGHT // 8)
+    image.uai_grids.add().name = "Rectangular"
+    sync_grid(image, bpy.context)
     bpy.context.scene.tool_settings.snap_uv_element = {"GRID"}
     bpy.context.scene.tool_settings.use_snap_uv = False
     bpy.context.scene.tool_settings.use_uv_select_sync = False
