@@ -228,10 +228,29 @@ class CanvasHeaderLayout:
         if property_name != "use_uv_select_sync":
             return self.layout.prop(data, property_name, **options)
 
+    def template_ID(self, data, property_name, **options):
+        if property_name != "image":
+            return self.layout.template_ID(data, property_name, **options)
+        row = self.layout.row(align=True)
+        row.prop(data, "image", text="", icon="IMAGE_DATA", icon_only=True)
+        image = data.image
+        if image:
+            row.prop(image, "name", text="")
+        row.operator("image.new", text="" if image else "New", icon="DUPLICATE" if image else "ADD")
+        if image and image.packed_file:
+            unpack = row.operator("file.unpack_item", text="", icon="PACKAGE")
+            unpack.id_type = "IMAGE"
+            unpack.id_name = image.name
+        else:
+            row.operator("image.open", text="" if image else "Open", icon="FILEBROWSER")
+        if image:
+            unlink = row.operator("wm.context_set_id", text="", icon="X")
+            unlink.data_path = "space_data.image"
+            unlink.value = ""
+
 
 def draw_header(self, context):
-    if (context.area.ui_type == "UV" and context.scene.uai_canvas
-            and context.space_data.image == context.scene.uai_canvas):
+    if context.area.ui_type == "UV" and context.scene.uai_canvas:
         return stock_header(SimpleNamespace(layout=CanvasHeaderLayout(self.layout)), context)
     return stock_header(self, context)
 
@@ -240,6 +259,18 @@ def enforce_canvas_sync(*_):
     scene = bpy.context.scene
     if scene and scene.uai_canvas and not scene.tool_settings.use_uv_select_sync:
         scene.tool_settings.use_uv_select_sync = True
+
+
+@bpy.app.handlers.persistent
+def retain_canvas_images(*_):
+    if not any(scene.uai_canvas for scene in bpy.data.scenes):
+        return
+    for image in bpy.data.images:
+        if image.library or image.source not in {"FILE", "GENERATED"}:
+            continue
+        image.use_fake_user = True
+        if image.is_dirty and image.has_data:
+            image.pack()
 
 
 def draw_assets():
@@ -323,6 +354,7 @@ def setup():
     bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
     IMAGE_PT_overlay_guides.draw = draw_guides
     bpy.types.Scene.uai_canvas = bpy.props.PointerProperty(type=bpy.types.Image)
+    bpy.app.handlers.save_pre.append(retain_canvas_images)
     bpy.utils.register_class(UAI_OT_canvas_wheel)
     keyconfig = bpy.context.window_manager.keyconfigs.addon
     if keyconfig:
