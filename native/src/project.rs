@@ -79,6 +79,7 @@ struct Project {
 }
 #[derive(Deserialize)]
 pub struct Live {
+    #[cfg(all(windows, feature = "legacy-canvas"))]
     pub origin: String,
     pub upstream: String,
 }

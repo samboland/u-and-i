@@ -175,6 +175,10 @@ impl Editor {
         }
         let modifiers = ui.input(|i| i.modifiers);
         let pressed = |key| ui.input_mut(|i| i.consume_key(modifiers, key));
+        if owner == Some(Panel::Canvas) && !cfg!(all(windows, feature = "legacy-canvas")) {
+            self.canvas_shortcuts(ui);
+            return;
+        }
         if modifiers.command && pressed(Key::Z) {
             self.restore(modifiers.shift);
         } else if matches!(
@@ -192,16 +196,22 @@ impl Editor {
             } else if pressed(Key::F2) {
                 self.begin_text();
             } else if owner == Some(Panel::Canvas) {
-                if modifiers.is_none() && pressed(Key::Tab) {
-                    self.interact = !self.interact;
-                } else if modifiers.command && pressed(Key::Minus) {
-                    self.zoom_by(false);
-                } else if modifiers.command && (pressed(Key::Equals) || pressed(Key::Plus)) {
-                    self.zoom_by(true);
-                } else if modifiers.command && pressed(Key::Num0) {
-                    self.zoom = DEVICES[self.device].2;
-                }
+                self.canvas_shortcuts(ui);
             }
+        }
+    }
+    fn canvas_shortcuts(&mut self, ui: &egui::Ui) {
+        use egui::Key;
+        let modifiers = ui.input(|i| i.modifiers);
+        let pressed = |key| ui.input_mut(|i| i.consume_key(modifiers, key));
+        if modifiers.is_none() && pressed(Key::Tab) {
+            self.interact = !self.interact;
+        } else if modifiers.command && pressed(Key::Minus) {
+            self.zoom_by(false);
+        } else if modifiers.command && (pressed(Key::Equals) || pressed(Key::Plus)) {
+            self.zoom_by(true);
+        } else if modifiers.command && pressed(Key::Num0) {
+            self.zoom = DEVICES[self.device].2;
         }
     }
     pub fn walk(&mut self, key: &str, recursive: bool) {
@@ -276,7 +286,13 @@ impl Editor {
                 ui.close();
             }
         }
-        if shortcut_item(ui, self.focus().is_some_and(|n| n.can.text), "Edit text", "F2") {
+        if shortcut_item(
+            ui,
+            cfg!(all(windows, feature = "legacy-canvas"))
+                && self.focus().is_some_and(|n| n.can.text),
+            "Edit text",
+            "F2",
+        ) {
             self.begin_text();
             ui.close();
         }
@@ -359,7 +375,13 @@ impl Editor {
                 ui.close();
             }
         }
-        if ui.button("Reload canvas").clicked() {
+        if ui
+            .add_enabled(
+                cfg!(all(windows, feature = "legacy-canvas")),
+                egui::Button::new("Reload canvas"),
+            )
+            .clicked()
+        {
             self.reload = true;
             ui.close();
         }
@@ -715,6 +737,7 @@ impl Editor {
                 .show(ui.ctx(), |ui| {
                     for s in [
                         "Tab    Edit / View",
+                        #[cfg(all(windows, feature = "legacy-canvas"))]
                         "F2    Edit text",
                         "Ctrl+D    Duplicate",
                         "Delete    Delete element",

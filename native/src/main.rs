@@ -1,5 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-#[cfg(windows)]
+#[cfg(all(windows, feature = "legacy-canvas"))]
 mod canvas;
 mod chrome;
 mod daemon;
@@ -55,10 +55,12 @@ struct Editor {
     dock_preview: Option<egui::Rect>,
     states: HashMap<u64, (String, bool)>,
     canvas_views: HashMap<u64, egui::Rect>,
+    #[cfg(all(windows, feature = "legacy-canvas"))]
     landed: HashMap<u64, String>,
     extra_paths: HashMap<u64, (String, String)>,
     collapsed: std::collections::HashSet<String>,
     visible_nodes: Vec<usize>,
+    #[cfg(all(windows, feature = "legacy-canvas"))]
     stage: egui::Vec2,
     context: Option<egui::Pos2>,
     shell: Value,
@@ -79,9 +81,9 @@ struct Editor {
     draft: String,
     canvas_rect: egui::Rect,
     reload: bool,
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "legacy-canvas"))]
     web: HashMap<u64, canvas::Canvas>,
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "legacy-canvas"))]
     web_error: Option<String>,
 }
 
@@ -146,10 +148,12 @@ impl Editor {
             dock_preview: None,
             states: HashMap::new(),
             canvas_views: HashMap::new(),
+            #[cfg(all(windows, feature = "legacy-canvas"))]
             landed: HashMap::new(),
             extra_paths: HashMap::new(),
             collapsed: Default::default(),
             visible_nodes: vec![],
+            #[cfg(all(windows, feature = "legacy-canvas"))]
             stage: egui::Vec2::ZERO,
             context: None,
             shell: Value::Null,
@@ -170,9 +174,9 @@ impl Editor {
             draft: "/".into(),
             canvas_rect: egui::Rect::NOTHING,
             reload: false,
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "legacy-canvas"))]
             web: HashMap::new(),
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "legacy-canvas"))]
             web_error: None,
         };
         editor.resume_session(ctx);
@@ -524,9 +528,15 @@ impl Editor {
                     *path = format!("/{}", draft.trim_start_matches('/'));
                     *draft = path.clone();
                 }
-                if ui.button("Reload").clicked() {
+                if ui
+                    .add_enabled(
+                        cfg!(all(windows, feature = "legacy-canvas")),
+                        egui::Button::new("Reload"),
+                    )
+                    .clicked()
+                {
                     self.reload = true;
-                    #[cfg(windows)]
+                    #[cfg(all(windows, feature = "legacy-canvas"))]
                     {
                         self.web_error = None;
                     }
@@ -543,6 +553,7 @@ impl Editor {
                 }
             });
             ui.separator();
+            #[cfg(all(windows, feature = "legacy-canvas"))]
             if let Some(landed) = self.landed.get(&id)
                 && landed
                     != self
@@ -554,7 +565,7 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.weak(format!("Redirect: {landed}"));
                     if ui.button("Sign in…").clicked() {
-                        #[cfg(windows)]
+                        #[cfg(all(windows, feature = "legacy-canvas"))]
                         if let Some(view) = self.web.get(&id) {
                             view.sign_in();
                         }
@@ -564,26 +575,35 @@ impl Editor {
         } else if self.rulers {
             self.draw_ruler(ui);
         }
+        let has_route = component && self.route.is_some();
+        if has_route
+            && let Some((_, files, _)) = &self.route
+            && let Some((_, file)) = files.iter().find(|(kind, _)| kind == "page")
+            && ui.button("Open page source").clicked()
+        {
+            self.open(file.clone());
+        }
         self.canvas_rect = ui.available_rect_before_wrap();
-        if component && self.route.is_some() {
-            if let Some((_, files, _)) = &self.route
-                && let Some(file) = files.iter().find(|(kind, _)| kind == "page").map(|(_, f)| f.clone())
-                && ui.button("Open page source").clicked() {
-                self.open(file);
+        #[cfg(all(windows, feature = "legacy-canvas"))]
+        {
+            if let Some(err) = &self.web_error {
+                ui.colored_label(egui::Color32::LIGHT_RED, err);
             }
-        } else if component && self.file.is_some() && !self.renderable {
-            ui.weak("Server component").on_hover_text("Inspect source in the Outliner");
-        } else {
-            self.canvas_views.insert(id, self.canvas_rect);
-            #[cfg(windows)]
+            if has_route {
+                return;
+            }
+            if component && self.file.is_some() && !self.renderable {
+                ui.weak("Server component")
+                    .on_hover_text("Inspect source in the Outliner");
+                return;
+            }
             if let Some(view) = self.web.get_mut(&id) {
                 view.paint_snapshot(ui, self.canvas_rect);
             }
         }
-        #[cfg(windows)]
-        if let Some(err) = &self.web_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, err);
-        }
+        #[cfg(not(all(windows, feature = "legacy-canvas")))]
+        ui.painter().rect_filled(self.canvas_rect, 0., VOID);
+        self.canvas_views.insert(id, self.canvas_rect);
     }
 }
 fn route_tree<'a>(ui: &mut egui::Ui, node: &'a Route, id: &str) -> Option<&'a Route> {
@@ -751,6 +771,7 @@ impl eframe::App for Editor {
                 self.topbar.caption,
                 self.input_blocked(ui) || self.drag.is_some() || ui.ctx().dragged_id().is_some(),
             );
+            #[cfg(all(windows, feature = "legacy-canvas"))]
             self.update_canvases(ui, frame);
         }
     }
@@ -1027,7 +1048,7 @@ impl Drop for Editor {
         self.persist();
     }
 }
-#[cfg(not(windows))]
+#[cfg(not(all(windows, feature = "legacy-canvas")))]
 impl Editor {
     fn begin_text(&self) {}
 }
