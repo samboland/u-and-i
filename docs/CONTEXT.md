@@ -5,6 +5,14 @@ misunderstanding that previously leaked into this repo's fixtures and demos.
 
 ## What u-and-i is
 
+### Canvas layout grids
+
+Each element has an internal grid that responds to the space its parent gives it.
+When a row narrows, its children can shrink within their sizing rules or overflow.
+Moving children into a vertical stack requires an explicit layout rule.
+
+### Source editing
+
 A visual frontend studio where **real code is the source of truth**. Panels are
 HTML/CSS in an Electron shell (VS Code/Figma architecture); the canvas renders
 the user's actual React components through Vite. Edits land in source files as
