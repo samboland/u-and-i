@@ -290,11 +290,7 @@ impl Editor {
             self.pane_button(ui, id, Panel::Insert);
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text(if self.file.is_some() {
-                        "Search components"
-                    } else {
-                        "open a file first"
-                    })
+                    .hint_text("Search components")
                     .desired_width(f32::INFINITY),
             );
         });
@@ -303,10 +299,7 @@ impl Editor {
         egui::ScrollArea::vertical()
                     .id_salt("library")
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.strong("Primitives");
-                            ui.weak("plain html");
-                        });
+                        ui.strong("HTML elements");
                         let half = (ui.available_width() - 4.) * 0.5;
                         let mut insert=None;
                         for pair in self.primitives["PRIMITIVES"].as_array().unwrap().chunks(2){
@@ -387,13 +380,11 @@ impl Editor {
                             self.selected = None;
                         }
                     }
-                } else if self.file.is_none() {
-                    ui.weak("No file open.");
-                } else {
+                } else if let Some(file) = &self.file {
                     if ui
                         .selectable_label(
                             self.selected.is_none(),
-                            self.file.as_deref().unwrap_or("Sample props"),
+                            file.as_str(),
                         )
                         .on_hover_text("Sample props")
                         .clicked()
@@ -430,7 +421,7 @@ impl Editor {
                     if self.file.is_some() {
                         "Sample props".into()
                     } else {
-                        "Nothing open".into()
+                        "Properties".into()
                     }
                 });
             ui.strong(name);
@@ -445,8 +436,7 @@ impl Editor {
                             if let Some(op)=edit::inspector(ui,node,&mut self.editing.drafts){self.edit(op);}
                             if let Some(f)=source && ui.button("Open component source").clicked(){self.open(f);}
                             ui.separator();ui.strong("Placement");ui.horizontal_wrapped(|ui|{for label in ["Move up","Move down","Duplicate","Delete"]{if ui.add_enabled(structural,egui::Button::new(label)).clicked(){self.structural(label);}}});
-                        } else if let Some((url, files, layouts)) = &self.route {
-                            ui.strong(url);
+                        } else if let Some((_, files, layouts)) = &self.route {
                             let mut open = None;
                             for (kind, f) in files {
                                 if ui.link(format!("{kind} · {f}")).clicked() {
@@ -465,7 +455,8 @@ impl Editor {
                                 self.open(f)
                             }
                         } else if self.file.is_some(){
-                            ui.strong("Sample props");for spec in &self.specs{let name=studio::string(spec,"name");ui.label(name);
+                            for spec in &self.specs{let name=studio::string(spec,"name");
+                                if studio::string(&spec["control"],"kind") != "boolean" {ui.label(name);}
                                 match studio::string(&spec["control"],"kind"){
                                     "boolean"=>{let mut v=self.samples[name].as_bool().unwrap_or(false);if ui.checkbox(&mut v,name).changed(){self.samples[name]=json!(v);}},
                                     "number"=>{let mut v=self.samples[name].as_f64().unwrap_or_default();if ui.add(egui::DragValue::new(&mut v)).changed(){self.samples[name]=json!(v);}},
@@ -474,8 +465,6 @@ impl Editor {
                                     _=>{ui.weak(studio::string(spec,"typeText"));}
                                 }
                             }
-                        } else {
-                            ui.weak("Nothing open. The Routes tree shows the app’s structure; Insert lists its components.");
                         }
                     });
     }
@@ -563,7 +552,7 @@ impl Editor {
                         .unwrap_or(&self.path)
             {
                 ui.horizontal(|ui| {
-                    ui.weak(format!("The app sent us to {landed}"));
+                    ui.weak(format!("Redirect: {landed}"));
                     if ui.button("Sign in…").clicked() {
                         #[cfg(windows)]
                         if let Some(view) = self.web.get(&id) {
@@ -577,9 +566,13 @@ impl Editor {
         }
         self.canvas_rect = ui.available_rect_before_wrap();
         if component && self.route.is_some() {
-            ui.weak("Open the page’s view or its code from Properties.");
+            if let Some((_, files, _)) = &self.route
+                && let Some(file) = files.iter().find(|(kind, _)| kind == "page").map(|(_, f)| f.clone())
+                && ui.button("Open page source").clicked() {
+                self.open(file);
+            }
         } else if component && self.file.is_some() && !self.renderable {
-            ui.weak("Server component. Use the Outliner to inspect its source.");
+            ui.weak("Server component").on_hover_text("Inspect source in the Outliner");
         } else {
             self.canvas_views.insert(id, self.canvas_rect);
             #[cfg(windows)]
