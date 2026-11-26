@@ -1,0 +1,88 @@
+"""Open a disposable button in Blender's native UV editor."""
+
+import blf
+import bmesh
+import bpy
+import gpu
+from gpu_extras.batch import batch_for_shader
+
+
+def button_corners(mesh):
+    if mesh.is_editmode:
+        edit_mesh = bmesh.from_edit_mesh(mesh)
+        layer = edit_mesh.loops.layers.uv.active
+        face = next(iter(edit_mesh.faces), None)
+        if face is None or layer is None:
+            return []
+        return [tuple(loop[layer].uv) for loop in face.loops]
+    if not mesh.polygons or mesh.uv_layers.active is None:
+        return []
+    coords = mesh.uv_layers.active.uv
+    return [tuple(coords[i].vector) for i in mesh.polygons[0].loop_indices]
+
+
+def draw_button():
+    obj = bpy.context.edit_object
+    if obj is None or obj.name != "Button" or bpy.context.area.ui_type != "UV":
+        return
+    corners = button_corners(obj.data)
+    if len(corners) != 4:
+        return
+    view = bpy.context.region.view2d
+    points = [view.view_to_region(x, y, clip=False) for x, y in corners]
+    cx = sum(x for x, _ in points) / 4
+    cy = sum(y for _, y in points) / 4
+    # Leave Blender's selected edges and vertex handles visible.
+    # Use a uniform scale so rotated and skewed edges stay parallel.
+    radius = max(1, max(abs(y - cy) for _, y in points))
+    scale = max(0, 1 - 2 / radius)
+    inset = [(cx + (x - cx) * scale, cy + (y - cy) * scale) for x, y in points]
+    shader = gpu.shader.from_builtin("UNIFORM_COLOR")
+    batch = batch_for_shader(shader, "TRIS", {"pos": inset},
+                             indices=((0, 1, 2), (0, 2, 3)))
+    shader.bind()
+    shader.uniform_float("color", (0.19, 0.32, 0.43, 1))
+    batch.draw(shader)
+    blf.size(0, 16 * bpy.context.preferences.system.ui_scale)
+    width, height = blf.dimensions(0, "Button")
+    if max(x for x, _ in inset) - min(x for x, _ in inset) > width + 8:
+        blf.position(0, cx - width / 2, cy - height / 2, 0)
+        blf.color(0, 1, 1, 1, 1)
+        blf.draw(0, "Button")
+
+
+def setup():
+    bpy.context.preferences.view.show_splash = False
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete()
+    mesh = bpy.data.meshes.new("Button")
+    mesh.from_pydata([(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)],
+                     [], [(0, 1, 2, 3)])
+    mesh.update()
+    obj = bpy.data.objects.new("Button", mesh)
+    bpy.context.collection.objects.link(obj)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    layer = mesh.uv_layers.new()
+    for index, uv in enumerate([(0.35, 0.45), (0.65, 0.45),
+                                (0.65, 0.55), (0.35, 0.55)]):
+        layer.uv[index].vector = uv
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    area = next(a for a in bpy.context.screen.areas if a.type == "VIEW_3D")
+    area.type = "IMAGE_EDITOR"
+    area.ui_type = "UV"
+    image = bpy.data.images.new("Canvas", width=640, height=400)
+    image.generated_color = (0.14, 0.15, 0.17, 1)
+    area.spaces.active.image = image
+    bpy.context.scene.tool_settings.use_uv_select_sync = False
+    bpy.context.scene.tool_settings.uv_select_mode = "EDGE"
+    region = next(r for r in area.regions if r.type == "WINDOW")
+    with bpy.context.temp_override(area=area, region=region):
+        bpy.ops.uv.select_all(action="DESELECT")
+        if not bpy.app.background:
+            bpy.ops.image.view_all(fit_view=True)
+    bpy.types.SpaceImageEditor.draw_handler_add(draw_button, (), "WINDOW", "POST_PIXEL")
+
+
+setup()
