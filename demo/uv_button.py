@@ -3,11 +3,16 @@
 import blf
 import bpy
 import gpu
+import math
+import numpy as np
 from bl_ui.space_image import IMAGE_PT_overlay_guides
 from gpu_extras.batch import batch_for_shader
 
 CANVAS_WIDTH = 640
 CANVAS_HEIGHT = 400
+GRID_TYPES = (("RECTANGULAR", "Rectangular", ""), ("AXONOMETRIC", "Axonometric", ""),
+              ("MODULAR", "Modular", ""))
+CANVAS_COLOR = (0.14, 0.15, 0.17, 1)
 
 
 def pixel_spacing(label, key, size):
@@ -30,20 +35,63 @@ def pixel_spacing(label, key, size):
                                  description="Cell spacing in whole pixels that divide the canvas")
 
 
+def draw_grid_image(image, grid):
+    # Bake guides into the disposable canvas so UV edges always draw above them.
+    custom = grid is not None and grid.kind != "RECTANGULAR"
+    if not custom and not image.is_dirty:
+        return
+    width, height = image.size
+    x, y = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
+    pixels = np.empty((height, width, 4), dtype=np.float32)
+    pixels[:] = CANVAS_COLOR
+    if custom:
+        def distance(axis, period):
+            return np.abs((axis + period / 2) % period - period / 2)
+
+        if grid.kind == "AXONOMETRIC":
+            left, right = math.tan(grid.left_angle), math.tan(grid.right_angle)
+            pitch = grid.line_spacing
+            edge = np.minimum.reduce((
+                distance(x, pitch / (left + right)),
+                distance(y - left * x, pitch) / math.hypot(1, left),
+                distance(y + right * x, pitch) / math.hypot(1, right)))
+        else:
+            mx = x % (grid.module_width + grid.gutter_x)
+            my = y % (grid.module_height + grid.gutter_y)
+            dx = np.maximum(-mx, mx - grid.module_width)
+            dy = np.maximum(-my, my - grid.module_height)
+            edge = np.abs(np.hypot(np.maximum(dx, 0), np.maximum(dy, 0))
+                          + np.minimum(np.maximum(dx, dy), 0))
+        coverage = np.clip(1 - edge, 0, 1)
+        pixels[:, :, :3] += coverage[:, :, None] * 0.20
+    image.pixels.foreach_set(pixels.ravel())
+    image.update()
+
+
 def sync_grid(image, context):
     # The native UV viewport has one fixed grid. Preview the last visible entry.
     grid = next((item for item in reversed(list(image.uai_grids)) if item.visible), None)
+    show_custom = False
     for window in context.window_manager.windows:
         for area in window.screen.areas:
             space = area.spaces.active
             if area.ui_type == "UV" and space.image == image:
                 uv = space.uv_editor
-                uv.show_grid_over_image = grid is not None
-                if grid:
+                native = grid is not None and grid.kind == "RECTANGULAR"
+                uv.show_grid_over_image = native
+                show_custom |= space.overlay.show_overlays and space.overlay.show_grid_background
+                if native:
                     width, height = image.size
                     uv.grid_shape_source = "FIXED"
                     uv.custom_grid_subdivisions = (width // int(grid.x), height // int(grid.y))
                 area.tag_redraw()
+    draw_grid_image(image, grid if show_custom else None)
+
+
+def refresh_canvas(*_):
+    image = bpy.context.scene.uai_canvas
+    if image:
+        sync_grid(image, bpy.context)
 
 
 def grid_changed(self, context):
@@ -51,6 +99,14 @@ def grid_changed(self, context):
 
 
 class UAI_Grid(bpy.types.PropertyGroup):
+    kind: bpy.props.EnumProperty(items=GRID_TYPES, default="RECTANGULAR")
+    line_spacing: bpy.props.IntProperty(name="Spacing", subtype="PIXEL", default=16, min=1, max=400, update=grid_changed)
+    left_angle: bpy.props.FloatProperty(name="Left Angle", subtype="ANGLE", default=math.pi/6, min=math.radians(1), max=math.radians(89), update=grid_changed)
+    right_angle: bpy.props.FloatProperty(name="Right Angle", subtype="ANGLE", default=math.pi/6, min=math.radians(1), max=math.radians(89), update=grid_changed)
+    module_width: bpy.props.IntProperty(name="Width", subtype="PIXEL", default=64, min=1, max=640, update=grid_changed)
+    module_height: bpy.props.IntProperty(name="Height", subtype="PIXEL", default=40, min=1, max=400, update=grid_changed)
+    gutter_x: bpy.props.IntProperty(name="Gutter X", subtype="PIXEL", default=8, min=0, max=640, update=grid_changed)
+    gutter_y: bpy.props.IntProperty(name="Gutter Y", subtype="PIXEL", default=8, min=0, max=400, update=grid_changed)
     expanded: bpy.props.BoolProperty(default=True)
     visible: bpy.props.BoolProperty(name="Visible", default=True, update=grid_changed)
     x: pixel_spacing("Spacing X", "spacing_x", CANVAS_WIDTH)
@@ -61,16 +117,20 @@ class UAI_OT_add_grid(bpy.types.Operator):
     bl_idname = "uai.add_grid"
     bl_label = "Add Grid"
     bl_options = {"UNDO"}
+    kind: bpy.props.EnumProperty(items=GRID_TYPES)
 
     def execute(self, context):
         image = context.space_data.image
         grids = image.uai_grids
         number = 2
-        name = "Rectangular"
+        label = dict((key, label) for key, label, _ in GRID_TYPES)[self.kind]
+        name = label
         while name in grids:
-            name = f"Rectangular {number}"
+            name = f"{label} {number}"
             number += 1
-        grids.add().name = name
+        grid = grids.add()
+        grid.kind = self.kind
+        grid.name = name
         sync_grid(image, context)
         return {"FINISHED"}
 
@@ -91,6 +151,15 @@ class UAI_OT_remove_grid(bpy.types.Operator):
 
 
 stock_guides = IMAGE_PT_overlay_guides.draw
+
+
+class UAI_MT_add_grid(bpy.types.Menu):
+    bl_label = "Add Grid"
+    bl_options = {"SEARCH_ON_KEY_PRESS"}
+
+    def draw(self, context):
+        for kind, label, _ in GRID_TYPES:
+            self.layout.operator("uai.add_grid", text=label).kind = kind
 
 
 class UAI_OT_move_grid(bpy.types.Operator):
@@ -131,7 +200,7 @@ def draw_guides(self, context):
     layout = self.layout
     layout.active = space.overlay.show_overlays
     layout.prop(space.overlay, "show_grid_background", text="Grids")
-    layout.operator("uai.add_grid", icon="ADD")
+    layout.operator("wm.call_menu", text="Add Grid", icon="ADD").name = "UAI_MT_add_grid"
     for index, grid in enumerate(image.uai_grids):
         box = layout.box()
         header = box.row(align=True)
@@ -148,8 +217,11 @@ def draw_guides(self, context):
             fields = box.column(align=True)
             fields.use_property_split = True
             fields.use_property_decorate = False
-            fields.prop(grid, "x")
-            fields.prop(grid, "y")
+            properties = {"RECTANGULAR": ("x", "y"),
+                          "AXONOMETRIC": ("line_spacing", "left_angle", "right_angle"),
+                          "MODULAR": ("module_width", "module_height", "gutter_x", "gutter_y")}
+            for prop in properties[grid.kind]:
+                fields.prop(grid, prop)
 
 
 def button_corners(mesh):
@@ -216,7 +288,7 @@ class UAI_OT_canvas_wheel(bpy.types.Operator):
 
 
 def setup():
-    for cls in (UAI_Grid, UAI_OT_add_grid, UAI_OT_remove_grid, UAI_OT_move_grid, UAI_MT_grid_actions):
+    for cls in (UAI_Grid, UAI_OT_add_grid, UAI_MT_add_grid, UAI_OT_remove_grid, UAI_OT_move_grid, UAI_MT_grid_actions):
         bpy.utils.register_class(cls)
     bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
     IMAGE_PT_overlay_guides.draw = draw_guides
@@ -254,13 +326,18 @@ def setup():
     area.type = "IMAGE_EDITOR"
     area.ui_type = "UV"
     image = bpy.data.images.new("Canvas", width=CANVAS_WIDTH, height=CANVAS_HEIGHT)
-    image.generated_color = (0.14, 0.15, 0.17, 1)
+    image.generated_color = CANVAS_COLOR
     area.spaces.active.image = image
     bpy.context.scene.uai_canvas = image
     space = area.spaces.active
     space.overlay.show_grid_background = True
     image.uai_grids.add().name = "Rectangular"
     sync_grid(image, bpy.context)
+    for prop in ("show_overlays", "show_grid_background"):
+        bpy.msgbus.subscribe_rna(key=(type(space.overlay), prop), owner=refresh_canvas,
+                                 args=(), notify=refresh_canvas)
+    bpy.app.handlers.undo_post.append(refresh_canvas)
+    bpy.app.handlers.redo_post.append(refresh_canvas)
     bpy.context.scene.tool_settings.snap_uv_element = {"GRID"}
     bpy.context.scene.tool_settings.use_snap_uv = False
     bpy.context.scene.tool_settings.use_uv_select_sync = False
