@@ -685,6 +685,19 @@ def setup():
     sidebar["configure"](bpy.context)
     bpy.app.handlers.depsgraph_update_post.append(guard_canvas_edit_mode)
     bpy.ops.ed.undo_push(message="Button canvas")
+    if not bpy.app.background:
+        window = bpy.context.window
+        screen = window.screen
+
+        def close_startup_timeline():
+            if window.screen == screen:
+                for area in screen.areas:
+                    if area.ui_type == "TIMELINE":
+                        with bpy.context.temp_override(window=window, area=area):
+                            bpy.ops.screen.area_close()
+                        break
+
+        bpy.app.timers.register(close_startup_timeline)
 
 
 setup()
