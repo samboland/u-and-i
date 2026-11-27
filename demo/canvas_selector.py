@@ -806,10 +806,6 @@ class UAI_OT_select(bpy.types.Operator):
             return {"RUNNING_MODAL"}
         self.dragged = True
         delta = Vector(context.region.view2d.region_to_view(*mouse)) - self.start
-        if self.action == "ANCHOR":
-            write_pivot(self.original[0][0], self.center + delta)
-            context.area.tag_redraw()
-            return {"RUNNING_MODAL"}
         image_size = Vector(context.scene.uai_canvas.size)
         middle, half = (self.lo + self.hi) / 2, (self.hi - self.lo) / 2
         direction = Vector((self.dx, self.dy))
@@ -818,15 +814,21 @@ class UAI_OT_select(bpy.types.Operator):
         settings = context.tool_settings
         uv = context.space_data.uv_editor
         if (
-            (settings.use_snap_uv != (self.action in {"BODY", "MOVE", "SHEAR"} and event.ctrl))
+            (settings.use_snap_uv != (self.action != "SCALE" and event.ctrl))
             and "GRID" in settings.snap_uv_element
             and uv.show_grid_over_image
-            and self.action in {"BODY", "MOVE", "SCALE", "SHEAR"}
+            and self.action in {"ANCHOR", "BODY", "MOVE", "SCALE", "SHEAR"}
         ):
             anchor = self.lo if self.action in {"BODY", "MOVE"} else edge
+            if self.action == "ANCHOR":
+                anchor = self.center
             divisions = uv.custom_grid_subdivisions
             for i in range(2):
                 delta[i] = round((anchor[i] + delta[i]) * divisions[i]) / divisions[i] - anchor[i]
+        if self.action == "ANCHOR":
+            write_pivot(self.original[0][0], self.center + delta)
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
         if self.action == "MOVE":
             delta *= direction
         if self.action == "ROTATE":
