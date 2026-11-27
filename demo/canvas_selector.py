@@ -816,8 +816,6 @@ class UAI_OT_select(bpy.types.Operator):
         middle, half = (self.lo + self.hi) / 2, (self.hi - self.lo) / 2
         direction = Vector((self.dx, self.dy))
         diagonal_scale = (self.action, self.dx, self.dy) == PLANE_SCALE
-        if diagonal_scale:
-            delta *= math.sqrt(0.5)
         edge = middle + direction * half
         origin = self.center if event.shift else middle - direction * half
         settings = context.tool_settings
