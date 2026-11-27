@@ -815,6 +815,9 @@ class UAI_OT_select(bpy.types.Operator):
         image_size = Vector(context.scene.uai_canvas.size)
         middle, half = (self.lo + self.hi) / 2, (self.hi - self.lo) / 2
         direction = Vector((self.dx, self.dy))
+        diagonal_scale = (self.action, self.dx, self.dy) == PLANE_SCALE
+        if diagonal_scale:
+            delta *= math.sqrt(0.5)
         edge = middle + direction * half
         origin = self.center if event.shift else middle - direction * half
         settings = context.tool_settings
@@ -851,8 +854,13 @@ class UAI_OT_select(bpy.types.Operator):
             for i in range(2):
                 if direction[i] and abs(edge[i] - origin[i]) > 1e-8:
                     ratios[i] += delta[i] / (edge[i] - origin[i])
-            diagonal = (self.action, self.dx, self.dy) == PLANE_SCALE
-            if diagonal != event.ctrl:
+            if event.ctrl and diagonal_scale:
+                # Project the drag and corner span onto the same screen diagonal.
+                span = (edge - origin) * image_size
+                if abs(span.x + span.y) > 1e-8:
+                    motion = delta * image_size
+                    ratios[:] = [1 + (motion.x + motion.y) / (span.x + span.y)] * 2
+            elif event.ctrl:
                 ratios[:] = [
                     max((ratios[i] for i in range(2) if direction[i]), key=lambda r: abs(r - 1))
                 ] * 2
