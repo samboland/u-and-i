@@ -61,12 +61,14 @@ class UAI_OT_toggle_tool(bpy.types.Operator):
 
 def configure_toolbar():
     from bl_ui.space_toolsystem_toolbar import (
-        IMAGE_PT_tools_active, _defs_annotate, _defs_image_uv_select, _defs_image_uv_transform,
+        IMAGE_PT_tools_active, _defs_annotate, _defs_image_generic, _defs_image_uv_select, _defs_image_uv_transform,
     )
     stock_tools = IMAGE_PT_tools_active.tools_from_context
     tools = (
         _defs_image_uv_select.box._replace(label="Select"),
         _defs_image_uv_transform.transform._replace(widget="UAI_GGT_selector"),
+        None,
+        _defs_image_generic.cursor,
         None,
         _defs_annotate.scribble,
     )

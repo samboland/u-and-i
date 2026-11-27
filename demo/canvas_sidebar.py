@@ -88,12 +88,55 @@ def draw_transform(self, context):
             col.prop(obj.data, "uai_" + key)
 
 
+class UAI_PT_canvas_transform(bpy.types.Panel):
+    bl_label = "Transform"
+    bl_space_type = "IMAGE_EDITOR"
+    bl_region_type = "UI"
+    bl_category = "Item"
+
+    @classmethod
+    def poll(cls, context):
+        return (context.area.ui_type == "UV" and context.scene.uai_canvas
+                and context.space_data.image == context.scene.uai_canvas)
+
+    def draw(self, context):
+        obj = context.active_object
+        layout = self.layout
+        if not obj or not obj.get("uai_kind") or not obj.select_get():
+            layout.active = False
+            layout.label(text="No selection")
+            return
+        for label, keys in (("Location", ("x", "y")), ("Dimensions", ("width", "height"))):
+            layout.label(text=label)
+            fields = layout.column(align=True)
+            for axis, key in zip(("X", "Y"), keys):
+                fields.prop(obj.data, "uai_" + key, text=axis)
+
+
 def search_header(self, space, prop):
     layout = self.layout
     layout.template_header()
     layout.separator_spacer()
     layout.prop(space, prop, text="", icon="VIEWZOOM")
     layout.separator_spacer()
+
+
+def open_canvas_item_tab():
+    # Blender populates the category enum only after the sidebar has drawn.
+    context = bpy.context
+    area = context.area
+    space = area.spaces.active
+    if area.ui_type != "UV" or not context.scene.uai_canvas or space.image != context.scene.uai_canvas:
+        return
+    region = context.region
+    key = (area.as_pointer(), region.as_pointer())
+    if key not in initialized_sidebars and region.active_panel_category:
+        region.active_panel_category = "Item"
+        initialized_sidebars.add(key)
+        region.tag_redraw()
+
+
+initialized_sidebars = set()
 
 
 def draw_object_tab(self, context):
@@ -181,6 +224,8 @@ def object_panel_poll(panel, keep):
 
 
 def configure(context):
+    bpy.utils.register_class(UAI_PT_canvas_transform)
+    bpy.types.SpaceImageEditor.draw_handler_add(open_canvas_item_tab, (), "UI", "POST_PIXEL")
     for axis, label in enumerate(("X", "Y")):
         setattr(bpy.types.Mesh, "uai_" + label.lower(), pixel_property(label, axis, False))
     for axis, label in enumerate(("Width", "Height")):
