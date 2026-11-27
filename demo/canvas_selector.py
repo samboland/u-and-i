@@ -239,12 +239,9 @@ PLANE_LENGTH = .63
 PLANE_CENTER = (PLANE_LENGTH + .1) / math.sqrt(2)
 
 
-def handle_centers(context, entries):
-    entry = active_entry(context, entries)
-    project = context.region.view2d.view_to_region
-    center = Vector(project(*geometry_center(entry), clip=False))
-    anchor = Vector(project(*anchor_point(entry), clip=False))
-    return center, anchor
+def gizmo_origin(context, entries):
+    anchor = anchor_point(active_entry(context, entries))
+    return Vector(context.region.view2d.view_to_region(*anchor, clip=False))
 
 
 def gizmo_size(context):
@@ -254,14 +251,12 @@ def gizmo_size(context):
 def handle_at(context, entries, mouse):
     if not entries or not context.space_data.show_gizmo:
         return "BODY", 0, 0
-    return handle_at_position(mouse, *handle_centers(context, entries), gizmo_size(context))
+    return handle_at_position(mouse, gizmo_origin(context, entries), gizmo_size(context))
 
 
-def handle_at_position(mouse, center, anchor, size):
-    pos = (mouse - center) / size
-    anchor_distance = (mouse - anchor).length / size
-    # The rim stays reachable if the anchor is moved over another handle.
-    if abs(anchor_distance - ANCHOR_RADIUS) <= .045:
+def handle_at_position(mouse, anchor, size):
+    pos = (mouse - anchor) / size
+    if pos.length <= ANCHOR_RADIUS + .045:
         return "ANCHOR", 0, 0
     if max(abs(pos.x - PLANE_CENTER), abs(pos.y - PLANE_CENTER)) <= .09:
         return PLANE_MOVE
@@ -280,8 +275,6 @@ def handle_at_position(mouse, center, anchor, size):
             return action, dx, dy
     if abs(pos.length - ROTATE_RADIUS) <= .055:
         return "ROTATE", 0, 0
-    if anchor_distance < ANCHOR_RADIUS:
-        return "ANCHOR", 0, 0
     return "BODY", 0, 0
 
 
@@ -295,7 +288,7 @@ class UAI_GT_transform_pick(bpy.types.Gizmo):
     def test_select(self, context, location):
         if self.hide:
             return -1
-        key = handle_at_position(Vector(location), self.center, self.anchor, gizmo_size(context))
+        key = handle_at_position(Vector(location), self.anchor, gizmo_size(context))
         return 0 if key == self.key else -1
 
 
@@ -414,15 +407,13 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
         edit = UAI_OT_edit_text.active
         enabled = bool(entries) and not (edit and edit.region_id == context.region.as_pointer())
         if enabled:
-            center, anchor = handle_centers(context, entries)
+            anchor = gizmo_origin(context, entries)
         for key, visual, pick in self.handles:
             is_shear = key[0] == "SHEAR"
             pick.hide = visual.hide = not enabled
             if not visual.hide:
-                pick.center = center
                 pick.anchor = anchor
-                position = anchor if key[0] == "ANCHOR" else center
-                visual.matrix_basis.translation = (*position, 0)
+                visual.matrix_basis.translation = (*anchor, 0)
                 visual.alpha = 1 if pick.is_highlight else (.5 if is_shear else .78)
 
 
@@ -777,7 +768,6 @@ class UAI_OT_select(bpy.types.Operator):
         self.lo, self.hi = selected_bounds(entries)
         active = active_entry(context, entries)
         self.center = anchor_point(active)
-        self.gizmo_origin = geometry_center(active)
         if self.action == "ANCHOR":
             entries = [active]
         self.original = [(obj, points(face, uv), read_pivot(obj)) for obj, face, uv, _ in entries]
@@ -833,8 +823,8 @@ class UAI_OT_select(bpy.types.Operator):
         if self.action == "MOVE":
             delta *= direction
         if self.action == "ROTATE":
-            a = (self.start - self.gizmo_origin) * image_size
-            b = (self.start + delta - self.gizmo_origin) * image_size
+            a = (self.start - self.center) * image_size
+            b = (self.start + delta - self.center) * image_size
             angle = math.atan2(a.x * b.y - a.y * b.x, a.dot(b))
             if event.ctrl:
                 step = math.pi / 12
