@@ -2,13 +2,13 @@
 
 import blf
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Color, Matrix, Vector
 import gpu
 import math
 import os
 import runpy
 from pathlib import Path
-import numpy as np
+from functools import lru_cache
 from types import SimpleNamespace
 from bl_ui.space_image import IMAGE_HT_header, IMAGE_PT_overlay_guides, IMAGE_PT_overlay_uv_edit_geometry
 from gpu_extras.batch import batch_for_shader
@@ -21,43 +21,98 @@ CANVAS_COLOR = (0.14, 0.15, 0.17, 1)
 CANVAS_ELEMENTS = ("Panel", "Button", "Label")
 
 
-def draw_grid_image(image, grid):
-    # Bake guides into the disposable canvas so UV edges always draw above them.
-    custom = grid is not None and grid.kind != "RECTANGULAR"
-    if not custom and not image.is_dirty:
-        return
-    width, height = image.size
-    x, y = np.meshgrid(np.arange(width) + 0.5, np.arange(height) + 0.5)
-    pixels = np.empty((height, width, 4), dtype=np.float32)
-    pixels[:] = CANVAS_COLOR
-    if custom:
-        def distance(axis, period):
-            return np.abs((axis + period / 2) % period - period / 2)
+def visible_grid(image):
+    return next((grid for grid in reversed(list(image.uai_grids)) if grid.visible), None)
 
-        if grid.kind == "AXONOMETRIC":
-            left, right = math.tan(grid.left_angle), math.tan(grid.right_angle)
-            pitch = grid.line_spacing
-            edge = np.minimum.reduce((
-                distance(x, pitch / (left + right)),
-                distance(y - left * x, pitch) / math.hypot(1, left),
-                distance(y + right * x, pitch) / math.hypot(1, right)))
-        else:
-            mx = x % (grid.module_width + grid.gutter_x)
-            my = y % (grid.module_height + grid.gutter_y)
-            dx = np.maximum(-mx, mx - grid.module_width)
-            dy = np.maximum(-my, my - grid.module_height)
-            edge = np.abs(np.hypot(np.maximum(dx, 0), np.maximum(dy, 0))
-                          + np.minimum(np.maximum(dx, dy), 0))
-        coverage = np.clip(1 - edge, 0, 1)
-        pixels[:, :, :3] += coverage[:, :, None] * 0.20
-    image.pixels.foreach_set(pixels.ravel())
-    image.update()
+
+@lru_cache(maxsize=1)
+def grid_shader_batch():
+    interface = gpu.types.GPUStageInterfaceInfo("uai_grid_interface")
+    interface.smooth("VEC2", "canvas_px")
+    info = gpu.types.GPUShaderCreateInfo()
+    info.vertex_in(0, "VEC2", "uv")
+    info.vertex_out(interface)
+    info.fragment_out(0, "VEC4", "out_color")
+    info.push_constant("VEC4", "view_rect")
+    info.push_constant("VEC2", "image_size")
+    info.push_constant("VEC4", "grid_params")
+    info.push_constant("VEC4", "tint")
+    info.push_constant("INT", "axonometric")
+    info.vertex_source("""
+        void main() {
+            canvas_px = uv * image_size;
+            vec2 clip = (uv - view_rect.xy) / view_rect.zw * 2.0 - 1.0;
+            gl_Position = vec4(clip, 0.0, 1.0);
+        }
+    """)
+    info.fragment_source("""
+        float line_coverage(float coordinate, float period) {
+            float pixel = length(vec2(dFdx(coordinate), dFdy(coordinate)));
+            float distance_px = abs(fract(coordinate / period + 0.5) - 0.5) * period / pixel;
+            return max(1.0 - distance_px, 0.0) * smoothstep(1.0, 3.0, period / pixel);
+        }
+
+        void main() {
+            float coverage;
+            if (axonometric != 0) {
+                float left = grid_params.x, right = grid_params.y, pitch = grid_params.z;
+                coverage = max(line_coverage(canvas_px.x, pitch / (left + right)),
+                           max(line_coverage(canvas_px.y - left * canvas_px.x, pitch),
+                               line_coverage(canvas_px.y + right * canvas_px.x, pitch)));
+            }
+            else {
+                vec2 size = grid_params.xy, period = size + grid_params.zw;
+                vec2 pixel = fwidth(canvas_px);
+                // Distance to the nearest module, measured in screen pixels.
+                vec2 local = mod(canvas_px + grid_params.zw * 0.5, period) - period * 0.5;
+                vec2 edge = (abs(local) - size * 0.5) / pixel;
+                float dist = length(max(edge, vec2(0.0))) + min(max(edge.x, edge.y), 0.0);
+                coverage = max(1.0 - abs(dist), 0.0);
+                vec2 screen_period = period / pixel;
+                coverage *= smoothstep(1.0, 3.0, min(screen_period.x, screen_period.y));
+            }
+            out_color = vec4(tint.rgb, tint.a * coverage);
+        }
+    """)
+    shader = gpu.shader.create_from_info(info)
+    quad = batch_for_shader(shader, "TRI_STRIP", {"uv": ((0, 0), (1, 0), (0, 1), (1, 1))})
+    return shader, quad
+
+
+def draw_grid(context):
+    space = context.space_data
+    if context.area.ui_type != "UV" or not space.overlay.show_overlays or not space.overlay.show_grid_background:
+        return
+    grid = visible_grid(space.image)
+    if not grid or grid.kind == "RECTANGULAR":
+        return
+    region = context.region
+    x, y = region.view2d.region_to_view(0, 0)
+    xmax, ymax = region.view2d.region_to_view(region.width, region.height)
+    shader, quad = grid_shader_batch()
+    shader.bind()
+    shader.uniform_float("view_rect", (x, y, xmax - x, ymax - y))
+    shader.uniform_float("image_size", space.image.size[:])
+    axonometric = grid.kind == "AXONOMETRIC"
+    params = ((math.tan(grid.left_angle), math.tan(grid.right_angle), grid.line_spacing, 0)
+              if axonometric else (grid.module_width, grid.module_height, grid.gutter_x, grid.gutter_y))
+    shader.uniform_int("axonometric", int(axonometric))
+    shader.uniform_float("grid_params", params)
+    theme = context.preferences.themes[0].image_editor
+    shade = 20 if sum(theme.grid[:3]) + 0.24 > sum(theme.space.back[:3]) else -10
+    color = Color([max(0, min(1, c + shade / 255)) for c in theme.grid[:3]])
+    shader.uniform_float("tint", (*color.from_srgb_to_scene_linear(), theme.grid[3]))
+    blend = gpu.state.blend_get()
+    try:
+        gpu.state.blend_set("ALPHA")
+        quad.draw(shader)
+    finally:
+        gpu.state.blend_set(blend)
 
 
 def sync_grid(image, context):
     # The native UV viewport has one fixed grid. Preview the last visible entry.
-    grid = next((item for item in reversed(list(image.uai_grids)) if item.visible), None)
-    show_custom = False
+    grid = visible_grid(image)
     for window in context.window_manager.windows:
         for area in window.screen.areas:
             space = area.spaces.active
@@ -65,13 +120,11 @@ def sync_grid(image, context):
                 uv = space.uv_editor
                 native = grid is not None and grid.kind == "RECTANGULAR"
                 uv.show_grid_over_image = native
-                show_custom |= space.overlay.show_overlays and space.overlay.show_grid_background
                 if native:
                     width, height = image.size
                     uv.grid_shape_source = "FIXED"
                     uv.custom_grid_subdivisions = (max(1, round(width / grid.x)), max(1, round(height / grid.y)))
                 area.tag_redraw()
-    draw_grid_image(image, grid if show_custom else None)
 
 
 def refresh_canvas(*_):
@@ -516,6 +569,7 @@ def draw_canvas(draw_canvas_text, draw_bounds):
         gpu.matrix.load_projection_matrix(Matrix(((2/region.width, 0, 0, -1),
                                                   (0, 2/region.height, 0, -1),
                                                   (0, 0, -1, 0), (0, 0, 0, 1))))
+        draw_grid(bpy.context)
         draw_assets(draw_canvas_text)
         draw_bounds()
 
