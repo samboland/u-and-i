@@ -197,7 +197,7 @@ def contains(context, entry, point):
 
 def draw_bounds():
     ctx = bpy.context
-    if not is_canvas(ctx) or not ctx.space_data.show_gizmo:
+    if not is_canvas(ctx) or not ctx.space_data.show_gizmo or not ctx.space_data.overlay.show_overlays:
         return
     edit = UAI_OT_edit_text.active
     if edit and edit.region_id == ctx.region.as_pointer():
@@ -251,7 +251,7 @@ def gizmo_size(context):
 
 
 def handle_at(context, entries, mouse):
-    if not entries or not context.space_data.show_gizmo:
+    if not entries or not context.space_data.show_gizmo or not context.space_data.overlay.show_overlays:
         return "BODY", 0, 0
     return handle_at_position(mouse, gizmo_origin(context, entries), gizmo_size(context))
 
@@ -351,7 +351,8 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
 
     @classmethod
     def poll(cls, context):
-        return is_canvas(context) and active_canvas_tool(context) == "builtin.transform"
+        return (is_canvas(context) and context.space_data.overlay.show_overlays
+                and active_canvas_tool(context) == "builtin.transform")
 
     def setup(self, context):
         self.handles = []

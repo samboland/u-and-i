@@ -10,7 +10,7 @@ import runpy
 from pathlib import Path
 import numpy as np
 from types import SimpleNamespace
-from bl_ui.space_image import IMAGE_HT_header, IMAGE_PT_overlay_guides
+from bl_ui.space_image import IMAGE_HT_header, IMAGE_PT_overlay_guides, IMAGE_PT_overlay_uv_edit_geometry
 from gpu_extras.batch import batch_for_shader
 
 CANVAS_WIDTH = 640
@@ -144,6 +144,21 @@ class UAI_OT_remove_grid(bpy.types.Operator):
 
 
 stock_guides = IMAGE_PT_overlay_guides.draw
+stock_geometry = IMAGE_PT_overlay_uv_edit_geometry.draw
+
+
+def draw_geometry(self, context):
+    space = context.space_data
+    if not space.image or space.image != context.scene.uai_canvas or context.area.ui_type != "UV":
+        return stock_geometry(self, context)
+    uv = space.uv_editor
+    column = self.layout.column()
+    column.active = space.overlay.show_overlays
+    column.prop(uv, "edge_display_type", text="")
+    column.prop(uv, "show_modified_edges", text="Modified Edges")
+    faces = column.row()
+    faces.active = not uv.show_stretch
+    faces.prop(uv, "show_faces", text="Faces")
 
 
 class UAI_MT_add_grid(bpy.types.Menu):
@@ -610,6 +625,7 @@ def setup():
         bpy.utils.register_class(cls)
     bpy.types.Image.uai_grids = bpy.props.CollectionProperty(type=UAI_Grid)
     IMAGE_PT_overlay_guides.draw = draw_guides
+    IMAGE_PT_overlay_uv_edit_geometry.draw = draw_geometry
     bpy.types.Scene.uai_canvas = bpy.props.PointerProperty(type=bpy.types.Image)
     bpy.app.handlers.save_pre.append(retain_canvas_images)
     bpy.utils.register_class(UAI_OT_canvas_wheel)
@@ -648,6 +664,7 @@ def setup():
     space.cursor_location = (0.5, 0.28)
     space.use_image_pin = True
     space.uv_editor.show_faces = False
+    space.uv_editor.edge_display_type = "DASH"
     space.uv_editor.show_uv = False
     space.overlay.show_grid_background = True
     image.uai_grids.add().name = "Rectangular"
