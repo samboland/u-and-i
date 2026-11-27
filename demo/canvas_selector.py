@@ -44,6 +44,20 @@ def active_canvas_tool(context):
     return tool.idname if tool else None
 
 
+class UAI_OT_toggle_preview(bpy.types.Operator):
+    bl_idname = "uai.toggle_canvas_preview"
+    bl_label = "Toggle Canvas Preview"
+
+    @classmethod
+    def poll(cls, context):
+        return is_canvas(context)
+
+    def execute(self, context):
+        overlay = context.space_data.overlay
+        overlay.show_overlays = not overlay.show_overlays
+        return {"FINISHED"}
+
+
 class UAI_OT_toggle_tool(bpy.types.Operator):
     bl_idname = "uai.toggle_canvas_tool"
     bl_label = "Switch Select and Transform"
@@ -915,6 +929,7 @@ def register(keyconfig, outline):
     bpy.utils.register_class(UAI_OT_select_activate)
     bpy.utils.register_class(UAI_OT_select)
     bpy.utils.register_class(UAI_OT_toggle_tool)
+    bpy.utils.register_class(UAI_OT_toggle_preview)
     bpy.utils.register_class(UAI_GT_transform_pick)
     bpy.utils.register_class(UAI_GT_anchor_ring)
     bpy.utils.register_class(UAI_GGT_selector)
@@ -927,6 +942,7 @@ def register(keyconfig, outline):
         image = keyconfig.keymaps.new(name="Image", space_type="IMAGE_EDITOR")
         image.keymap_items.new("uai.toggle_canvas_tool", "TAB", "PRESS", head=True)
         km = keyconfig.keymaps.new(name="UV Editor", space_type="EMPTY")
+        km.keymap_items.new("uai.toggle_canvas_preview", "H", "PRESS", alt=True, head=True)
         km.keymap_items.new("uai.select_element", "G", "PRESS", head=True)
         for value in ("PRESS", "DOUBLE_CLICK", "CLICK_DRAG"):
             km.keymap_items.new("uai.select_activate", "LEFTMOUSE", value, head=True, any=True)
