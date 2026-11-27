@@ -166,3 +166,11 @@ capability map above, not just what exists today. Concretely that means homes
 - Canvas chrome: zoom/width presets, theme toggle, current layout indicator
 - Kernel rule for implementers: every panel talks to the daemon API /
   postMessage protocol only — no editor logic inside panel components.
+
+## Blender canvas transforms
+
+Each move arrow edits the element's offset along its axis and preserves alignment.
+When parent layout is implemented, a centered element with an X offset of 12 px must stay 12 px right of center.
+Dragging the element body preserves both offset values.
+Transform uses two move arrows, two scale handles, and a rotation ring.
+Clicking the selected body again switches to Blender's two red T-shaped shear handles.

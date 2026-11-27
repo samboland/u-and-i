@@ -2,7 +2,7 @@
 
 import blf
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 import gpu
 import math
 import os
@@ -455,6 +455,20 @@ def shape_outline(obj, points):
             for angle in (math.tau * i / 64 for i in range(64))]
 
 
+def draw_canvas(draw_canvas_text, draw_bounds):
+    region = bpy.context.region
+    if bpy.context.space_data.image != bpy.context.scene.uai_canvas or not bpy.context.scene.uai_canvas:
+        return
+    # Paint assets in pixel coordinates before the Image Editor draws native gizmos.
+    with gpu.matrix.push_pop(), gpu.matrix.push_pop_projection():
+        gpu.matrix.load_identity()
+        gpu.matrix.load_projection_matrix(Matrix(((2/region.width, 0, 0, -1),
+                                                  (0, 2/region.height, 0, -1),
+                                                  (0, 0, -1, 0), (0, 0, 0, 1))))
+        draw_assets(draw_canvas_text)
+        draw_bounds()
+
+
 def draw_assets(draw_canvas_text):
     context = bpy.context
     if (context.area.ui_type != "UV" or not context.scene.uai_canvas
@@ -624,7 +638,8 @@ def setup():
         if not bpy.app.background:
             bpy.ops.image.view_all(fit_view=True)
     selector = runpy.run_path(str(Path(__file__).with_name("canvas_selector.py")), run_name="uai_canvas_selector")
-    bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (selector["draw_canvas_text"],), "WINDOW", "POST_PIXEL")
+    bpy.types.SpaceImageEditor.draw_handler_add(
+        draw_canvas, (selector["draw_canvas_text"], selector["draw_bounds"]), "WINDOW", "POST_VIEW")
     selector["register"](keyconfig, shape_outline)
     selector["configure_toolbar"]()
     if not bpy.app.background:

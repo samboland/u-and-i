@@ -1,6 +1,6 @@
 """Whole-element selection and transforms for the u&i UV canvas."""
 
-from functools import lru_cache
+
 import math
 import sys
 import time
@@ -12,7 +12,7 @@ import bpy
 import gpu
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix, Vector
-from mathutils.geometry import intersect_point_tri_2d, tessellate_polygon
+from mathutils.geometry import intersect_point_tri_2d
 
 
 def is_canvas(context):
@@ -112,6 +112,17 @@ def write_pivot(obj, value):
     refresh(obj)
 
 
+def layout_offset(obj, value=None):
+    mesh = bmesh.from_edit_mesh(obj.data)
+    layers = mesh.faces.layers.float_vector
+    layer = layers.get("uai_layout_offset_px")
+    if value is None:
+        return next(iter(mesh.faces))[layer].to_2d() if layer else Vector((0, 0))
+    layer = layer or layers.new("uai_layout_offset_px")
+    next(iter(mesh.faces))[layer] = (*value, 0)
+    refresh(obj)
+
+
 def turn_mode(entries):
     return tuple(sorted(obj.session_uid for obj, _, _, _ in entries)) == UAI_OT_select.turn_selection
 
@@ -161,92 +172,66 @@ def draw_bounds():
         shader.uniform_float("lineWidth", width)
         shader.uniform_float("color", color)
         batch.draw(shader)
-    if active_canvas_tool(ctx) != "builtin.transform":
-        gpu.state.blend_set("NONE")
-        return
-    theme = ctx.preferences.themes[0].user_interface
-    size = 5 * ctx.preferences.system.ui_scale
-    fill = gpu.shader.from_builtin("UNIFORM_COLOR")
-    for key, pos in handle_positions(ctx, entries):
-        poly, indices = handle_shape(*key)
-        verts = [pos + v * size for v in poly]
-        alpha = 1 if highlighted.get(ctx.region.as_pointer()) == key else 0.6
-        shader.bind()
-        shader.uniform_float("lineWidth", 1)
-        shader.uniform_float("color", (*theme.gizmo_view_align, alpha * 0.45))
-        batch_for_shader(shader, "LINE_STRIP", {"pos": verts + verts[:1]}).draw(shader)
-        fill.bind()
-        fill.uniform_float("color", (*theme.gizmo_view_align, alpha))
-        batch_for_shader(fill, "TRIS", {"pos": verts}, indices=indices).draw(fill)
     gpu.state.blend_set("NONE")
 
 
-# Closed silhouettes based on Inkscape's draw_darrow and draw_carrow.
-@lru_cache(maxsize=32)
-def handle_shape(action, dx, dy):
-    if action == "ROTATE":
-
-        def arc(radius, start, end):
-            return [
-                (5 + radius * math.cos(t), 10 + radius * math.sin(t))
-                for i in range(13)
-                for t in [math.radians(start + (end - start) * i / 12)]
-            ]
-
-        path = (
-            [(1.5, 5), (5, 1.5)]
-            + arc(6.75, -90, 0)
-            + [(13.5, 10), (10, 13.5), (6.5, 10)]
-            + arc(3.25, 0, -90)
-            + [(5, 8.5)]
-        )
-        poly = [(dx * (x - 7.5) / 7, -dy * (y - 7.5) / 7) for x, y in path]
-        # Source Y points down, with the source glyph on the upper right.
-    else:
-        x, y = (dy, dx) if action == "SHEAR" else (dx, dy)
-        length = math.hypot(x, y)
-        c, s = x / length, y / length
-        path = [
-            (-1, 0),
-            (-0.5, -0.5),
-            (-0.5, -0.21),
-            (0.5, -0.21),
-            (0.5, -0.5),
-            (1, 0),
-            (0.5, 0.5),
-            (0.5, 0.21),
-            (-0.5, 0.21),
-            (-0.5, 0.5),
-        ]
-        poly = [(c * u - s * v, s * u + c * v) for u, v in path]
-    verts = [Vector(p) for p in poly]
-    return verts, tessellate_polygon([verts])
+# Dimensions in units of Blender's preferred gizmo size.
+AXIS_HANDLES = (("MOVE", 1, 0), ("MOVE", 0, 1), ("SCALE", 1, 0), ("SCALE", 0, 1))
+SHEAR_HANDLES = (("SHEAR", 1, 0), ("SHEAR", 0, 1))
 
 
-highlighted = {}
-HANDLE_DIRECTIONS = tuple((x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y)
+def gizmo_center(context, entries):
+    return Vector(context.region.view2d.view_to_region(*pivot(entries), clip=False))
 
 
-def handle_positions(context, entries):
+def gizmo_size(context):
+    return context.preferences.view.gizmo_size * context.preferences.system.ui_scale
+
+
+def handle_at(context, entries, mouse):
+    body = ("BODY", 0, 0)
     if not entries or not context.space_data.show_gizmo:
-        return
-    lo, hi = selected_bounds(entries)
-    mid, half = (lo + hi) / 2, (hi - lo) / 2
-    turn = turn_mode(entries)
-    gap = 10 * context.preferences.system.ui_scale
-    for dx, dy in HANDLE_DIRECTIONS:
-        action = ("ROTATE" if dx and dy else "SHEAR") if turn else "SCALE"
-        pos = mid + Vector((dx * half.x, dy * half.y))
-        x, y = context.region.view2d.view_to_region(*pos, clip=False)
-        yield (action, dx, dy), Vector((x + dx * gap, y + dy * gap))
+        return body
+    return handle_at_position((mouse - gizmo_center(context, entries)) / gizmo_size(context), turn_mode(entries))
+
+
+def handle_at_position(pos, shear):
+    if shear:
+        for key in SHEAR_HANDLES:
+            along, across = (pos.x, pos.y) if key[1] else (pos.y, pos.x)
+            if (.94 < along < 1.16 and abs(across) < .34) or (.12 < along <= .94 and abs(across) < .055):
+                return key
+    else:
+        for action, dx, dy in AXIS_HANDLES:
+            along, across = (pos.x, pos.y) if dx else (pos.y, pos.x)
+            low, high = (.98, 1.71) if action == "MOVE" else (.12, .87)
+            if low <= along <= high and abs(across) < .12:
+                return action, dx, dy
+        if abs(pos.length - 1.0) < .08:
+            return "ROTATE", 0, 0
+    return "BODY", 0, 0
+
+
+class UAI_GT_transform_pick(bpy.types.Gizmo):
+    """Use the same screen-space hit regions for hover and press in the UV editor."""
+    bl_idname = "UAI_GT_transform_pick"
+
+    def draw(self, context):
+        pass
+
+    def test_select(self, context, location):
+        if self.hide:
+            return -1
+        pos = (Vector(location) - self.center) / gizmo_size(context)
+        return 0 if handle_at_position(pos, self.key[0] == "SHEAR") == self.key else -1
 
 
 class UAI_GGT_selector(bpy.types.GizmoGroup):
     bl_idname = "UAI_GGT_selector"
-    bl_label = "Selection"
+    bl_label = "Transform"
     bl_space_type = "IMAGE_EDITOR"
     bl_region_type = "WINDOW"
-    bl_options = {"PERSISTENT", "SCALE"}
+    bl_options = {"PERSISTENT"}
 
     @classmethod
     def poll(cls, context):
@@ -254,36 +239,54 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
 
     def setup(self, context):
         self.handles = []
-        for dx, dy in HANDLE_DIRECTIONS:
-            actions = ("SCALE", "ROTATE" if dx and dy else "SHEAR")
-            for action in actions:
-                g = self.gizmos.new("GIZMO_GT_button_2d")
-                # Native gizmos handle hover and input. The canvas paints the
-                # glyphs after the assets.
-                g.draw_options = set()
-                g.scale_basis = 7
-                g.use_draw_modal = True
-                g.alpha = g.alpha_highlight = 0
-                g.target_set_operator("uai.select_element")
-                self.handles.append((g, action, dx, dy))
+        theme = context.preferences.themes[0].user_interface
+        for key in (("ROTATE", 0, 0), *AXIS_HANDLES, *SHEAR_HANDLES):
+            action, dx, dy = key
+            if action == "ROTATE":
+                # The viewport dial only supports 3D picking. Blender's UV ring
+                # draws in region coordinates and accepts the same rotation drag.
+                visual = self.gizmos.new("GIZMO_GT_move_3d")
+                visual.draw_style = "RING_2D"
+                color = theme.axis_z
+            else:
+                visual = self.gizmos.new("GIZMO_GT_arrow_3d")
+                axis = Vector((dx, dy, 0))
+                basis = axis.to_track_quat("Z", "Y").to_matrix().to_4x4()
+                if action == "SHEAR":
+                    tangent = Vector((-dy, dx, 0))
+                    basis = Matrix((Vector((0, 0, .5)), tangent * 6, axis)).transposed().to_4x4()
+                    color = Vector(theme.axis_z if dx else theme.axis_y).lerp(Vector(theme.axis_x), .75)
+                else:
+                    start, end = (.98, 1.45) if action == "MOVE" else (.15, .76)
+                    visual.length = end - start
+                    visual.matrix_offset.translation = (0, 0, start)
+                    color = theme.axis_x if dx else theme.axis_y
+                visual.use_draw_offset_scale = True
+                visual.draw_style = "NORMAL" if action == "MOVE" else "BOX"
+                visual.matrix_basis = basis
+            visual.color = color
+            visual.line_width = 2
+            visual.hide_select = True
+            pick = self.gizmos.new("UAI_GT_transform_pick")
+            pick.hide = True
+            pick.key = key
+            pick.target_set_operator("uai.select_element")
+            self.handles.append((key, visual, pick))
 
     def draw_prepare(self, context):
         entries = selection(context)
-        positions = dict(handle_positions(context, entries))
-        hovered = None
-        for g, action, dx, dy in self.handles:
-            g.hide = (action, dx, dy) not in positions
-            if g.hide:
-                continue
-            x, y = positions[action, dx, dy]
-            g.matrix_basis[0][3] = x
-            g.matrix_basis[1][3] = y
-            if g.is_highlight:
-                hovered = action, dx, dy
-        region_id = context.region.as_pointer()
-        if highlighted.get(region_id) != hovered:
-            highlighted[region_id] = hovered
-            context.region.tag_redraw()
+        edit = UAI_OT_edit_text.active
+        enabled = bool(entries) and not (edit and edit.region_id == context.region.as_pointer())
+        if enabled:
+            center = gizmo_center(context, entries)
+            shear = turn_mode(entries)
+        for key, visual, pick in self.handles:
+            is_shear = key[0] == "SHEAR"
+            pick.hide = visual.hide = not enabled or (is_shear != shear)
+            if not visual.hide:
+                pick.center = center
+                visual.matrix_basis.translation = (*center, 0)
+                visual.alpha = 1 if pick.is_highlight else (.5 if is_shear else .78)
 
 
 class TextLayout:
@@ -554,14 +557,7 @@ class UAI_OT_select(bpy.types.Operator):
         self.pressed_at = time.monotonic()
         self.press = Vector((event.mouse_region_x, event.mouse_region_y))
         # Blender can dispatch to the previous hover target before the next redraw.
-        targets = handle_positions(context, selection(context))
-        radius = 7 * context.preferences.system.ui_scale
-        self.action, self.dx, self.dy = "BODY", 0, 0
-        for key, pos in targets:
-            distance = (pos - self.press).length
-            if distance <= radius:
-                self.action, self.dx, self.dy = key
-                radius = distance
+        self.action, self.dx, self.dy = handle_at(context, selection(context), self.press)
         self.start = Vector(context.region.view2d.region_to_view(*self.press))
         self.dragged = self.toggle = False
         if self.action == "BODY":
@@ -601,6 +597,8 @@ class UAI_OT_select(bpy.types.Operator):
         self.center = pivot(entries)
         self.ids = tuple(sorted(obj.session_uid for obj, _, _, _ in entries))
         self.original = [(obj, points(face, uv), read_pivot(obj)) for obj, face, uv, _ in entries]
+        if self.action == "MOVE":
+            self.offsets = {obj.session_uid: layout_offset(obj) for obj, _, _, _ in entries}
         context.window_manager.modal_handler_add(self)
         context.area.tag_redraw()
         return {"RUNNING_MODAL"}
@@ -638,15 +636,17 @@ class UAI_OT_select(bpy.types.Operator):
         settings = context.tool_settings
         uv = context.space_data.uv_editor
         if (
-            (settings.use_snap_uv != (self.action in {"BODY", "SHEAR"} and event.ctrl))
+            (settings.use_snap_uv != (self.action in {"BODY", "MOVE", "SHEAR"} and event.ctrl))
             and "GRID" in settings.snap_uv_element
             and uv.show_grid_over_image
-            and self.action in {"BODY", "SCALE", "SHEAR"}
+            and self.action in {"BODY", "MOVE", "SCALE", "SHEAR"}
         ):
-            anchor = self.lo if self.action == "BODY" else edge
+            anchor = self.lo if self.action in {"BODY", "MOVE"} else edge
             divisions = uv.custom_grid_subdivisions
             for i in range(2):
                 delta[i] = round((anchor[i] + delta[i]) * divisions[i]) / divisions[i] - anchor[i]
+        if self.action == "MOVE":
+            delta *= direction
         if self.action == "ROTATE":
             a = (self.start - self.center) * image_size
             b = (self.start + delta - self.center) * image_size
@@ -665,7 +665,7 @@ class UAI_OT_select(bpy.types.Operator):
                 ] * 2
 
         def transform(p):
-            if self.action == "BODY":
+            if self.action in {"BODY", "MOVE"}:
                 return p + delta
             if self.action == "SCALE":
                 return origin + (p - origin) * ratios
@@ -686,6 +686,9 @@ class UAI_OT_select(bpy.types.Operator):
             initial = Vector(saved) if saved else sum(coords, Vector((0, 0))) / len(coords)
             self.write(obj, [transform(p) for p in coords])
             write_pivot(obj, initial if self.action == "SCALE" else transform(initial))
+            if self.action == "MOVE":
+                layout_offset(obj, self.offsets[obj.session_uid] +
+                              Vector((delta.x * image_size.x, -delta.y * image_size.y)))
         context.area.tag_redraw()
         return {"RUNNING_MODAL"}
 
@@ -701,6 +704,8 @@ class UAI_OT_select(bpy.types.Operator):
         for obj, coords, saved in self.original:
             self.write(obj, coords)
             write_pivot(obj, saved)
+            if self.action == "MOVE":
+                layout_offset(obj, self.offsets[obj.session_uid])
 
 
 def register(keyconfig, outline):
@@ -708,8 +713,8 @@ def register(keyconfig, outline):
     canvas_outline = outline
     bpy.utils.register_class(UAI_OT_edit_text)
     bpy.utils.register_class(UAI_OT_select)
+    bpy.utils.register_class(UAI_GT_transform_pick)
     bpy.utils.register_class(UAI_GGT_selector)
-    bpy.types.SpaceImageEditor.draw_handler_add(draw_bounds, (), "WINDOW", "POST_PIXEL")
     if keyconfig:
         km = keyconfig.keymaps.new(name="UV Editor", space_type="EMPTY")
         for shift in (False, True):
