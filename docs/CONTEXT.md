@@ -174,3 +174,5 @@ When parent layout is implemented, a centered element with an X offset of 12 px 
 Dragging the element body preserves both offset values.
 Transform uses two move arrows, two scale handles, and a rotation ring.
 Clicking the selected body again switches to Blender's two red T-shaped shear handles.
+With Select active, double-click visible text to edit at the clicked character.
+Double-click the surrounding element body to select it and activate Transform.

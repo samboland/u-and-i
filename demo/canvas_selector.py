@@ -308,6 +308,18 @@ class TextLayout:
         self.height = max(1, blf.dimensions(0, "Mg")[1])
         self.baseline = -(height if height else self.height) / 2
 
+    @property
+    def visible(self):
+        return bool(self.text) and self.width + 8 < self.available
+
+    @property
+    def bottom(self):
+        return self.baseline - self.height * .2
+
+    @property
+    def top(self):
+        return self.bottom + self.height * 1.15
+
     def offset(self, index):
         return blf.dimensions(0, self.text[:index])[0] - self.width / 2
 
@@ -339,12 +351,12 @@ def draw_canvas_text(context, obj, corners, label):
     if not (edit or text):
         return
     layout = TextLayout(context, corners, text)
-    if not edit and layout.width + 8 >= layout.available:
+    if not edit and not layout.visible:
         return
     with gpu.matrix.push_pop():
         gpu.matrix.multiply_matrix(layout.basis)
-        bottom = layout.baseline - layout.height * .2
-        top = bottom + layout.height * 1.15
+        bottom = layout.bottom
+        top = layout.top
         if edit and edit.anchor != edit.caret:
             left, right = sorted((layout.offset(edit.anchor), layout.offset(edit.caret)))
             color = context.preferences.themes[0].user_interface.wcol_text.item
@@ -539,44 +551,74 @@ def is_second_press(event, previous, target, pressed_at, position):
             and max(abs(offset.x), abs(offset.y)) <= distance)
 
 
+def element_at(context, mouse):
+    items = list(elements(context))
+    order = {obj.session_uid: i for i, obj in enumerate(context.visible_objects)}
+    items.sort(key=lambda item: order[item[0].session_uid], reverse=True)
+    return items, next((item for item in items if contains(context, item, mouse)), None)
+
+
+class UAI_OT_select_activate(bpy.types.Operator):
+    bl_idname = "uai.select_activate"
+    bl_label = "Edit Canvas Element"
+    last_press = None
+
+    @classmethod
+    def poll(cls, context):
+        return is_canvas(context) and active_canvas_tool(context) == "builtin.select_box"
+
+    def invoke(self, context, event):
+        previous = type(self).last_press
+        type(self).last_press = None
+        if event.value == "CLICK_DRAG" or event.ctrl or event.shift or event.alt:
+            return {"PASS_THROUGH"}
+        mouse = Vector((event.mouse_region_x, event.mouse_region_y))
+        items, hit = element_at(context, mouse)
+        if not hit:
+            return {"PASS_THROUGH"}
+        obj, face, uv, _ = hit
+        over_text = False
+        if obj.get("uai_kind") in {"Button", "Label"}:
+            corners = [context.region.view2d.view_to_region(*p, clip=False) for p in points(face, uv)]
+            layout = TextLayout(context, corners, obj.get("uai_text", obj.name))
+            local = layout.basis.inverted_safe() @ Vector((*mouse, 0))
+            over_text = (layout.visible and abs(local.x) <= layout.width / 2
+                         and layout.bottom <= local.y <= layout.top)
+        target = (context.region.as_pointer(), obj.session_uid, over_text)
+        now = time.monotonic()
+        if not is_second_press(event, previous, target, now, mouse):
+            type(self).last_press = (target, now, mouse)
+            return {"PASS_THROUGH"}
+        for item in items:
+            set_selected(item, item[0] == obj)
+        context.view_layer.objects.active = obj
+        if over_text:
+            bpy.ops.uai.edit_text("INVOKE_DEFAULT")
+        else:
+            UAI_OT_select.turn_selection = ()
+            bpy.ops.wm.tool_set_by_id(name="builtin.transform")
+        context.area.tag_redraw()
+        return {"FINISHED"}
+
+
 class UAI_OT_select(bpy.types.Operator):
     bl_idname = "uai.select_element"
     bl_label = "Transform Canvas Selection"
     bl_options = {"UNDO", "BLOCKING"}
     turn_selection = ()
-    last_body_click = None
 
     @classmethod
     def poll(cls, context):
         return is_canvas(context) and active_canvas_tool(context) == "builtin.transform"
 
     def invoke(self, context, event):
-        previous_click = type(self).last_body_click
-        type(self).last_body_click = None
-        self.body_target = None
-        self.pressed_at = time.monotonic()
         self.press = Vector((event.mouse_region_x, event.mouse_region_y))
         # Blender can dispatch to the previous hover target before the next redraw.
         self.action, self.dx, self.dy = handle_at(context, selection(context), self.press)
         self.start = Vector(context.region.view2d.region_to_view(*self.press))
         self.dragged = self.toggle = False
         if self.action == "BODY":
-            items = list(elements(context))
-            order = {obj.session_uid: i for i, obj in enumerate(context.visible_objects)}
-            items.sort(key=lambda item: order[item[0].session_uid], reverse=True)
-            hit = next((item for item in items if contains(context, item, self.press)), None)
-            if hit and not (event.ctrl or event.shift):
-                obj = hit[0]
-                self.body_target = (context.region.as_pointer(), obj.session_uid)
-                if hit[0].select_get() and is_second_press(event, previous_click, self.body_target,
-                                                      self.pressed_at, self.press):
-                    type(self).turn_selection = previous_click[3]
-                    context.view_layer.objects.active = obj
-                    if obj.get("uai_kind") in {"Button", "Label"}:
-                        bpy.ops.uai.edit_text("INVOKE_DEFAULT")
-                    else:
-                        bpy.ops.wm.call_panel(name="UAI_PT_element", keep_open=True)
-                    return {"FINISHED"}
+            items, hit = element_at(context, self.press)
             self.toggle = bool(hit and hit[0].select_get() and not event.shift)
             if not self.toggle:
                 type(self).turn_selection = ()
@@ -610,9 +652,6 @@ class UAI_OT_select(bpy.types.Operator):
             context.area.tag_redraw()
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            if self.body_target and not self.dragged:
-                type(self).last_body_click = (self.body_target, self.pressed_at, self.press,
-                                              self.turn_selection)
             if self.toggle and not self.dragged:
                 type(self).turn_selection = () if self.turn_selection == self.ids else self.ids
             context.area.tag_redraw()
@@ -712,11 +751,14 @@ def register(keyconfig, outline):
     global canvas_outline
     canvas_outline = outline
     bpy.utils.register_class(UAI_OT_edit_text)
+    bpy.utils.register_class(UAI_OT_select_activate)
     bpy.utils.register_class(UAI_OT_select)
     bpy.utils.register_class(UAI_GT_transform_pick)
     bpy.utils.register_class(UAI_GGT_selector)
     if keyconfig:
         km = keyconfig.keymaps.new(name="UV Editor", space_type="EMPTY")
+        for value in ("PRESS", "DOUBLE_CLICK", "CLICK_DRAG"):
+            km.keymap_items.new("uai.select_activate", "LEFTMOUSE", value, head=True, any=True)
         for shift in (False, True):
             for ctrl in (False, True):
                 km.keymap_items.new("uai.select_element", "LEFTMOUSE", "PRESS", shift=shift, ctrl=ctrl, head=True)
