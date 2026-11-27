@@ -298,6 +298,54 @@ class UAI_GT_transform_pick(bpy.types.Gizmo):
         return 0 if key == self.key else -1
 
 
+class UAI_GT_anchor_ring(bpy.types.Gizmo):
+    bl_idname = "UAI_GT_anchor_ring"
+
+    def setup(self):
+        interface = gpu.types.GPUStageInterfaceInfo("uai_anchor_interface")
+        interface.smooth("VEC2", "local_pos")
+        info = gpu.types.GPUShaderCreateInfo()
+        info.vertex_in(0, "VEC2", "corner")
+        info.vertex_out(interface)
+        info.fragment_out(0, "VEC4", "out_color")
+        info.push_constant("MAT4", "projection")
+        info.push_constant("VEC2", "center")
+        info.push_constant("FLOAT", "radius")
+        info.push_constant("FLOAT", "half_width")
+        info.push_constant("VEC4", "tint")
+        info.vertex_source("""
+            void main() {
+                local_pos = corner * (radius + half_width + 1.0);
+                gl_Position = projection * vec4(center + local_pos, 0.0, 1.0);
+            }
+        """)
+        info.fragment_source("""
+            void main() {
+                float edge = abs(length(local_pos) - radius) - half_width;
+                float coverage = clamp(0.5 - edge, 0.0, 1.0);
+                out_color = vec4(tint.rgb, tint.a * coverage);
+            }
+        """)
+        self.shader = gpu.shader.create_from_info(info)
+        self.quad = batch_for_shader(self.shader, "TRI_STRIP", {"corner": (
+            (-1, -1), (1, -1), (-1, 1), (1, 1))})
+
+    def draw(self, context):
+        shader = self.shader
+        shader.bind()
+        shader.uniform_float("projection", gpu.matrix.get_projection_matrix() @ gpu.matrix.get_model_view_matrix())
+        shader.uniform_float("center", self.matrix_basis.translation.xy)
+        shader.uniform_float("radius", gizmo_size(context) * ANCHOR_RADIUS)
+        shader.uniform_float("half_width", self.line_width * context.preferences.system.pixel_size / 2)
+        shader.uniform_float("tint", (*self.color, self.alpha))
+        blend = gpu.state.blend_get()
+        try:
+            gpu.state.blend_set("ALPHA")
+            self.quad.draw(shader)
+        finally:
+            gpu.state.blend_set(blend)
+
+
 class UAI_GGT_selector(bpy.types.GizmoGroup):
     bl_idname = "UAI_GGT_selector"
     bl_label = "Transform"
@@ -314,13 +362,16 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
         theme = context.preferences.themes[0].user_interface
         for key in (("ROTATE", 0, 0), *AXIS_HANDLES, PLANE_MOVE, PLANE_SCALE, *SHEAR_HANDLES, ("ANCHOR", 0, 0)):
             action, dx, dy = key
-            if action in {"ROTATE", "ANCHOR"}:
+            if action == "ANCHOR":
+                visual = self.gizmos.new("UAI_GT_anchor_ring")
+                color = theme.gizmo_view_align
+            elif action == "ROTATE":
                 # The viewport dial only supports 3D picking. Blender's UV ring
                 # draws in region coordinates and accepts the same rotation drag.
                 visual = self.gizmos.new("GIZMO_GT_move_3d")
                 visual.draw_style = "RING_2D"
-                color = theme.axis_z if action == "ROTATE" else theme.gizmo_view_align
-                visual.scale_basis = ROTATE_RADIUS if action == "ROTATE" else ANCHOR_RADIUS
+                color = theme.axis_z
+                visual.scale_basis = ROTATE_RADIUS
             else:
                 visual = self.gizmos.new("GIZMO_GT_arrow_3d")
                 axis = Vector((dx, dy, 0))
@@ -847,6 +898,7 @@ def register(keyconfig, outline):
     bpy.utils.register_class(UAI_OT_select)
     bpy.utils.register_class(UAI_OT_toggle_tool)
     bpy.utils.register_class(UAI_GT_transform_pick)
+    bpy.utils.register_class(UAI_GT_anchor_ring)
     bpy.utils.register_class(UAI_GGT_selector)
     for key in ((bpy.types.WorkSpace, "tools"), (bpy.types.SpaceImageEditor, "show_gizmo")):
         bpy.msgbus.subscribe_rna(key=key, owner=queue_transform_sync, args=(), notify=queue_transform_sync)
