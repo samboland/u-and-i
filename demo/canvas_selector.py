@@ -39,6 +39,33 @@ def elements(context):
                 yield obj, face, uv, mesh
 
 
+def active_canvas_tool(context):
+    tool = context.workspace.tools.from_space_image_mode("UV")
+    return tool.idname if tool else None
+
+
+def configure_toolbar():
+    from bl_ui.space_toolsystem_toolbar import (
+        IMAGE_PT_tools_active, _defs_annotate, _defs_image_uv_select, _defs_image_uv_transform,
+    )
+    stock_tools = IMAGE_PT_tools_active.tools_from_context
+    tools = (
+        _defs_image_uv_select.box._replace(label="Select"),
+        _defs_image_uv_transform.transform._replace(widget=None),
+        _defs_annotate.scribble,
+    )
+
+    def tools_from_context(cls, context, mode=None):
+        space = context.space_data
+        if (space and space.type == "IMAGE_EDITOR" and (mode or space.mode) == "UV"
+                and context.scene.uai_canvas and space.image == context.scene.uai_canvas):
+            yield from tools
+        else:
+            yield from stock_tools(context, mode)
+
+    IMAGE_PT_tools_active.tools_from_context = classmethod(tools_from_context)
+
+
 def selection(context):
     return [entry for entry in elements(context) if entry[0].select_get()]
 
@@ -134,6 +161,9 @@ def draw_bounds():
         shader.uniform_float("lineWidth", width)
         shader.uniform_float("color", color)
         batch.draw(shader)
+    if active_canvas_tool(ctx) != "builtin.transform":
+        gpu.state.blend_set("NONE")
+        return
     theme = ctx.preferences.themes[0].user_interface
     size = 5 * ctx.preferences.system.ui_scale
     fill = gpu.shader.from_builtin("UNIFORM_COLOR")
@@ -220,7 +250,7 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
 
     @classmethod
     def poll(cls, context):
-        return is_canvas(context)
+        return is_canvas(context) and active_canvas_tool(context) == "builtin.transform"
 
     def setup(self, context):
         self.handles = []
@@ -515,7 +545,7 @@ class UAI_OT_select(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return is_canvas(context)
+        return is_canvas(context) and active_canvas_tool(context) == "builtin.transform"
 
     def invoke(self, context, event):
         previous_click = type(self).last_body_click

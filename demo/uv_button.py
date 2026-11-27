@@ -594,6 +594,7 @@ def setup():
     area.spaces.active.image = image
     bpy.context.scene.uai_canvas = image
     space = area.spaces.active
+    space.show_region_toolbar = True
     space.cursor_location = (0.5, 0.28)
     space.use_image_pin = True
     space.uv_editor.show_faces = False
@@ -625,6 +626,10 @@ def setup():
     selector = runpy.run_path(str(Path(__file__).with_name("canvas_selector.py")), run_name="uai_canvas_selector")
     bpy.types.SpaceImageEditor.draw_handler_add(draw_assets, (selector["draw_canvas_text"],), "WINDOW", "POST_PIXEL")
     selector["register"](keyconfig, shape_outline)
+    selector["configure_toolbar"]()
+    if not bpy.app.background:
+        with bpy.context.temp_override(area=area, region=region):
+            bpy.ops.wm.tool_set_by_id(name="builtin.select_box")
     sidebar = runpy.run_path(str(Path(__file__).with_name("canvas_sidebar.py")), run_name="uai_canvas_sidebar")
     sidebar["configure"](bpy.context)
     bpy.ops.ed.undo_push(message="Button canvas")
