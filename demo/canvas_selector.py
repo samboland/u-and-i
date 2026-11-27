@@ -223,6 +223,8 @@ def draw_bounds():
 # Dimensions in units of Blender's preferred gizmo size.
 AXIS_HANDLES = (("MOVE", 1, 0), ("MOVE", 0, 1), ("SCALE", 1, 0), ("SCALE", 0, 1))
 SHEAR_HANDLES = (("SHEAR", 1, 0), ("SHEAR", 0, 1))
+PLANE_MOVE = ("MOVE", 1, 1)
+PLANE_SCALE = ("SCALE", 1, 1)
 
 
 GIZMO_SCALE = .62
@@ -231,6 +233,9 @@ ROTATE_RADIUS = .94
 SCALE_START, SCALE_END = .21, .45
 SHEAR_POSITION = .74
 MOVE_START, MOVE_END = 1.0, 1.23
+PLANE_LENGTH = .7
+# Blender's plane primitive spans .2 units along the diagonal after the stem.
+PLANE_CENTER = (PLANE_LENGTH + .1) / math.sqrt(2)
 
 
 def handle_centers(context, entries):
@@ -257,6 +262,12 @@ def handle_at_position(mouse, center, anchor, size):
     # The rim stays reachable if the anchor is moved over another handle.
     if abs(anchor_distance - ANCHOR_RADIUS) <= .045:
         return "ANCHOR", 0, 0
+    if max(abs(pos.x - PLANE_CENTER), abs(pos.y - PLANE_CENTER)) <= .09:
+        return PLANE_MOVE
+    diagonal = (pos.x + pos.y) / math.sqrt(2)
+    across = abs(pos.x - pos.y) / math.sqrt(2)
+    if SCALE_START <= diagonal <= SCALE_END + .12 and across <= .075:
+        return PLANE_SCALE
     for key in SHEAR_HANDLES:
         along, across = (pos.x, pos.y) if key[1] else (pos.y, pos.x)
         if abs(along - SHEAR_POSITION) <= .08 and abs(across) <= .22:
@@ -301,7 +312,7 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
     def setup(self, context):
         self.handles = []
         theme = context.preferences.themes[0].user_interface
-        for key in (("ROTATE", 0, 0), *AXIS_HANDLES, *SHEAR_HANDLES, ("ANCHOR", 0, 0)):
+        for key in (("ROTATE", 0, 0), *AXIS_HANDLES, PLANE_MOVE, PLANE_SCALE, *SHEAR_HANDLES, ("ANCHOR", 0, 0)):
             action, dx, dy = key
             if action in {"ROTATE", "ANCHOR"}:
                 # The viewport dial only supports 3D picking. Blender's UV ring
@@ -314,23 +325,30 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
                 visual = self.gizmos.new("GIZMO_GT_arrow_3d")
                 axis = Vector((dx, dy, 0))
                 basis = axis.to_track_quat("Z", "Y").to_matrix().to_4x4()
-                if action == "SHEAR":
+                if key == PLANE_MOVE:
+                    visual.draw_style = "PLANE"
+                    visual.draw_options = set()
+                    visual.length = PLANE_LENGTH
+                elif action == "SHEAR":
+                    visual.draw_style = "BOX"
                     tangent = Vector((-dy, dx, 0))
                     basis = Matrix((Vector((0, 0, .5)), tangent * 3.3, axis)).transposed().to_4x4()
                     visual.draw_options = set()
                     visual.length = SHEAR_POSITION - .05
                     color = Vector(theme.axis_z if dx else theme.axis_y).lerp(Vector(theme.axis_x), .75)
                 else:
+                    visual.draw_style = "NORMAL" if action == "MOVE" else "BOX"
                     start, end = (MOVE_START, MOVE_END) if action == "MOVE" else (SCALE_START, SCALE_END)
                     visual.length = end - start
                     visual.matrix_offset.translation = (0, 0, start)
                     color = theme.axis_x if dx else theme.axis_y
+                if key in (PLANE_MOVE, PLANE_SCALE):
+                    color = (1.0, .87, .12)
                 visual.use_draw_offset_scale = True
-                visual.draw_style = "NORMAL" if action == "MOVE" else "BOX"
                 visual.matrix_basis = basis
             visual.scale_basis *= GIZMO_SCALE
             visual.color = color
-            visual.line_width = 2
+            visual.line_width = 1 if key == PLANE_MOVE else 2
             visual.hide_select = True
             visual.use_draw_modal = True
             pick = self.gizmos.new("UAI_GT_transform_pick")
