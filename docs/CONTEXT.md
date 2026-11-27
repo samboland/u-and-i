@@ -180,5 +180,5 @@ With Select active, double-click visible text to edit at the clicked character.
 Double-click the surrounding element body to select it and activate Transform.
 Transform requires a visible selection. Its handles sit on the last active selected element.
 Move, scale, rotation, and shear apply to the whole selection. Clearing the selection returns the canvas to Select.
-The 2D Cursor sets the insertion point for new elements. The canvas sidebar opens on Item.
+The 2D Cursor sets the insertion point for new elements. Item replaces Image in the canvas sidebar.
 Location and Dimensions edit the active element's canvas bounds in pixels. Scaling writes directly to the four corners.

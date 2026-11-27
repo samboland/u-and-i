@@ -4,7 +4,7 @@ from time import monotonic_ns
 
 import bmesh
 import bpy
-from bl_ui import properties_object
+from bl_ui import properties_object, space_image
 from bl_ui.space_outliner import OUTLINER_HT_header
 from bl_ui.space_properties import PROPERTIES_HT_header, PROPERTIES_PT_navigation_bar, tabs_attr_infos
 from mathutils import Vector
@@ -89,6 +89,7 @@ def draw_transform(self, context):
 
 
 class UAI_PT_canvas_transform(bpy.types.Panel):
+    bl_idname = "IMAGE_PT_uv"
     bl_label = "Transform"
     bl_space_type = "IMAGE_EDITOR"
     bl_region_type = "UI"
@@ -121,22 +122,38 @@ def search_header(self, space, prop):
     layout.separator_spacer()
 
 
-def open_canvas_item_tab():
-    # Blender populates the category enum only after the sidebar has drawn.
-    context = bpy.context
-    area = context.area
-    space = area.spaces.active
-    if area.ui_type != "UV" or not context.scene.uai_canvas or space.image != context.scene.uai_canvas:
-        return
-    region = context.region
-    key = (area.as_pointer(), region.as_pointer())
-    if key not in initialized_sidebars and region.active_panel_category:
-        region.active_panel_category = "Item"
-        initialized_sidebars.add(key)
-        region.tag_redraw()
+def configure_item_tab():
+    # The standalone demo owns its Image Editor. Blender registers UV Vertex
+    # and Metadata in C, so replace their native IDs through panel registration.
+    bpy.utils.register_class(UAI_PT_canvas_transform)
+    class IMAGE_PT_metadata(bpy.types.Panel):
+        bl_label = "Metadata"
+        bl_space_type = "IMAGE_EDITOR"
+        bl_region_type = "UI"
+        bl_category = "Image"
 
+        def draw(self, context):
+            pass
 
-initialized_sidebars = set()
+    bpy.utils.register_class(IMAGE_PT_metadata)
+    bpy.utils.unregister_class(IMAGE_PT_metadata)
+    def outside_canvas(stock_poll):
+        def poll(cls, context):
+            return not UAI_PT_canvas_transform.poll(context) and stock_poll(context)
+        return classmethod(poll)
+
+    for panel in (space_image.IMAGE_PT_image_properties, space_image.IMAGE_PT_render_slots,
+                  space_image.IMAGE_PT_udim_tiles):
+        stock_poll = panel.poll
+        bpy.utils.unregister_class(panel)
+        panel.poll = outside_canvas(stock_poll)
+        bpy.utils.register_class(panel)
+
+    # Register the remaining canvas categories after Item, in toolbar order.
+    for panel in (space_image.IMAGE_PT_active_tool, space_image.IMAGE_PT_view_display,
+                  space_image.IMAGE_PT_uv_cursor, space_image.IMAGE_PT_annotation):
+        bpy.utils.unregister_class(panel)
+        bpy.utils.register_class(panel)
 
 
 def draw_object_tab(self, context):
@@ -224,8 +241,7 @@ def object_panel_poll(panel, keep):
 
 
 def configure(context):
-    bpy.utils.register_class(UAI_PT_canvas_transform)
-    bpy.types.SpaceImageEditor.draw_handler_add(open_canvas_item_tab, (), "UI", "POST_PIXEL")
+    configure_item_tab()
     for axis, label in enumerate(("X", "Y")):
         setattr(bpy.types.Mesh, "uai_" + label.lower(), pixel_property(label, axis, False))
     for axis, label in enumerate(("Width", "Height")):
