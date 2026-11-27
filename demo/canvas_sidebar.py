@@ -1,5 +1,7 @@
 """Configure the native Outliner and Object properties for the canvas demo."""
 
+from time import monotonic_ns
+
 import bmesh
 import bpy
 from bl_ui import properties_object
@@ -129,7 +131,7 @@ def sync_selection(scene, depsgraph):
                 face.select_set(selected)
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
         selection_state[obj.session_uid] = selected
-        if selected:
+        if selected and obj.visible_get() and not face.hide:
             selected_objects.append(obj)
             if previous is False:
                 newly_selected.append(obj)
@@ -140,14 +142,18 @@ def sync_selection(scene, depsgraph):
     if len(newly_selected) == 1:
         active = newly_selected[0]
     elif selected_objects and objects.active not in selected_objects:
-        active = selected_objects[0]
+        active = max(selected_objects, key=lambda obj: active_order.get(obj.session_uid, 0))
+    elif objects.active in selected_objects:
+        active = objects.active
     else:
         return
     if objects.active != active:
         objects.active = active
+    active_order[active.session_uid] = monotonic_ns()
 
 
 selection_state = {}
+active_order = {}
 
 
 def canvas_draw(panel, draw):

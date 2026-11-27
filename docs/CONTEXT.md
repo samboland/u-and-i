@@ -176,3 +176,5 @@ Transform uses two move arrows, two scale handles, and a rotation ring.
 Clicking the selected body again switches to Blender's two red T-shaped shear handles.
 With Select active, double-click visible text to edit at the clicked character.
 Double-click the surrounding element body to select it and activate Transform.
+Transform requires a visible selection. Its handles sit on the last active selected element.
+A handle drag transforms the whole selection. Clearing the selection returns the canvas to Select.

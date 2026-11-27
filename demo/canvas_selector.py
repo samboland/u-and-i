@@ -53,7 +53,8 @@ class UAI_OT_toggle_tool(bpy.types.Operator):
         return is_canvas(context)
 
     def execute(self, context):
-        target = "builtin.transform" if active_canvas_tool(context) == "builtin.select_box" else "builtin.select_box"
+        transform = active_canvas_tool(context) == "builtin.select_box" and selection(context)
+        target = "builtin.transform" if transform else "builtin.select_box"
         UAI_OT_select_activate.last_press = None
         UAI_OT_select.turn_selection = ()
         return bpy.ops.wm.tool_set_by_id(name=target)
@@ -66,7 +67,7 @@ def configure_toolbar():
     stock_tools = IMAGE_PT_tools_active.tools_from_context
     tools = (
         _defs_image_uv_select.box._replace(label="Select"),
-        _defs_image_uv_transform.transform._replace(widget=None),
+        _defs_image_uv_transform.transform._replace(widget="UAI_GGT_selector"),
         None,
         _defs_annotate.scribble,
     )
@@ -86,6 +87,35 @@ def selection(context):
     return [entry for entry in elements(context) if entry[0].select_get()]
 
 
+def sync_transform_tool():
+    context = bpy.context
+    for window in context.window_manager.windows:
+        if not window.scene.uai_canvas:
+            continue
+        tool = window.workspace.tools.from_space_image_mode("UV")
+        if not tool or tool.idname != "builtin.transform":
+            continue
+        for area in window.screen.areas:
+            if area.ui_type != "UV" or area.spaces.active.image != window.scene.uai_canvas:
+                continue
+            region = next((r for r in area.regions if r.type == "WINDOW"), None)
+            if region is None:
+                continue
+            with context.temp_override(window=window, area=area, region=region):
+                if not selection(context):
+                    UAI_OT_select.turn_selection = ()
+                    bpy.ops.wm.tool_set_by_id(name="builtin.select_box")
+                    break
+                if not area.spaces.active.show_gizmo:
+                    area.spaces.active.show_gizmo = True
+                area.tag_redraw()
+
+
+def queue_transform_sync(*_):
+    if not bpy.app.timers.is_registered(sync_transform_tool):
+        bpy.app.timers.register(sync_transform_tool)
+
+
 def points(face, uv):
     return [loop[uv].uv.copy() for loop in face.loops]
 
@@ -101,12 +131,12 @@ def selected_bounds(entries):
     return bounds([p for _, face, uv, _ in entries for p in points(face, uv)])
 
 
-def pivot(entries):
-    if len(entries) == 1:
-        saved = read_pivot(entries[0][0])
-        if saved is not None:
-            return saved
-    lo, hi = selected_bounds(entries)
+def pivot(context, entries):
+    obj, face, uv, _ = next((e for e in entries if e[0] == context.view_layer.objects.active), entries[0])
+    saved = read_pivot(obj)
+    if saved is not None:
+        return saved
+    lo, hi = bounds(points(face, uv))
     return (lo + hi) / 2
 
 
@@ -197,7 +227,7 @@ SHEAR_HANDLES = (("SHEAR", 1, 0), ("SHEAR", 0, 1))
 
 
 def gizmo_center(context, entries):
-    return Vector(context.region.view2d.view_to_region(*pivot(entries), clip=False))
+    return Vector(context.region.view2d.view_to_region(*pivot(context, entries), clip=False))
 
 
 def gizmo_size(context):
@@ -247,7 +277,7 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
     bl_label = "Transform"
     bl_space_type = "IMAGE_EDITOR"
     bl_region_type = "WINDOW"
-    bl_options = {"PERSISTENT"}
+    bl_options = set()
 
     @classmethod
     def poll(cls, context):
@@ -283,6 +313,7 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
             visual.color = color
             visual.line_width = 2
             visual.hide_select = True
+            visual.use_draw_modal = True
             pick = self.gizmos.new("UAI_GT_transform_pick")
             pick.hide = True
             pick.key = key
@@ -607,10 +638,12 @@ class UAI_OT_select_activate(bpy.types.Operator):
         target = (context.region.as_pointer(), obj.session_uid, over_text)
         now = time.monotonic()
         if not is_second_press(event, previous, target, now, mouse):
-            type(self).last_press = (target, now, mouse)
+            prior_selection = {item[0].session_uid for item in items if item[0].select_get()}
+            type(self).last_press = (target, now, mouse, prior_selection)
             return {"PASS_THROUGH"}
+        keep = previous[3] if not over_text and obj.session_uid in previous[3] else {obj.session_uid}
         for item in items:
-            set_selected(item, item[0] == obj)
+            set_selected(item, item[0].session_uid in keep)
         context.view_layer.objects.active = obj
         if over_text:
             bpy.ops.uai.edit_text("INVOKE_DEFAULT")
@@ -656,7 +689,7 @@ class UAI_OT_select(bpy.types.Operator):
         if not entries:
             return {"CANCELLED"}
         self.lo, self.hi = selected_bounds(entries)
-        self.center = pivot(entries)
+        self.center = pivot(context, entries)
         self.ids = tuple(sorted(obj.session_uid for obj, _, _, _ in entries))
         self.original = [(obj, points(face, uv), read_pivot(obj)) for obj, face, uv, _ in entries]
         if self.action == "MOVE":
@@ -776,6 +809,11 @@ def register(keyconfig, outline):
     bpy.utils.register_class(UAI_OT_toggle_tool)
     bpy.utils.register_class(UAI_GT_transform_pick)
     bpy.utils.register_class(UAI_GGT_selector)
+    for key in ((bpy.types.WorkSpace, "tools"), (bpy.types.SpaceImageEditor, "show_gizmo")):
+        bpy.msgbus.subscribe_rna(key=key, owner=queue_transform_sync, args=(), notify=queue_transform_sync)
+    bpy.app.handlers.depsgraph_update_post.append(queue_transform_sync)
+    bpy.app.handlers.undo_post.append(queue_transform_sync)
+    bpy.app.handlers.redo_post.append(queue_transform_sync)
     if keyconfig:
         image = keyconfig.keymaps.new(name="Image", space_type="IMAGE_EDITOR")
         image.keymap_items.new("uai.toggle_canvas_tool", "TAB", "PRESS", head=True)
