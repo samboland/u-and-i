@@ -172,9 +172,10 @@ capability map above, not just what exists today. Concretely that means homes
 Each move arrow edits the element's offset along its axis and preserves alignment.
 When parent layout is implemented, a centered element with an X offset of 12 px must stay 12 px right of center.
 Dragging the element body preserves both offset values.
-Transform uses two move arrows, two scale handles, and a rotation ring.
-Clicking the selected body again switches to Blender's two red T-shaped shear handles.
+Transform shows move, scale, rotation, and shear together. Each shear bar sits between its scale square and move arrow.
+The gizmo follows the active element's geometric center after scaling. The white ring marks its anchor.
+Dragging the white ring moves only that anchor. Rotation and symmetric scaling use the active anchor.
 With Select active, double-click visible text to edit at the clicked character.
 Double-click the surrounding element body to select it and activate Transform.
 Transform requires a visible selection. Its handles sit on the last active selected element.
-A handle drag transforms the whole selection. Clearing the selection returns the canvas to Select.
+Move, scale, rotation, and shear apply to the whole selection. Clearing the selection returns the canvas to Select.

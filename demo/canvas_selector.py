@@ -56,7 +56,6 @@ class UAI_OT_toggle_tool(bpy.types.Operator):
         transform = active_canvas_tool(context) == "builtin.select_box" and selection(context)
         target = "builtin.transform" if transform else "builtin.select_box"
         UAI_OT_select_activate.last_press = None
-        UAI_OT_select.turn_selection = ()
         return bpy.ops.wm.tool_set_by_id(name=target)
 
 
@@ -103,7 +102,6 @@ def sync_transform_tool():
                 continue
             with context.temp_override(window=window, area=area, region=region):
                 if not selection(context):
-                    UAI_OT_select.turn_selection = ()
                     bpy.ops.wm.tool_set_by_id(name="builtin.select_box")
                     break
                 if not area.spaces.active.show_gizmo:
@@ -131,13 +129,18 @@ def selected_bounds(entries):
     return bounds([p for _, face, uv, _ in entries for p in points(face, uv)])
 
 
-def pivot(context, entries):
-    obj, face, uv, _ = next((e for e in entries if e[0] == context.view_layer.objects.active), entries[0])
-    saved = read_pivot(obj)
-    if saved is not None:
-        return saved
-    lo, hi = bounds(points(face, uv))
-    return (lo + hi) / 2
+def active_entry(context, entries):
+    return next((entry for entry in entries if entry[0] == context.view_layer.objects.active), entries[0])
+
+
+def geometry_center(entry):
+    _, face, uv, _ = entry
+    return sum(points(face, uv), Vector((0, 0))) / len(face.loops)
+
+
+def anchor_point(entry):
+    saved = read_pivot(entry[0])
+    return geometry_center(entry) if saved is None else saved
 
 
 def read_pivot(obj):
@@ -167,10 +170,6 @@ def layout_offset(obj, value=None):
     layer = layer or layers.new("uai_layout_offset_px")
     next(iter(mesh.faces))[layer] = (*value, 0)
     refresh(obj)
-
-
-def turn_mode(entries):
-    return tuple(sorted(obj.session_uid for obj, _, _, _ in entries)) == UAI_OT_select.turn_selection
 
 
 def refresh(obj):
@@ -226,35 +225,51 @@ AXIS_HANDLES = (("MOVE", 1, 0), ("MOVE", 0, 1), ("SCALE", 1, 0), ("SCALE", 0, 1)
 SHEAR_HANDLES = (("SHEAR", 1, 0), ("SHEAR", 0, 1))
 
 
-def gizmo_center(context, entries):
-    return Vector(context.region.view2d.view_to_region(*pivot(context, entries), clip=False))
+GIZMO_SCALE = .62
+ANCHOR_RADIUS = .16
+ROTATE_RADIUS = .94
+SCALE_START, SCALE_END = .21, .45
+SHEAR_POSITION = .74
+MOVE_START, MOVE_END = 1.0, 1.23
+
+
+def handle_centers(context, entries):
+    entry = active_entry(context, entries)
+    project = context.region.view2d.view_to_region
+    center = Vector(project(*geometry_center(entry), clip=False))
+    anchor = Vector(project(*anchor_point(entry), clip=False))
+    return center, anchor
 
 
 def gizmo_size(context):
-    return context.preferences.view.gizmo_size * context.preferences.system.ui_scale
+    return GIZMO_SCALE * context.preferences.view.gizmo_size * context.preferences.system.ui_scale
 
 
 def handle_at(context, entries, mouse):
-    body = ("BODY", 0, 0)
     if not entries or not context.space_data.show_gizmo:
-        return body
-    return handle_at_position((mouse - gizmo_center(context, entries)) / gizmo_size(context), turn_mode(entries))
+        return "BODY", 0, 0
+    return handle_at_position(mouse, *handle_centers(context, entries), gizmo_size(context))
 
 
-def handle_at_position(pos, shear):
-    if shear:
-        for key in SHEAR_HANDLES:
-            along, across = (pos.x, pos.y) if key[1] else (pos.y, pos.x)
-            if (.94 < along < 1.16 and abs(across) < .34) or (.12 < along <= .94 and abs(across) < .055):
-                return key
-    else:
-        for action, dx, dy in AXIS_HANDLES:
-            along, across = (pos.x, pos.y) if dx else (pos.y, pos.x)
-            low, high = (.98, 1.71) if action == "MOVE" else (.12, .87)
-            if low <= along <= high and abs(across) < .12:
-                return action, dx, dy
-        if abs(pos.length - 1.0) < .08:
-            return "ROTATE", 0, 0
+def handle_at_position(mouse, center, anchor, size):
+    pos = (mouse - center) / size
+    anchor_distance = (mouse - anchor).length / size
+    # The rim stays reachable if the anchor is moved over another handle.
+    if abs(anchor_distance - ANCHOR_RADIUS) <= .045:
+        return "ANCHOR", 0, 0
+    for key in SHEAR_HANDLES:
+        along, across = (pos.x, pos.y) if key[1] else (pos.y, pos.x)
+        if abs(along - SHEAR_POSITION) <= .08 and abs(across) <= .22:
+            return key
+    for action, dx, dy in AXIS_HANDLES:
+        along, across = (pos.x, pos.y) if dx else (pos.y, pos.x)
+        low, high = (MOVE_START, MOVE_END + .25) if action == "MOVE" else (SCALE_START, SCALE_END + .12)
+        if low <= along <= high and abs(across) <= .10:
+            return action, dx, dy
+    if abs(pos.length - ROTATE_RADIUS) <= .055:
+        return "ROTATE", 0, 0
+    if anchor_distance < ANCHOR_RADIUS:
+        return "ANCHOR", 0, 0
     return "BODY", 0, 0
 
 
@@ -268,8 +283,8 @@ class UAI_GT_transform_pick(bpy.types.Gizmo):
     def test_select(self, context, location):
         if self.hide:
             return -1
-        pos = (Vector(location) - self.center) / gizmo_size(context)
-        return 0 if handle_at_position(pos, self.key[0] == "SHEAR") == self.key else -1
+        key = handle_at_position(Vector(location), self.center, self.anchor, gizmo_size(context))
+        return 0 if key == self.key else -1
 
 
 class UAI_GGT_selector(bpy.types.GizmoGroup):
@@ -286,30 +301,34 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
     def setup(self, context):
         self.handles = []
         theme = context.preferences.themes[0].user_interface
-        for key in (("ROTATE", 0, 0), *AXIS_HANDLES, *SHEAR_HANDLES):
+        for key in (("ROTATE", 0, 0), *AXIS_HANDLES, *SHEAR_HANDLES, ("ANCHOR", 0, 0)):
             action, dx, dy = key
-            if action == "ROTATE":
+            if action in {"ROTATE", "ANCHOR"}:
                 # The viewport dial only supports 3D picking. Blender's UV ring
                 # draws in region coordinates and accepts the same rotation drag.
                 visual = self.gizmos.new("GIZMO_GT_move_3d")
                 visual.draw_style = "RING_2D"
-                color = theme.axis_z
+                color = theme.axis_z if action == "ROTATE" else theme.gizmo_view_align
+                visual.scale_basis = ROTATE_RADIUS if action == "ROTATE" else ANCHOR_RADIUS
             else:
                 visual = self.gizmos.new("GIZMO_GT_arrow_3d")
                 axis = Vector((dx, dy, 0))
                 basis = axis.to_track_quat("Z", "Y").to_matrix().to_4x4()
                 if action == "SHEAR":
                     tangent = Vector((-dy, dx, 0))
-                    basis = Matrix((Vector((0, 0, .5)), tangent * 6, axis)).transposed().to_4x4()
+                    basis = Matrix((Vector((0, 0, .5)), tangent * 3.3, axis)).transposed().to_4x4()
+                    visual.draw_options = set()
+                    visual.length = SHEAR_POSITION - .05
                     color = Vector(theme.axis_z if dx else theme.axis_y).lerp(Vector(theme.axis_x), .75)
                 else:
-                    start, end = (.98, 1.45) if action == "MOVE" else (.15, .76)
+                    start, end = (MOVE_START, MOVE_END) if action == "MOVE" else (SCALE_START, SCALE_END)
                     visual.length = end - start
                     visual.matrix_offset.translation = (0, 0, start)
                     color = theme.axis_x if dx else theme.axis_y
                 visual.use_draw_offset_scale = True
                 visual.draw_style = "NORMAL" if action == "MOVE" else "BOX"
                 visual.matrix_basis = basis
+            visual.scale_basis *= GIZMO_SCALE
             visual.color = color
             visual.line_width = 2
             visual.hide_select = True
@@ -325,14 +344,15 @@ class UAI_GGT_selector(bpy.types.GizmoGroup):
         edit = UAI_OT_edit_text.active
         enabled = bool(entries) and not (edit and edit.region_id == context.region.as_pointer())
         if enabled:
-            center = gizmo_center(context, entries)
-            shear = turn_mode(entries)
+            center, anchor = handle_centers(context, entries)
         for key, visual, pick in self.handles:
             is_shear = key[0] == "SHEAR"
-            pick.hide = visual.hide = not enabled or (is_shear != shear)
+            pick.hide = visual.hide = not enabled
             if not visual.hide:
                 pick.center = center
-                visual.matrix_basis.translation = (*center, 0)
+                pick.anchor = anchor
+                position = anchor if key[0] == "ANCHOR" else center
+                visual.matrix_basis.translation = (*position, 0)
                 visual.alpha = 1 if pick.is_highlight else (.5 if is_shear else .78)
 
 
@@ -648,7 +668,6 @@ class UAI_OT_select_activate(bpy.types.Operator):
         if over_text:
             bpy.ops.uai.edit_text("INVOKE_DEFAULT")
         else:
-            UAI_OT_select.turn_selection = ()
             bpy.ops.wm.tool_set_by_id(name="builtin.transform")
         context.area.tag_redraw()
         return {"FINISHED"}
@@ -658,7 +677,6 @@ class UAI_OT_select(bpy.types.Operator):
     bl_idname = "uai.select_element"
     bl_label = "Transform Canvas Selection"
     bl_options = {"UNDO", "BLOCKING"}
-    turn_selection = ()
 
     @classmethod
     def poll(cls, context):
@@ -669,12 +687,10 @@ class UAI_OT_select(bpy.types.Operator):
         # Blender can dispatch to the previous hover target before the next redraw.
         self.action, self.dx, self.dy = handle_at(context, selection(context), self.press)
         self.start = Vector(context.region.view2d.region_to_view(*self.press))
-        self.dragged = self.toggle = False
+        self.dragged = False
         if self.action == "BODY":
             items, hit = element_at(context, self.press)
-            self.toggle = bool(hit and hit[0].select_get() and not event.shift)
-            if not self.toggle:
-                type(self).turn_selection = ()
+            if not (hit and hit[0].select_get() and not event.shift):
                 for item in items:
                     if hit and item[0] == hit[0]:
                         set_selected(item, not item[0].select_get() if event.shift else True)
@@ -689,8 +705,11 @@ class UAI_OT_select(bpy.types.Operator):
         if not entries:
             return {"CANCELLED"}
         self.lo, self.hi = selected_bounds(entries)
-        self.center = pivot(context, entries)
-        self.ids = tuple(sorted(obj.session_uid for obj, _, _, _ in entries))
+        active = active_entry(context, entries)
+        self.center = anchor_point(active)
+        self.gizmo_origin = geometry_center(active)
+        if self.action == "ANCHOR":
+            entries = [active]
         self.original = [(obj, points(face, uv), read_pivot(obj)) for obj, face, uv, _ in entries]
         if self.action == "MOVE":
             self.offsets = {obj.session_uid: layout_offset(obj) for obj, _, _, _ in entries}
@@ -705,8 +724,6 @@ class UAI_OT_select(bpy.types.Operator):
             context.area.tag_redraw()
             return {"CANCELLED"}
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            if self.toggle and not self.dragged:
-                type(self).turn_selection = () if self.turn_selection == self.ids else self.ids
             context.area.tag_redraw()
             return {"FINISHED"}
         modifier_changed = event.type in {"LEFT_CTRL", "RIGHT_CTRL"}
@@ -720,6 +737,10 @@ class UAI_OT_select(bpy.types.Operator):
             return {"RUNNING_MODAL"}
         self.dragged = True
         delta = Vector(context.region.view2d.region_to_view(*mouse)) - self.start
+        if self.action == "ANCHOR":
+            write_pivot(self.original[0][0], self.center + delta)
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
         image_size = Vector(context.scene.uai_canvas.size)
         middle, half = (self.lo + self.hi) / 2, (self.hi - self.lo) / 2
         direction = Vector((self.dx, self.dy))
@@ -740,8 +761,8 @@ class UAI_OT_select(bpy.types.Operator):
         if self.action == "MOVE":
             delta *= direction
         if self.action == "ROTATE":
-            a = (self.start - self.center) * image_size
-            b = (self.start + delta - self.center) * image_size
+            a = (self.start - self.gizmo_origin) * image_size
+            b = (self.start + delta - self.gizmo_origin) * image_size
             angle = math.atan2(a.x * b.y - a.y * b.x, a.dot(b))
             if event.ctrl:
                 step = math.pi / 12
