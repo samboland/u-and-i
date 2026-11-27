@@ -173,6 +173,7 @@ Each move arrow edits the element's offset along its axis and preserves alignmen
 When parent layout is implemented, a centered element with an X offset of 12 px must stay 12 px right of center.
 Dragging the element body preserves both offset values.
 Transform shows move, scale, rotation, and shear together. Each shear bar sits between its scale square and move arrow.
+The yellow diagonal scale handle preserves proportions by default. Hold Ctrl to resize width and height independently.
 The gizmo follows the active element's geometric center after scaling. The white ring marks its anchor.
 Dragging the white ring moves only that anchor. Rotation and symmetric scaling use the active anchor.
 With Select active, double-click visible text to edit at the clicked character.

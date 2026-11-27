@@ -844,7 +844,8 @@ class UAI_OT_select(bpy.types.Operator):
             for i in range(2):
                 if direction[i] and abs(edge[i] - origin[i]) > 1e-8:
                     ratios[i] += delta[i] / (edge[i] - origin[i])
-            if event.ctrl:
+            diagonal = (self.action, self.dx, self.dy) == PLANE_SCALE
+            if diagonal != event.ctrl:
                 ratios[:] = [
                     max((ratios[i] for i in range(2) if direction[i]), key=lambda r: abs(r - 1))
                 ] * 2
