@@ -44,6 +44,21 @@ def active_canvas_tool(context):
     return tool.idname if tool else None
 
 
+class UAI_OT_toggle_tool(bpy.types.Operator):
+    bl_idname = "uai.toggle_canvas_tool"
+    bl_label = "Switch Select and Transform"
+
+    @classmethod
+    def poll(cls, context):
+        return is_canvas(context)
+
+    def execute(self, context):
+        target = "builtin.transform" if active_canvas_tool(context) == "builtin.select_box" else "builtin.select_box"
+        UAI_OT_select_activate.last_press = None
+        UAI_OT_select.turn_selection = ()
+        return bpy.ops.wm.tool_set_by_id(name=target)
+
+
 def configure_toolbar():
     from bl_ui.space_toolsystem_toolbar import (
         IMAGE_PT_tools_active, _defs_annotate, _defs_image_uv_select, _defs_image_uv_transform,
@@ -52,6 +67,7 @@ def configure_toolbar():
     tools = (
         _defs_image_uv_select.box._replace(label="Select"),
         _defs_image_uv_transform.transform._replace(widget=None),
+        None,
         _defs_annotate.scribble,
     )
 
@@ -484,7 +500,11 @@ class UAI_OT_edit_text(bpy.types.Operator):
                     self.anchor, self.caret = start, max(end, word_bounds(self.draft, index)[1])
         elif event.value != "PRESS":
             return {"RUNNING_MODAL"}
-        elif event.type in {"RET", "NUMPAD_ENTER", "TAB"}:
+        elif event.type == "TAB":
+            result = self.finish(context)
+            bpy.ops.uai.toggle_canvas_tool()
+            return result
+        elif event.type in {"RET", "NUMPAD_ENTER"}:
             return self.finish(context)
         else:
             self.last_click = None
@@ -753,9 +773,12 @@ def register(keyconfig, outline):
     bpy.utils.register_class(UAI_OT_edit_text)
     bpy.utils.register_class(UAI_OT_select_activate)
     bpy.utils.register_class(UAI_OT_select)
+    bpy.utils.register_class(UAI_OT_toggle_tool)
     bpy.utils.register_class(UAI_GT_transform_pick)
     bpy.utils.register_class(UAI_GGT_selector)
     if keyconfig:
+        image = keyconfig.keymaps.new(name="Image", space_type="IMAGE_EDITOR")
+        image.keymap_items.new("uai.toggle_canvas_tool", "TAB", "PRESS", head=True)
         km = keyconfig.keymaps.new(name="UV Editor", space_type="EMPTY")
         for value in ("PRESS", "DOUBLE_CLICK", "CLICK_DRAG"):
             km.keymap_items.new("uai.select_activate", "LEFTMOUSE", value, head=True, any=True)

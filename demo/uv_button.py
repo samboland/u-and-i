@@ -393,6 +393,42 @@ def enforce_canvas_sync(*_):
         scene.tool_settings.use_uv_select_sync = True
 
 
+def restore_canvas_edit_mode():
+    # Native mode commands can also run from search or the Outliner.
+    # Wait until the command ends: Add briefly uses Object Mode itself.
+    context = bpy.context
+    if not context.scene or not context.scene.uai_canvas or context.mode != "OBJECT":
+        return
+    members = [obj for obj in context.view_layer.objects if obj.type == "MESH" and obj.get("uai_kind")]
+    if not members:
+        return
+    selected = [obj for obj in context.view_layer.objects if obj.select_get()]
+    hidden = [obj for obj in members if obj.hide_get()]
+    active = context.view_layer.objects.active
+    for obj in selected:
+        if obj not in members:
+            obj.select_set(False)
+    try:
+        for obj in hidden:
+            obj.hide_set(False)
+        for obj in members:
+            obj.select_set(True)
+        context.view_layer.objects.active = active if active in members else members[0]
+        bpy.ops.object.mode_set(mode="EDIT")
+    finally:
+        for obj in members:
+            obj.select_set(obj in selected)
+        for obj in selected:
+            obj.select_set(True)
+        for obj in hidden:
+            obj.hide_set(True)
+
+
+def guard_canvas_edit_mode(scene, *_):
+    if scene.uai_canvas and bpy.context.mode == "OBJECT" and not bpy.app.timers.is_registered(restore_canvas_edit_mode):
+        bpy.app.timers.register(restore_canvas_edit_mode)
+
+
 @bpy.app.handlers.persistent
 def retain_canvas_images(*_):
     if not any(scene.uai_canvas for scene in bpy.data.scenes):
@@ -647,6 +683,7 @@ def setup():
             bpy.ops.wm.tool_set_by_id(name="builtin.select_box")
     sidebar = runpy.run_path(str(Path(__file__).with_name("canvas_sidebar.py")), run_name="uai_canvas_sidebar")
     sidebar["configure"](bpy.context)
+    bpy.app.handlers.depsgraph_update_post.append(guard_canvas_edit_mode)
     bpy.ops.ed.undo_push(message="Button canvas")
 
 
