@@ -743,15 +743,22 @@ class UAI_OT_select(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return is_canvas(context) and active_canvas_tool(context) == "builtin.transform"
+        return is_canvas(context)
 
     def invoke(self, context, event):
+        self.grab = event.type == "G"
+        if not self.grab and active_canvas_tool(context) != "builtin.transform":
+            return {"PASS_THROUGH"}
         self.press = Vector((event.mouse_region_x, event.mouse_region_y))
-        # Blender can dispatch to the previous hover target before the next redraw.
-        self.action, self.dx, self.dy = handle_at(context, selection(context), self.press)
+        self.axis_lock = None
+        if self.grab:
+            self.action, self.dx, self.dy = "BODY", 0, 0
+        else:
+            # Blender can dispatch to the previous hover target before the next redraw.
+            self.action, self.dx, self.dy = handle_at(context, selection(context), self.press)
         self.start = Vector(context.region.view2d.region_to_view(*self.press))
         self.dragged = False
-        if self.action == "BODY":
+        if self.action == "BODY" and not self.grab:
             items, hit = element_at(context, self.press)
             if not (hit and hit[0].select_get() and not event.shift):
                 for item in items:
@@ -785,15 +792,21 @@ class UAI_OT_select(bpy.types.Operator):
                 self.restore()
             context.area.tag_redraw()
             return {"CANCELLED"}
-        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+        if self.grab and event.type in {"LEFTMOUSE", "RET", "NUMPAD_ENTER", "SPACE"} and event.value == "PRESS":
+            context.area.tag_redraw()
+            return {"FINISHED"}
+        if not self.grab and event.type == "LEFTMOUSE" and event.value == "RELEASE":
             context.area.tag_redraw()
             return {"FINISHED"}
         modifier_changed = event.type in {"LEFT_CTRL", "RIGHT_CTRL"}
-        if event.type != "MOUSEMOVE" and not (modifier_changed and self.dragged):
+        axis_changed = self.grab and event.type in {"X", "Y"} and event.value == "PRESS"
+        if axis_changed:
+            self.axis_lock = None if self.axis_lock == event.type else event.type
+        if event.type != "MOUSEMOVE" and not ((modifier_changed or axis_changed) and self.dragged):
             return {"RUNNING_MODAL"}
         mouse = Vector((event.mouse_region_x, event.mouse_region_y))
         if (
-            not self.dragged
+            not self.grab and not self.dragged
             and (mouse - self.press).length < context.preferences.inputs.drag_threshold_mouse
         ):
             return {"RUNNING_MODAL"}
@@ -824,6 +837,8 @@ class UAI_OT_select(bpy.types.Operator):
             return {"RUNNING_MODAL"}
         if self.action == "MOVE":
             delta *= direction
+        if self.axis_lock:
+            delta[1 if self.axis_lock == "X" else 0] = 0
         if self.action == "ROTATE":
             a = (self.start - self.center) * image_size
             b = (self.start + delta - self.center) * image_size
@@ -905,6 +920,7 @@ def register(keyconfig, outline):
         image = keyconfig.keymaps.new(name="Image", space_type="IMAGE_EDITOR")
         image.keymap_items.new("uai.toggle_canvas_tool", "TAB", "PRESS", head=True)
         km = keyconfig.keymaps.new(name="UV Editor", space_type="EMPTY")
+        km.keymap_items.new("uai.select_element", "G", "PRESS", head=True)
         for value in ("PRESS", "DOUBLE_CLICK", "CLICK_DRAG"):
             km.keymap_items.new("uai.select_activate", "LEFTMOUSE", value, head=True, any=True)
         for shift in (False, True):
