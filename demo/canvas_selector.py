@@ -177,9 +177,10 @@ def refresh(obj):
 
 
 def set_selected(entry, state):
-    obj, face, _, _ = entry
+    obj, face, _, mesh = entry
     obj.select_set(state)
     face.select_set(state)
+    mesh.uv_select_sync_from_mesh()
     refresh(obj)
 
 

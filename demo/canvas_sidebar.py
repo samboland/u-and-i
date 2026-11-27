@@ -120,7 +120,7 @@ def sync_selection(scene, depsgraph):
         data = edit_geometry(obj.data)
         if not data:
             continue
-        _, face, _ = data
+        mesh, face, _ = data
         selected = obj.select_get()
         previous = selection_state.get(obj.session_uid)
         if selected != face.select:
@@ -129,6 +129,7 @@ def sync_selection(scene, depsgraph):
                 obj.select_set(selected)
             else:
                 face.select_set(selected)
+                mesh.uv_select_sync_from_mesh()
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
         selection_state[obj.session_uid] = selected
         if selected and obj.visible_get() and not face.hide:
