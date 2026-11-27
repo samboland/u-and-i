@@ -233,7 +233,7 @@ ROTATE_RADIUS = .94
 SCALE_START, SCALE_END = .21, .45
 SHEAR_POSITION = .74
 MOVE_START, MOVE_END = 1.0, 1.23
-PLANE_LENGTH = .7
+PLANE_LENGTH = .63
 # Blender's plane primitive spans .2 units along the diagonal after the stem.
 PLANE_CENTER = (PLANE_LENGTH + .1) / math.sqrt(2)
 
