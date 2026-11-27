@@ -110,6 +110,8 @@ def sync_selection(scene, depsgraph):
     # Native Outliner actions change object selection. Native UV commands use faces.
     if not scene.uai_canvas or bpy.context.mode != "EDIT_MESH":
         return
+    selected_objects = []
+    newly_selected = []
     for obj in bpy.context.objects_in_mode_unique_data:
         if obj.type != "MESH" or not obj.get("uai_kind"):
             continue
@@ -127,6 +129,22 @@ def sync_selection(scene, depsgraph):
                 face.select_set(selected)
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
         selection_state[obj.session_uid] = selected
+        if selected:
+            selected_objects.append(obj)
+            if previous is False:
+                newly_selected.append(obj)
+
+    # UV selection changes faces but leaves Blender's active edit object behind.
+    # Keep an existing active member for a box selection with multiple additions.
+    objects = bpy.context.view_layer.objects
+    if len(newly_selected) == 1:
+        active = newly_selected[0]
+    elif selected_objects and objects.active not in selected_objects:
+        active = selected_objects[0]
+    else:
+        return
+    if objects.active != active:
+        objects.active = active
 
 
 selection_state = {}
